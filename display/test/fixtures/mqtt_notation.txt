@@ -1,0 +1,4 @@
+# The notation of the fixtures of bytes (display/test/mqtt_harness.h), every form of it once
+00 7f 80 ff     # bytes, two hex digits each
+'a b' 0A        # a text with a blank in it, and a byte in capitals
+'#' c0          # a hash inside a text begins no comment

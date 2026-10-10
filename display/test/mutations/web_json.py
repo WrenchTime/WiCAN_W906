@@ -145,6 +145,23 @@ MUTATIONS = [
     ("web_json_info_heap_min_is_heap", T, F, "\tput_unsigned(&writer, info->heap_min);", "\tput_unsigned(&writer, info->heap);"),
     ("web_json_info_psram_is_psram_min", T, F, "\tput_unsigned(&writer, info->psram);", "\tput_unsigned(&writer, info->psram_min);"),
     ("web_json_info_psram_min_is_psram", T, F, "\tput_unsigned(&writer, info->psram_min);", "\tput_unsigned(&writer, info->psram);"),
+    ("web_json_info_heap_malloc_is_heap", T, F, "\tput_unsigned(&writer, info->heap_malloc);", "\tput_unsigned(&writer, info->heap);"),
+    ("web_json_info_heap_malloc_min_is_heap_malloc", T, F, "\tput_unsigned(&writer, info->heap_malloc_min);", "\tput_unsigned(&writer, info->heap_malloc);"),
+    ("web_json_info_heap_malloc_min_is_heap_min", T, F, "\tput_unsigned(&writer, info->heap_malloc_min);", "\tput_unsigned(&writer, info->heap_min);"),
+    ("web_json_info_heap_block_is_heap_malloc", T, F, "\tput_unsigned(&writer, info->heap_block);", "\tput_unsigned(&writer, info->heap_malloc);"),
+    ("web_json_info_heap_malloc_missing", T, F,
+     "\tput(&writer, \",\\\"heap_malloc\\\":\");\n\tput_unsigned(&writer, info->heap_malloc);\n", ""),
+    ("web_json_info_heap_malloc_min_missing", T, F,
+     "\tput(&writer, \",\\\"heap_malloc_min\\\":\");\n\tput_unsigned(&writer, info->heap_malloc_min);\n", ""),
+    ("web_json_info_heap_block_missing", T, F,
+     "\tput(&writer, \",\\\"heap_block\\\":\");\n\tput_unsigned(&writer, info->heap_block);\n", ""),
+    ("web_json_info_heap_block_before_heap_malloc_min", T, F,
+     "\tput(&writer, \",\\\"heap_malloc_min\\\":\");\n\tput_unsigned(&writer, info->heap_malloc_min);\n\tput(&writer, \",\\\"heap_block\\\":\");\n\tput_unsigned(&writer, info->heap_block);\n",
+     "\tput(&writer, \",\\\"heap_block\\\":\");\n\tput_unsigned(&writer, info->heap_block);\n\tput(&writer, \",\\\"heap_malloc_min\\\":\");\n\tput_unsigned(&writer, info->heap_malloc_min);\n"),
+    ("web_json_info_heap_malloc_before_psram_min", T, F,
+     "\tput(&writer, \",\\\"psram_min\\\":\");\n\tput_unsigned(&writer, info->psram_min);\n\tput(&writer, \",\\\"heap_malloc\\\":\");\n\tput_unsigned(&writer, info->heap_malloc);\n",
+     "\tput(&writer, \",\\\"heap_malloc\\\":\");\n\tput_unsigned(&writer, info->heap_malloc);\n\tput(&writer, \",\\\"psram_min\\\":\");\n\tput_unsigned(&writer, info->psram_min);\n"),
+    ("web_json_info_heap_block_named_heap_largest", T, F, "\",\\\"heap_block\\\":\"", "\",\\\"heap_largest\\\":\""),
     ("web_json_info_heap_min_before_heap", T, F,
      "\tput(&writer, \",\\\"heap\\\":\");\n\tput_unsigned(&writer, info->heap);\n\tput(&writer, \",\\\"heap_min\\\":\");\n\tput_unsigned(&writer, info->heap_min);\n",
      "\tput(&writer, \",\\\"heap_min\\\":\");\n\tput_unsigned(&writer, info->heap_min);\n\tput(&writer, \",\\\"heap\\\":\");\n\tput_unsigned(&writer, info->heap);\n"),
@@ -602,3 +619,125 @@ MUTATIONS = [
     ("web_json_wifi_tokens_fewer", T, H, "#define WEB_WIFI_TOKENS     16", "#define WEB_WIFI_TOKENS     15"),
     ("web_json_wifi_tokens_more", T, H, "#define WEB_WIFI_TOKENS     16", "#define WEB_WIFI_TOKENS     17"),
 ]
+
+# The second source, the Cerbo GX: its object in GET /api/info, and GET /api/values with two stores
+HAS_CERBO = "\tif(info->cerbo_host != NULL && info->cerbo_host[0] != '\\0')\n"
+CERBO_OPEN = "\t\tput(&writer, \"},\\\"cerbo\\\":{\\\"host\\\":\");"
+
+
+def cerbo_number(name, member):
+    return "\t\tput(&writer, \",\\\"%s\\\":\");\n\t\tput_unsigned(&writer, info->cerbo_%s);\n" % (name, member)
+
+
+GONE = "\tif(age == VALUE_AGE_GONE) return;\n"
+ON = "\tif(item->kind == VALUE_ON) text = \"\\\"on\\\"\";"
+OFF = "\tif(item->kind == VALUE_OFF) text = \"\\\"off\\\"\";"
+FINITE = "\tif(item->kind == VALUE_NUMBER && isfinite(item->number))"
+DIGITS_OF = "\t\tsnprintf(digits, sizeof(digits), \"%.9g\", item->number == 0 ? 0.0 : item->number);"
+NO_TEXT = "\tif(text == NULL) return;\n"
+COMMA = "\tif(*comma) put_char(writer, ',');\n\t*comma = true;\n"
+AGE_WORD = "\tput(writer, age == VALUE_AGE_FRESH ? \",\\\"age\\\":\\\"fresh\\\"}\" : \",\\\"age\\\":\\\"old\\\"}\");"
+OF_WICAN = "\tfor(int i = 0; i < wican->count; i++) put_member(&writer, &wican->items[i], values_age(&wican->items[i], now_ms), &comma);\n"
+OF_CERBO = "\tfor(int i = 0; i < cerbo->count; i++) put_member(&writer, &cerbo->items[i], cerbo_age(&cerbo->items[i], now_ms), &comma);\n"
+BOTH_HEAD = ("\tput(&writer, \"{\\\"view\\\":\");\n\tput_string(&writer, wican_view);\n\tput(&writer, \",\\\"cerbo\\\":\");\n\tput_string(&writer, cerbo_view);\n"
+             "\tput(&writer, \",\\\"values\\\":{\");\n")
+
+MUTATIONS += [
+    # GET /api/info: the object only for a display that has the address
+    ("web_json_info_cerbo_always", T, F, HAS_CERBO, "\tif(true)\n"),
+    ("web_json_info_cerbo_never", T, F, HAS_CERBO, "\tif(info->cerbo_host != NULL && info->cerbo_host[0] != '\\0' && info->cerbo_host[1] == '\\0' && info->cerbo_host[0] == '\\0')\n"),
+    ("web_json_info_cerbo_for_an_empty_address", T, F, HAS_CERBO, "\tif(info->cerbo_host != NULL)\n"),
+    ("web_json_info_cerbo_null_address_read", T, F, HAS_CERBO, "\tif(info->cerbo_host[0] != '\\0')\n"),
+    ("web_json_info_cerbo_not_for_one_byte", T, F, HAS_CERBO, "\tif(info->cerbo_host != NULL && info->cerbo_host[0] != '\\0' && info->cerbo_host[1] != '\\0')\n"),
+    ("web_json_info_cerbo_by_its_view", T, F, HAS_CERBO, "\tif(info->cerbo_view != NULL && info->cerbo_view[0] != '\\0')\n"),
+    ("web_json_info_cerbo_by_its_bundles", T, F, HAS_CERBO, "\tif(info->cerbo_host != NULL && (info->cerbo_host[0] != '\\0' || info->cerbo_ok != 0))\n"),
+    ("web_json_info_cerbo_wican_not_closed", T, F, CERBO_OPEN, CERBO_OPEN.replace("},", ",")),
+    ("web_json_info_cerbo_under_another_name", T, F, CERBO_OPEN, CERBO_OPEN.replace("cerbo", "gx")),
+    ("web_json_info_cerbo_host_is_the_view", T, F, "\t\tput_string(&writer, info->cerbo_host);", "\t\tput_string(&writer, info->cerbo_view);"),
+    ("web_json_info_cerbo_view_is_the_host", T, F, "\t\tput_string(&writer, info->cerbo_view);", "\t\tput_string(&writer, info->cerbo_host);"),
+    ("web_json_info_cerbo_view_is_the_view_of_the_adapter", T, F, "\t\tput_string(&writer, info->cerbo_view);", "\t\tput_string(&writer, info->view);"),
+    ("web_json_info_cerbo_view_missing", T, F, "\t\tput(&writer, \",\\\"view\\\":\");\n\t\tput_string(&writer, info->cerbo_view);\n", ""),
+    ("web_json_info_cerbo_host_not_escaped", T, F,
+     "\t\tput_string(&writer, info->cerbo_host);", "\t\tput_char(&writer, '\"');\n\t\tput(&writer, info->cerbo_host);\n\t\tput_char(&writer, '\"');"),
+    ("web_json_info_cerbo_values_is_ok", T, F, cerbo_number("values", "values"), cerbo_number("values", "ok")),
+    ("web_json_info_cerbo_ok_is_values", T, F, cerbo_number("ok", "ok"), cerbo_number("ok", "values")),
+    ("web_json_info_cerbo_ok_is_http_ok", T, F, cerbo_number("ok", "ok"), cerbo_number("ok", "ok").replace("info->cerbo_ok", "info->http_ok")),
+    ("web_json_info_cerbo_refused_is_ok", T, F, cerbo_number("refused", "refused"), cerbo_number("refused", "ok")),
+    ("web_json_info_cerbo_refused_missing", T, F, cerbo_number("refused", "refused"), ""),
+    ("web_json_info_cerbo_connects_is_boots", T, F, cerbo_number("connects", "connects"), cerbo_number("connects", "boots")),
+    ("web_json_info_cerbo_connects_is_reconnects", T, F, cerbo_number("connects", "connects"), cerbo_number("connects", "connects").replace("info->cerbo_connects", "info->reconnects")),
+    ("web_json_info_cerbo_boots_is_connects", T, F, cerbo_number("boots", "boots"), cerbo_number("boots", "connects")),
+    ("web_json_info_cerbo_lag_is_boots", T, F, cerbo_number("lag_ms", "lag_ms"), cerbo_number("lag_ms", "boots")),
+    ("web_json_info_cerbo_lag_in_seconds", T, F, cerbo_number("lag_ms", "lag_ms"), cerbo_number("lag_ms", "lag_ms").replace("info->cerbo_lag_ms)", "info->cerbo_lag_ms / 1000)")),
+    ("web_json_info_cerbo_lag_named_lag", T, F, cerbo_number("lag_ms", "lag_ms"), cerbo_number("lag", "lag_ms")),
+    ("web_json_info_cerbo_boots_before_connects", T, F,
+     cerbo_number("connects", "connects") + cerbo_number("boots", "boots"), cerbo_number("boots", "boots") + cerbo_number("connects", "connects")),
+    ("web_json_info_cerbo_behind_layout", T, F,
+     "\tput(&writer, \"},\\\"layout\\\":{\\\"name\\\":\");\n\tput_string(&writer, info->layout_name);\n\tput(&writer, \",\\\"source\\\":\");\n\tput_string(&writer, info->layout_source);\n",
+     "\tput(&writer, \"},\\\"layout\\\":{\\\"name\\\":\");\n\tput_string(&writer, info->layout_name);\n\tput(&writer, \",\\\"source\\\":\");\n\tput_string(&writer, info->layout_source);\n"
+     "\tif(info->cerbo_host != NULL && info->cerbo_host[0] != '\\0' && info->cerbo_lag_ms == 120) put(&writer, \"},\\\"late\\\":{\\\"x\\\":0\");\n"),
+
+    # GET /api/values with two stores: one value
+    ("web_json_both_gone_values_written", T, F, GONE, ""),
+    ("web_json_both_old_values_left_out", T, F, GONE, "\tif(age != VALUE_AGE_FRESH) return;\n"),
+    ("web_json_both_on_is_off", T, F, ON, ON.replace("on", "off")),
+    ("web_json_both_on_as_true", T, F, ON, ON.replace("\\\"on\\\"", "true")),
+    ("web_json_both_on_without_quotes", T, F, ON, "\tif(item->kind == VALUE_ON) text = \"on\";"),
+    ("web_json_both_off_is_on", T, F, OFF, OFF.replace("off", "on")),
+    ("web_json_both_off_left_out", T, F, OFF + "\n", ""),
+    ("web_json_both_on_left_out", T, F, ON + "\n", ""),
+    ("web_json_both_infinite_numbers_written", T, F, FINITE, "\tif(item->kind == VALUE_NUMBER && !isnan(item->number))"),
+    ("web_json_both_no_numbers_written", T, F, FINITE, "\tif(item->kind == VALUE_NUMBER && !isinf(item->number))"),
+    ("web_json_both_every_kind_is_a_number", T, F, FINITE, "\tif(text == NULL && isfinite(item->number))"),
+    ("web_json_both_kind_in_8_bit", T, F, FINITE, "\tif((uint8_t)item->kind == VALUE_NUMBER && isfinite(item->number))"),
+    ("web_json_both_switch_with_a_number_is_a_number", T, F, FINITE, "\tif(isfinite(item->number) && (item->kind == VALUE_NUMBER || item->number == 7.5))"),
+    ("web_json_both_minus_zero_written", T, F, DIGITS_OF, DIGITS_OF.replace("item->number == 0 ? 0.0 : item->number", "item->number")),
+    ("web_json_both_eight_digits", T, F, DIGITS_OF, DIGITS_OF.replace("%.9g", "%.8g")),
+    ("web_json_both_ten_digits", T, F, DIGITS_OF, DIGITS_OF.replace("%.9g", "%.10g")),
+    ("web_json_both_six_digits", T, F, DIGITS_OF, DIGITS_OF.replace("%.9g", "%g")),
+    ("web_json_both_no_exponent", T, F, DIGITS_OF, DIGITS_OF.replace("%.9g", "%.9f")),
+    ("web_json_both_number_as_text", T, F, DIGITS_OF, DIGITS_OF.replace("\"%.9g\"", "\"\\\"%.9g\\\"\"")),
+    ("web_json_both_other_kinds_as_null", T, F, NO_TEXT, "\tif(text == NULL) text = \"null\";\n"),
+    ("web_json_both_comma_before_the_first", T, F, COMMA, "\tput_char(writer, ',');\n\t*comma = true;\n"),
+    ("web_json_both_no_commas", T, F, COMMA, "\t*comma = true;\n"),
+    ("web_json_both_comma_only_once", T, F, COMMA, "\tif(*comma) put_char(writer, ',');\n\t*comma = !*comma;\n"),
+    ("web_json_both_comma_for_values_left_out", T, F, GONE, "\tif(*comma && age == VALUE_AGE_GONE) put_char(writer, ',');\n" + GONE),
+    ("web_json_both_name_not_escaped", T, F, "\tput_string(writer, item->name);", "\tput_char(writer, '\"');\n\tput(writer, item->name);\n\tput_char(writer, '\"');"),
+    ("web_json_both_name_cut_at_31", T, F, "\tput_string(writer, item->name);", "\tput_limited(writer, item->name, 31);"),
+    ("web_json_both_value_under_another_name", T, F, "\tput(writer, \":{\\\"v\\\":\");", "\tput(writer, \":{\\\"value\\\":\");"),
+    ("web_json_both_ages_swapped", T, F, AGE_WORD, AGE_WORD.replace("age == VALUE_AGE_FRESH", "age != VALUE_AGE_FRESH")),
+    ("web_json_both_always_fresh", T, F, AGE_WORD, AGE_WORD.replace("age == VALUE_AGE_FRESH", "age != VALUE_AGE_GONE")),
+    ("web_json_both_always_old", T, F, AGE_WORD, AGE_WORD.replace("age == VALUE_AGE_FRESH", "age == VALUE_AGE_GONE")),
+    ("web_json_both_age_as_stale", T, F, AGE_WORD, AGE_WORD.replace("\\\"old\\\"}", "\\\"stale\\\"}")),
+
+    # ... and the two stores
+    ("web_json_both_cerbo_by_the_limits_of_the_adapter", T, F, OF_CERBO, OF_CERBO.replace("cerbo_age(", "values_age(")),
+    ("web_json_both_adapter_by_the_limits_of_the_cerbo", T, F, OF_WICAN, OF_WICAN.replace("values_age(", "cerbo_age(")),
+    ("web_json_both_cerbo_first", T, F, OF_WICAN + OF_CERBO, OF_CERBO + OF_WICAN),
+    ("web_json_both_without_the_cerbo", T, F, OF_CERBO, "\t(void)cerbo;\n"),
+    ("web_json_both_without_the_adapter", T, F, OF_WICAN, "\t(void)wican;\n"),
+    ("web_json_both_adapter_twice", T, F, OF_CERBO, OF_WICAN.replace("&comma);\n", "&comma);\n\t(void)cerbo;\n")),
+    ("web_json_both_first_of_the_cerbo_left_out", T, F, OF_CERBO, OF_CERBO.replace("int i = 0; i < cerbo->count", "int i = 1; i < cerbo->count")),
+    ("web_json_both_last_of_the_cerbo_left_out", T, F, OF_CERBO, OF_CERBO.replace("i < cerbo->count;", "i < cerbo->count - 1;")),
+    ("web_json_both_count_of_the_adapter_for_the_cerbo", T, F, OF_CERBO, OF_CERBO.replace("i < cerbo->count;", "i < wican->count && i < cerbo->count;")),
+    ("web_json_both_full_cerbo_store", T, F, OF_CERBO, OF_CERBO.replace("i < cerbo->count;", "i < VALUES_MAX;")),
+    ("web_json_both_age_of_the_first_for_all", T, F, OF_CERBO, OF_CERBO.replace("cerbo_age(&cerbo->items[i], now_ms)", "cerbo_age(&cerbo->items[0], now_ms)")),
+    ("web_json_both_comma_starts_anew_for_the_cerbo", T, F, OF_CERBO, "\tcomma = false;\n" + OF_CERBO),
+    ("web_json_both_views_swapped", T, F, BOTH_HEAD, BOTH_HEAD.replace("put_string(&writer, wican_view);", "put_string(&writer, CERBO_VIEW);").replace("put_string(&writer, cerbo_view);", "put_string(&writer, wican_view);").replace("CERBO_VIEW", "cerbo_view")),
+    ("web_json_both_view_of_the_cerbo_missing", T, F, BOTH_HEAD, BOTH_HEAD.replace("\tput(&writer, \",\\\"cerbo\\\":\");\n\tput_string(&writer, cerbo_view);\n", "\t(void)cerbo_view;\n")),
+    ("web_json_both_view_of_the_cerbo_behind_the_values", T, F,
+     BOTH_HEAD, BOTH_HEAD.replace("\tput(&writer, \",\\\"cerbo\\\":\");\n\tput_string(&writer, cerbo_view);\n", "").replace(
+         "\tput(&writer, \",\\\"values\\\":{\");\n", "\tput(&writer, \",\\\"values\\\":{\");\n\t(void)cerbo_view;\n")),
+    ("web_json_both_view_of_the_cerbo_not_escaped", T, F,
+     "\tput_string(&writer, cerbo_view);", "\tput_char(&writer, '\"');\n\tput(&writer, cerbo_view == NULL ? \"\" : cerbo_view);\n\tput_char(&writer, '\"');"),
+    ("web_json_both_view_of_the_cerbo_under_another_name", T, F, BOTH_HEAD, BOTH_HEAD.replace("cerbo\\\":", "gx\\\":")),
+    ("web_json_both_values_not_closed", T, F,
+     "\t// The object of the values, and the answer\n\tput_char(&writer, '}');\n\tput_char(&writer, '}');\n", "\t// The object of the values, and the answer\n\tput_char(&writer, '}');\n"),
+    ("web_json_both_closed_three_times", T, F,
+     "\t// The object of the values, and the answer\n\tput_char(&writer, '}');\n", "\t// The object of the values, and the answer\n\tput_char(&writer, '}');\n\tput_char(&writer, '}');\n"),
+
+    # the numbers of the header
+    ("web_json_cerbo_size_too_small", T, H, "#define WEB_VALUES_CERBO_SIZE   4672", "#define WEB_VALUES_CERBO_SIZE   4350"),
+    ("web_json_cerbo_size_changed", T, H, "#define WEB_VALUES_CERBO_SIZE   4672", "#define WEB_VALUES_CERBO_SIZE   4673"),
+]
+

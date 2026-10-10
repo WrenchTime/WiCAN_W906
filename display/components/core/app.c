@@ -9,11 +9,15 @@
 
 #include <string.h>
 #include "app.h"
+#include "texts.h"
 
 #define ADDRESS_PREFIX  "http://"
 
 // The row "Löschen" of the clear dialog (nav.h)
 #define ROW_CLEAR       1
+
+// The address the settings hold is handed to the source as it is
+_Static_assert(SETTINGS_CERBO_SIZE == CERBO_HOST_SIZE, "the setting holds an address of the source whole");
 
 // The time of the module at now_ms. The calls come from two tasks, each with its own reading of the time:
 // one that lies before the latest seen lets no time pass.
@@ -212,6 +216,24 @@ static void make_info(app_t *app)
 	line = add_line(app, "WiCAN-Firmware: ");
 	put_or_dash(&line, state != NULL ? state->fw : NULL);
 
+	// The second source: only on a display that has its address
+	if(cerbo_host(&app->cerbo)[0] != '\0')
+	{
+		line = add_line(app, "Cerbo: ");
+		put(&line, cerbo_host(&app->cerbo));
+		put(&line, " (");
+		put(&line, text_cerbo_short(cerbo_view(&app->cerbo, app->clock_ms)));
+		put(&line, ")");
+
+		line = add_line(app, "MQTT: ");
+		put_number(&line, app->cerbo.bundles);
+		put(&line, " ok, ");
+		put_number(&line, cerbo_refused(&app->cerbo));
+		put(&line, " verworfen, ");
+		put_number(&line, app->cerbo.sessions);
+		put(&line, " Verb.");
+	}
+
 	line = add_line(app, "Version: ");
 	put_or_dash(&line, app->version);
 	put(&line, " (");
@@ -376,6 +398,8 @@ void app_init(app_t *app, const app_boot_t *boot, uint64_t now_ms)
 	{
 		settings_from_json(&app->settings, boot->settings_json, strlen(boot->settings_json), NULL, 0, app->work, app->work_count);
 	}
+	// The second source, with the address the settings hold: off without one, and off in safe mode
+	cerbo_init(&app->cerbo, app->settings.cerbo, app->safe_mode, boot->ap_ssid, now_ms);
 
 	if(boot->profiles != NULL && boot->profile_count > 0 && boot->profile_count <= NET_PROFILES_MAX)
 	{
@@ -557,6 +581,9 @@ void app_platform(app_t *app, const app_platform_t *platform)
 	app->heap_min = platform->heap_min;
 	app->psram = platform->psram;
 	app->psram_min = platform->psram_min;
+	app->heap_malloc = platform->heap_malloc;
+	app->heap_malloc_min = platform->heap_malloc_min;
+	app->heap_block = platform->heap_block;
 	app->reconnects = platform->reconnects;
 }
 
@@ -566,6 +593,9 @@ void app_net(app_t *app, uint64_t now_ms)
 	conn_view_t view;
 	uint32_t sum;
 
+	// The Cerbo needs the network, not the adapter. Told when that changes: a call without anything new is to
+	// leave every byte of the app as it is, the time of the source among them.
+	if(link_in_network(&app->link) != app->cerbo.network) cerbo_network(&app->cerbo, link_in_network(&app->link), now);
 	poll_wifi(&app->poll, link_up(&app->link), now);
 	view = conn_view(&app->poll.conn, now);
 	link_answering(&app->link, view != CONN_VIEW_NO_ANSWER && view != CONN_VIEW_CONNECTING, now);

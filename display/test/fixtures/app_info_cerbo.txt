@@ -1,0 +1,11 @@
+kind: list
+ring: none
+title: Info
+note:
+row: - line | WiCAN-ID: a1b2c3d4e5f6 |  | enabled
+row: - line | WiCAN-Firmware: 4.21 |  | enabled
+row: > line | Cerbo: 192.168.88.2 (liefert) |  | enabled
+row: - line | MQTT: 10 ok, 0 verworfen, 1 Verb. |  | enabled
+row: - line | Version: 0.1.0 (ota_0) |  | enabled
+first: 3
+total: 15

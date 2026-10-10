@@ -325,6 +325,11 @@ bool link_up(const link_t *link)
 	return link->phase == LINK_UP;
 }
 
+bool link_in_network(const link_t *link)
+{
+	return link->phase == LINK_JOINED || link->phase == LINK_UP;
+}
+
 const char *link_host(const link_t *link)
 {
 	return link->host;

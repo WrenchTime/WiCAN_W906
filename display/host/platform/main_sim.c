@@ -173,14 +173,45 @@ void *heap_caps_calloc(size_t n, size_t size, uint32_t caps)
 	return heap_take(n * size, true);
 }
 
+/*
+ * What is free, by what is asked for. A heap counts when it has every capability that is asked for
+ * (heap_caps.c of ESP-IDF v5.5.2), so each question has a number of its own here, and a check on the app
+ * tells which one main.c asked:
+ *   MALLOC_CAP_INTERNAL                         all internal memory, with the pool sdkconfig keeps back for
+ *                                               DMA, of which malloc() gets nothing
+ *   MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT    the internal memory malloc() hands out: less than the above
+ *   anything else                               the external RAM, or with it
+ */
+#define MALLOC_INTERNAL     (MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT)
+
 size_t heap_caps_get_free_size(uint32_t caps)
 {
+	if(caps == MALLOC_INTERNAL)
+	{
+		return 77;
+	}
 	return caps == MALLOC_CAP_INTERNAL ? 111 : 333;
 }
 
 size_t heap_caps_get_minimum_free_size(uint32_t caps)
 {
+	if(caps == MALLOC_INTERNAL)
+	{
+		return 55;
+	}
 	return caps == MALLOC_CAP_INTERNAL ? 99 : 222;
+}
+
+size_t heap_caps_get_largest_free_block(uint32_t caps)
+{
+	// Walks every block of the heap with the interrupts of the core off (multi_heap.c): the one call of the
+	// three that takes time, and the screen task waits for the lock with every reading of the knob
+	CHECK(!lock_held());
+	if(caps == MALLOC_INTERNAL)
+	{
+		return 44;
+	}
+	return caps == MALLOC_CAP_INTERNAL ? 66 : 300;
 }
 
 /* FreeRTOS */
@@ -916,6 +947,8 @@ static void test_first_start(void)
 	CHECK(strcmp(platform_app->slot, "ota_0") == 0 && strcmp(platform_app->reset, "poweron") == 0);
 	CHECK(platform_app->heap == 111 && platform_app->heap_min == 99 && platform_app->psram == 333 &&
 	      platform_app->psram_min == 222);
+	// The three numbers of the memory malloc() hands out: asked without the pool that `heap` counts
+	CHECK(platform_app->heap_malloc == 77 && platform_app->heap_malloc_min == 55 && platform_app->heap_block == 44);
 	CHECK(platform_app->has_temp && platform_app->temp_c == 47);
 	CHECK(platform_app->has_builtin && platform_app->layout_length > 0 && platform_app->source != APP_LAYOUT_STORED);
 	CHECK(!platform_app->safe_mode && !platform_app->update_pending && !platform_app->previous_firmware &&

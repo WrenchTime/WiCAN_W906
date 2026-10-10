@@ -378,3 +378,20 @@ MUTATIONS = [
     ("link_host_always_empty", T, F, "\treturn link->host;", "\treturn link->host + strlen(link->host);"),
     ("link_host_only_when_queried", T, F, "\treturn link->host;", "\treturn link->host_from_query ? link->host : \"\";"),
 ]
+
+# link_in_network(): what needs the network and not the adapter asks it (cerbo.h)
+IN_NETWORK = "\treturn link->phase == LINK_JOINED || link->phase == LINK_UP;"
+
+MUTATIONS += [
+    ("link_in_network_only_when_up", T, F, IN_NETWORK, "\treturn link->phase == LINK_UP;\n\t// only with an adapter"),
+    ("link_in_network_only_without_adapter", T, F, IN_NETWORK, "\treturn link->phase == LINK_JOINED;"),
+    ("link_in_network_while_joining", T, F, IN_NETWORK, "\treturn link->phase == LINK_JOINING || link->phase == LINK_JOINED || link->phase == LINK_UP;"),
+    ("link_in_network_while_leaving", T, F, IN_NETWORK, "\treturn link->phase == LINK_LEAVING || link->phase == LINK_JOINED || link->phase == LINK_UP;"),
+    ("link_in_network_from_the_scan_on", T, F, IN_NETWORK, "\treturn link->phase >= LINK_SCANNING;"),
+    ("link_in_network_never", T, F, IN_NETWORK, "\treturn link->phase == LINK_JOINED && link->host[0] != '\\0';"),
+    ("link_in_network_always", T, F, IN_NETWORK, "\treturn link->phase != LINK_IDLE || link->phase == LINK_UP;"),
+    ("link_in_network_by_the_profile", T, F, IN_NETWORK, "\treturn link->profile >= 0;"),
+    ("link_in_network_by_the_host", T, F, IN_NETWORK, "\treturn link->host[0] != '\\0' || link->finding;"),
+    ("link_in_network_not_when_the_list_changed", T, F, IN_NETWORK, "\treturn (link->phase == LINK_JOINED || link->phase == LINK_UP) && !link->changed;"),
+]
+

@@ -92,6 +92,27 @@ static const struct
 	{"superseded", "Von einem anderen Scan überholt"},
 };
 
+// The second source, the Cerbo GX: the text for the screen without the safe mode - which has a text of its
+// own for OFF -, the word for the browser and the words in the brackets of the info line, copied by hand from
+// the comments of texts.h
+static const struct
+{
+	cerbo_view_t view;
+	const char *name;
+	const char *text;
+	const char *word;
+	const char *brief;
+} CERBO_VIEWS[] = {
+	{CERBO_VIEW_OFF, "OFF", "Cerbo nicht eingerichtet", "off", "aus (sicherer Modus)"},
+	{CERBO_VIEW_NO_WIFI, "NO_WIFI", "Kein WLAN – Cerbo nicht erreichbar", "no_wifi", "kein WLAN"},
+	{CERBO_VIEW_CONNECTING, "CONNECTING", "Warte auf Cerbo …", "connecting", "wartet"},
+	{CERBO_VIEW_UNREACHABLE, "UNREACHABLE", "Cerbo nicht erreichbar", "unreachable", "nicht erreichbar"},
+	{CERBO_VIEW_QUIET, "QUIET", "Warte auf Cerbo …", "quiet", "wartet"},
+	{CERBO_VIEW_SILENT, "SILENT", "Cerbo sendet keine Werte – Flow Display aktiv?", "silent", "keine Werte"},
+	{CERBO_VIEW_NEWER, "NEWER", "Cerbo-Flow ist neuer als dieses Display", "newer", "Flow zu neu"},
+	{CERBO_VIEW_LIVE, "LIVE", "", "live", "liefert"},
+};
+
 // The reason words by where they come from, looked up by hand on 2026-10-04.
 // tools/w906/API.md, "reason" of the dtc object in GET /api/state:
 static const char *const REASONS_OF_STATE[] = {
@@ -420,6 +441,100 @@ static void test_heat(void)
 	check(good, "the largest and the smallest number and others far from the heat levels have the word \"off\"");
 }
 
+// What the display says about its second source
+static void test_cerbo(void)
+{
+	bool good = true, same_word = true, fit = true, font = true, words = true;
+	size_t longest = 0;
+
+	check(COUNT(CERBO_VIEWS) == CERBO_VIEW_LIVE + 1, "the test knows every view of the Cerbo: CERBO_VIEW_LIVE is the last of 8");
+	for(int i = 0; i < COUNT(CERBO_VIEWS); i++)
+	{
+		snprintf(what, sizeof(what), "text of the Cerbo view %s is \"%s\"", CERBO_VIEWS[i].name, CERBO_VIEWS[i].text);
+		check(CERBO_VIEWS[i].view == (cerbo_view_t)i && same(text_cerbo(CERBO_VIEWS[i].view, false), CERBO_VIEWS[i].text), what);
+		snprintf(what, sizeof(what), "word of the Cerbo view %s is \"%s\"", CERBO_VIEWS[i].name, CERBO_VIEWS[i].word);
+		check(same(text_cerbo_word(CERBO_VIEWS[i].view), CERBO_VIEWS[i].word), what);
+		snprintf(what, sizeof(what), "the info line says \"%s\" for the Cerbo view %s", CERBO_VIEWS[i].brief, CERBO_VIEWS[i].name);
+		check(same(text_cerbo_short(CERBO_VIEWS[i].view), CERBO_VIEWS[i].brief), what);
+	}
+
+	// The safe mode has a text of its own for a source that is off, and changes no other
+	check(same(text_cerbo(CERBO_VIEW_OFF, true), "Cerbo aus (sicherer Modus)"), "text of the Cerbo view OFF in safe mode is \"Cerbo aus (sicherer Modus)\"");
+	for(int i = 1; i < COUNT(CERBO_VIEWS); i++)
+	{
+		if(strcmp(text_cerbo(CERBO_VIEWS[i].view, true), CERBO_VIEWS[i].text) != 0) good = false;
+	}
+	check(good, "the safe mode changes the text of no Cerbo view but OFF");
+
+	check(same(text_cerbo(CERBO_VIEW_NO_WIFI, false), "Kein WLAN \xE2\x80\x93 Cerbo nicht erreichbar"), "the bytes of the text for the Cerbo view NO_WIFI: the dash is U+2013");
+	check(same(text_cerbo(CERBO_VIEW_QUIET, false), "Warte auf Cerbo \xE2\x80\xA6"), "the bytes of the text for the Cerbo view QUIET: the ellipsis is the one character U+2026");
+	check(same(text_cerbo(CERBO_VIEW_SILENT, false), "Cerbo sendet keine Werte \xE2\x80\x93 Flow Display aktiv?") && strlen(text_cerbo(CERBO_VIEW_SILENT, false)) == 48,
+	      "the text for the Cerbo view SILENT, the longest of them, has 48 bytes");
+	// Two views that know the same - nothing - say the same on the screen, and differ for the browser
+	check(strcmp(text_cerbo(CERBO_VIEW_CONNECTING, false), text_cerbo(CERBO_VIEW_QUIET, false)) == 0 &&
+	      strcmp(text_cerbo_word(CERBO_VIEW_CONNECTING), text_cerbo_word(CERBO_VIEW_QUIET)) != 0,
+	      "without a session and with one that brings nothing yet the screen says the same, and the browser is told which it is");
+	check(text_cerbo(CERBO_VIEW_LIVE, false)[0] == '\0' && text_cerbo(CERBO_VIEW_LIVE, true)[0] == '\0', "a Cerbo that delivers has no text, in safe mode neither");
+	good = true;
+	for(int i = 0; i < COUNT(CERBO_VIEWS); i++)
+	{
+		for(int other = 0; other < i; other++)
+		{
+			if(strcmp(text_cerbo_word(CERBO_VIEWS[i].view), text_cerbo_word(CERBO_VIEWS[other].view)) == 0) same_word = false;
+		}
+		// Only what delivers is silent
+		if(i != CERBO_VIEW_LIVE && (text_cerbo(CERBO_VIEWS[i].view, false)[0] == '\0' || text_cerbo(CERBO_VIEWS[i].view, true)[0] == '\0')) good = false;
+	}
+	check(same_word, "the eight words of the Cerbo views for the browser are eight different words");
+	check(good, "no Cerbo view but LIVE has an empty text: an empty text says that the source delivers");
+
+	// What is no view
+	good = true;
+	for(int value = -300; value <= 300; value++)
+	{
+		if(is_member(value, COUNT(CERBO_VIEWS))) continue;
+		for(int safe = 0; safe < 2; safe++)
+		{
+			if(strcmp(text_cerbo((cerbo_view_t)value, safe == 1), "Cerbo nicht erreichbar") != 0 || strcmp(text_cerbo_short((cerbo_view_t)value), "nicht erreichbar") != 0) good = false;
+		}
+		if(strcmp(text_cerbo_word((cerbo_view_t)value), "unreachable") != 0) good = false;
+	}
+	check(good, "every number from -300 to 300 that is no Cerbo view has the text and the words of UNREACHABLE, with and without the safe mode");
+	check(same(text_cerbo((cerbo_view_t)8, false), "Cerbo nicht erreichbar") && same(text_cerbo_word((cerbo_view_t)8), "unreachable") &&
+	      same(text_cerbo_short((cerbo_view_t)8), "nicht erreichbar"),
+	      "the number behind the last Cerbo view has the text and the words of UNREACHABLE, not the ones of LIVE");
+	check(same(text_cerbo((cerbo_view_t)-1, true), "Cerbo nicht erreichbar") && same(text_cerbo_word((cerbo_view_t)-1), "unreachable") &&
+	      same(text_cerbo_short((cerbo_view_t)-1), "nicht erreichbar"),
+	      "the number before the first Cerbo view has the text and the words of UNREACHABLE, not the ones of OFF, in safe mode neither");
+	good = true;
+	for(int i = 0; i < COUNT(OUTSIDE); i++)
+	{
+		if(strcmp(text_cerbo((cerbo_view_t)OUTSIDE[i], false), "Cerbo nicht erreichbar") != 0 || strcmp(text_cerbo_word((cerbo_view_t)OUTSIDE[i]), "unreachable") != 0 ||
+		   strcmp(text_cerbo_short((cerbo_view_t)OUTSIDE[i]), "nicht erreichbar") != 0) good = false;
+	}
+	check(good, "the largest and the smallest number and others far from the Cerbo views have the text and the words of UNREACHABLE");
+
+	// Every text fits the screen and the font, every word the browser, and the info line its room
+	for(int value = -3; value <= 20; value++)
+	{
+		for(int safe = 0; safe < 2; safe++)
+		{
+			const char *text = text_cerbo((cerbo_view_t)value, safe == 1);
+			const char *brief = text_cerbo_short((cerbo_view_t)value);
+
+			if(strlen(text) > TEXT_MAX) fit = false;
+			if(!in_font(text) || !in_font(brief)) font = false;
+			if(strlen(text) > longest) longest = strlen(text);
+			// "Cerbo: 255.255.255.255 (" and ")" around it, in a line of 63 bytes
+			if(brief[0] == '\0' || strlen("Cerbo: 255.255.255.255 ()") + strlen(brief) > 63) fit = false;
+		}
+		if(!is_word(text_cerbo_word((cerbo_view_t)value))) words = false;
+	}
+	check(fit && longest == 48, "every text of a Cerbo view, also for numbers that are none, has at most TEXT_MAX bytes - the longest 48 - and every word of the info line fits its line with the longest address");
+	check(font, "every text and every word of the info line of a Cerbo view is UTF-8 of the characters the font has");
+	check(words, "every word of a Cerbo view for the browser is made of small letters and underscores");
+}
+
 // Every text the module can return fits the screen and the font
 static void test_every_text(void)
 {
@@ -619,6 +734,7 @@ int main(void)
 	test_block();
 	test_reason();
 	test_heat();
+	test_cerbo();
 	test_every_text();
 	test_ring();
 	return test_end();

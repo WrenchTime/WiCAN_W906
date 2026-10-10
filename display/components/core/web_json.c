@@ -136,6 +136,12 @@ int web_info_json(const web_info_t *info, char *out, size_t size)
 	put_unsigned(&writer, info->psram);
 	put(&writer, ",\"psram_min\":");
 	put_unsigned(&writer, info->psram_min);
+	put(&writer, ",\"heap_malloc\":");
+	put_unsigned(&writer, info->heap_malloc);
+	put(&writer, ",\"heap_malloc_min\":");
+	put_unsigned(&writer, info->heap_malloc_min);
+	put(&writer, ",\"heap_block\":");
+	put_unsigned(&writer, info->heap_block);
 	put(&writer, ",\"temp_c\":");
 	put_int(&writer, info->temp_c);
 	put(&writer, ",\"heat\":");
@@ -165,6 +171,28 @@ int web_info_json(const web_info_t *info, char *out, size_t size)
 	put_string(&writer, info->wican_fw);
 	put(&writer, ",\"view\":");
 	put_string(&writer, info->view);
+
+	// Only for a display that has a second source. The brace of the line behind this closes whichever of
+	// the two objects is open.
+	if(info->cerbo_host != NULL && info->cerbo_host[0] != '\0')
+	{
+		put(&writer, "},\"cerbo\":{\"host\":");
+		put_string(&writer, info->cerbo_host);
+		put(&writer, ",\"view\":");
+		put_string(&writer, info->cerbo_view);
+		put(&writer, ",\"values\":");
+		put_unsigned(&writer, info->cerbo_values);
+		put(&writer, ",\"ok\":");
+		put_unsigned(&writer, info->cerbo_ok);
+		put(&writer, ",\"refused\":");
+		put_unsigned(&writer, info->cerbo_refused);
+		put(&writer, ",\"connects\":");
+		put_unsigned(&writer, info->cerbo_connects);
+		put(&writer, ",\"boots\":");
+		put_unsigned(&writer, info->cerbo_boots);
+		put(&writer, ",\"lag_ms\":");
+		put_unsigned(&writer, info->cerbo_lag_ms);
+	}
 
 	put(&writer, "},\"layout\":{\"name\":");
 	put_string(&writer, info->layout_name);
@@ -222,6 +250,54 @@ int web_values_json(const values_t *values, const char *view, uint64_t now_ms, c
 		put_char(&writer, '}');
 	}
 	put(&writer, "}}");
+	return finish(&writer);
+}
+
+// One value as a member of "values", of the age its source gives it. Nothing for a value that is gone, a
+// number that is not finite and a kind that is none. *comma: a member was written before this one.
+static void put_member(writer_t *writer, const value_t *item, value_age_t age, bool *comma)
+{
+	// The longest number is "-1.23456789e-308"
+	char digits[24];
+	const char *text = NULL;
+
+	if(age == VALUE_AGE_GONE) return;
+
+	if(item->kind == VALUE_ON) text = "\"on\"";
+	if(item->kind == VALUE_OFF) text = "\"off\"";
+	if(item->kind == VALUE_NUMBER && isfinite(item->number))
+	{
+		// printf would write minus zero as "-0"
+		snprintf(digits, sizeof(digits), "%.9g", item->number == 0 ? 0.0 : item->number);
+		text = digits;
+	}
+	if(text == NULL) return;
+
+	if(*comma) put_char(writer, ',');
+	*comma = true;
+	put_string(writer, item->name);
+	put(writer, ":{\"v\":");
+	put(writer, text);
+	put(writer, age == VALUE_AGE_FRESH ? ",\"age\":\"fresh\"}" : ",\"age\":\"old\"}");
+}
+
+int web_values_cerbo_json(const values_t *wican, const char *wican_view, const values_t *cerbo, const char *cerbo_view,
+                          uint64_t now_ms, char *out, size_t size)
+{
+	writer_t writer = {out, size, 0};
+	bool comma = false;
+
+	put(&writer, "{\"view\":");
+	put_string(&writer, wican_view);
+	put(&writer, ",\"cerbo\":");
+	put_string(&writer, cerbo_view);
+	put(&writer, ",\"values\":{");
+	// Each source with its own limits: a value of the adapter is old after 3 s, one of the Cerbo after 5
+	for(int i = 0; i < wican->count; i++) put_member(&writer, &wican->items[i], values_age(&wican->items[i], now_ms), &comma);
+	for(int i = 0; i < cerbo->count; i++) put_member(&writer, &cerbo->items[i], cerbo_age(&cerbo->items[i], now_ms), &comma);
+	// The object of the values, and the answer
+	put_char(&writer, '}');
+	put_char(&writer, '}');
 	return finish(&writer);
 }
 

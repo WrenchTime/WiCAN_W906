@@ -23,6 +23,10 @@ enum
 
 static const char *const names[MEMBERS] = {"brightness", "night", "night_mode", "reverse", "standby_s"};
 
+// The sixth member is none of them: it is written only for a display that has a second source, behind the
+// five that every text has
+#define CERBO_NAME  "cerbo"
+
 typedef struct
 {
 	char *out;
@@ -37,6 +41,38 @@ void settings_defaults(settings_t *settings)
 	settings->night_mode = false;
 	settings->reverse = false;
 	settings->standby_s = 60;
+	// The whole field: the settings are compared and stored as bytes
+	memset(settings->cerbo, 0, sizeof(settings->cerbo));
+}
+
+bool settings_is_address(const char *text)
+{
+	int numbers = 0;
+
+	if(text == NULL) return false;
+
+	for(;;)
+	{
+		int digits = 0;
+		int number = 0;
+
+		// Three digits at most. So no more than SETTINGS_CERBO_SIZE bytes of a text are ever read, whatever it
+		// holds: a field without a zero in it is read to its end and is no address.
+		while(digits < 3 && *text >= '0' && *text <= '9')
+		{
+			number = number * 10 + (*text - '0');
+			text++;
+			digits++;
+		}
+		if(digits == 0 || number > 255) return false;
+		// "01" is no number of an address: some readers take a leading zero for octal
+		if(digits > 1 && text[-digits] == '0') return false;
+
+		numbers++;
+		if(numbers == 4) return *text == '\0';
+		if(*text != '.') return false;
+		text++;
+	}
 }
 
 // Index into names, MEMBERS for a member the format does not know
@@ -76,6 +112,21 @@ static bool read_boolean(const json_token_t *token, bool *value)
 	return true;
 }
 
+// The address of the broker, or the empty text that switches the second source off. The field is written
+// whole: nothing of a longer address before this one stays behind it.
+static bool read_address(const char *json, const json_token_t *token, char *address)
+{
+	char text[SETTINGS_CERBO_SIZE];
+
+	// A text that does not fit is longer than any address
+	if(!json_text(json, token, text, sizeof(text))) return false;
+	if(text[0] != '\0' && !settings_is_address(text)) return false;
+
+	memset(address, 0, SETTINGS_CERBO_SIZE);
+	strcpy(address, text);
+	return true;
+}
+
 // As much of the name as there is room for
 static void write_bad(char *bad, size_t bad_size, const char *name)
 {
@@ -106,6 +157,15 @@ bool settings_from_json(settings_t *settings, const char *json, size_t length, c
 		bool good;
 
 		key += 1 + value->skip;
+
+		// The member that is not one of the five (CERBO_NAME); `key` is behind its value by now
+		if(member == MEMBERS && json_text_is(json, value - 1, CERBO_NAME))
+		{
+			if(read_address(json, value, changed.cerbo)) continue;
+
+			write_bad(bad, bad_size, CERBO_NAME);
+			return false;
+		}
 
 		switch(member)
 		{
@@ -181,6 +241,13 @@ int settings_to_json(const settings_t *settings, char *out, size_t size)
 	put_boolean(&writer, settings->reverse);
 	put_name(&writer, STANDBY_S);
 	put_number(&writer, settings->standby_s);
+	// Only for a display that has the address of a Cerbo: every other text is the one of the five members
+	if(settings_is_address(settings->cerbo))
+	{
+		put(&writer, ",\"" CERBO_NAME "\":\"");
+		put(&writer, settings->cerbo);
+		put_char(&writer, '"');
+	}
 	put_char(&writer, '}');
 
 	if(size == 0) return -1;

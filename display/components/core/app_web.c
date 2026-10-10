@@ -155,6 +155,9 @@ static int info_json(const app_t *app, char *out, uint64_t now)
 	info.heap_min = app->heap_min;
 	info.psram = app->psram;
 	info.psram_min = app->psram_min;
+	info.heap_malloc = app->heap_malloc;
+	info.heap_malloc_min = app->heap_malloc_min;
+	info.heap_block = app->heap_block;
 	info.temp_c = app->temp_c;
 	info.heat = text_heat_word(app->heat);
 	info.release_open = access_is_open(&app->access, now);
@@ -175,6 +178,15 @@ static int info_json(const app_t *app, char *out, uint64_t now)
 	info.http_failed = app->poll.http_failed;
 	info.reconnects = app->reconnects;
 	info.settings = settings;
+	// The second source. Without an address the host is the empty text, and nothing of it is written.
+	info.cerbo_host = cerbo_host(&app->cerbo);
+	info.cerbo_view = text_cerbo_word(cerbo_view(&app->cerbo, now));
+	info.cerbo_values = (uint32_t)cerbo_shown(&app->cerbo, now);
+	info.cerbo_ok = app->cerbo.bundles;
+	info.cerbo_refused = cerbo_refused(&app->cerbo);
+	info.cerbo_connects = app->cerbo.sessions;
+	info.cerbo_boots = app->cerbo.boots;
+	info.cerbo_lag_ms = app->cerbo.lag_ms;
 	return web_info_json(&info, out, APP_WEB_OUT_SIZE);
 }
 
@@ -195,6 +207,13 @@ int app_web_get(app_t *app, web_route_t route, uint32_t ticket, char *out, size_
 			break;
 
 		case WEB_ROUTE_VALUES:
+			// A display with a second source: its view and its values in the same answer
+			if(cerbo_host(&app->cerbo)[0] != '\0')
+			{
+				written = web_values_cerbo_json(&poll->values, text_view_word(conn_view(&poll->conn, now)), &app->cerbo.values,
+				                                text_cerbo_word(cerbo_view(&app->cerbo, now)), now, out, APP_WEB_OUT_SIZE);
+				break;
+			}
 			written = web_values_json(&poll->values, text_view_word(conn_view(&poll->conn, now)), now, out, APP_WEB_OUT_SIZE);
 			break;
 
@@ -343,6 +362,9 @@ int app_web_settings(app_t *app, const char *body, size_t body_length, char *out
 	}
 
 	knob_set_reverse(&app->knob, app->settings.reverse);
+	// The second source follows its address at once: another one, or none, forgets the values of the old one.
+	// Settings that leave the address as it is leave every byte of the source as it is.
+	if(strcmp(app->settings.cerbo, cerbo_host(&app->cerbo)) != 0) cerbo_set_host(&app->cerbo, app->settings.cerbo, app->clock_ms);
 	app->events |= APP_EVENT_STORE_SETTINGS;
 	return answer(200, settings_to_json(&app->settings, out, APP_WEB_OUT_SIZE), out, length);
 }

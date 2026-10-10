@@ -546,6 +546,164 @@ class Api(unittest.TestCase):
                          "{\"brightness\":5,\"night\":10,\"night_mode\":true,\"reverse\":true,\"standby_s\":3600}")
 
     # ------------------------------------------------------------------------------------------------
+    # The second source: the Cerbo GX
+
+    def test_cerbo_settings(self):
+        display = self.display
+        self.release()
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}"), (200, fixture("app_web_settings_cerbo.json")))
+        self.assertEqual(display.settings_json(), fixture("settings_cerbo.json"))
+        self.assertIn("\"settings\":" + fixture("settings_cerbo.json") + "}", self.call("GET", "/api/info")[1])
+        # A member that is missing keeps its value, this one as the others
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"night\":25}"), (200, fixture("app_web_settings_cerbo.json")))
+        refused = [b"{\"cerbo\":\"einstein\"}", b"{\"cerbo\":\"venus.local\"}", b"{\"cerbo\":\"192.168.88\"}", b"{\"cerbo\":\"192.168.88.2.1\"}",
+                   b"{\"cerbo\":\"192.168.88.256\"}", b"{\"cerbo\":\"192.168.088.2\"}", b"{\"cerbo\":\"192.168.88.2 \"}", b"{\"cerbo\":\" \"}",
+                   b"{\"cerbo\":\"192.168.88.2:1883\"}", b"{\"cerbo\":\"192.168.88.2\\n\"}", b"{\"cerbo\":3232258050}", b"{\"cerbo\":null}",
+                   b"{\"cerbo\":false}", b"{\"cerbo\":[\"192.168.88.2\"]}",
+                   # The first bad member in the order of the text, and nothing of the text is taken
+                   b"{\"brightness\":50,\"cerbo\":\"192.168.88.256\",\"night\":4}", b"{\"cerbo\":\"192.168.88.9\",\"cerbo\":7}"]
+        for body in refused:
+            with self.subTest(body=body):
+                self.assertEqual(self.call("POST", "/api/settings", body), (400, fixture("app_web_member_cerbo.json")))
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"night\":4,\"cerbo\":\"einstein\"}"), (400, fixture("app_web_member_night.json")))
+        self.assertEqual(display.settings_json(), fixture("settings_cerbo.json"))
+        for address in ("0.0.0.0", "255.255.255.255", "10.0.0.138"):
+            with self.subTest(address=address):
+                self.assertEqual(self.call("POST", "/api/settings", ("{\"cerbo\":\"%s\"}" % address).encode("ascii"))[1],
+                                 fixture("settings_cerbo.json").replace("192.168.88.2", address))
+        self.assertEqual(self.call("POST", "/api/settings", fixture("settings_longest_cerbo.json").replace("255,", "100,").replace("65535", "3600").encode("ascii")),
+                         (200, fixture("settings_longest_cerbo.json").replace("255,", "100,").replace("65535", "3600")))
+        # The empty text takes it away: the answer of a display that never had one, byte for byte
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"\",\"brightness\":80,\"night\":25,\"standby_s\":60}"),
+                         (200, fixture("app_web_settings_defaults.json")))
+        self.assertNotIn("cerbo", self.call("GET", "/api/info")[1])
+        # The release is needed, the knob is not
+        display.release(False)
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}"), (403, fixture("app_web_locked.json")))
+        self.assertEqual(display.settings["cerbo"], "")
+
+    def test_cerbo_answers(self):
+        # The examples the tests of the firmware hold: a display with the address of a Cerbo two seconds after
+        # its start, three bundles taken, the last one at 2040
+        display = self.display
+        display.access.switch_on(2100)
+        display.settings["cerbo"] = "192.168.88.2"
+        display.cerbo = "silent"
+        display.cerbo_base = (("GX_BATT_SOC", 87.5), ("GX_BATT_V", 26.41), ("GX_BATT_I", -6.2), ("GX_SW_B2B", "on"), ("GX_SW_VALVE", "off"),
+                              ("GX_TANK_FRESH", 77))
+        display.cerbo_seen_ms = 2040
+        display.cerbo_numbers = {"ok": 3, "connects": 1}
+        self.assertEqual(display.info_json(2100), fixture("app_web_info_cerbo.json"))
+        display.values = lambda now: [("@BATT_V", 12.4, 2000), ("SPEED", 0, 2000), ("RPM", 790, 2000), ("COOLANT", 81.5, 2000),
+                                      ("FUEL", 62, 2000), ("INTAKE_TEMP", 19, 2000)]
+        self.assertEqual(display.values_json(2100), fixture("app_web_values_cerbo.json"))
+        self.assertEqual(display.values_json(4999), fixture("app_web_values_cerbo.json"))
+        # Each source with its own limits: those of the adapter are old after 3 s, those of the Cerbo after 5
+        self.assertEqual(display.values_json(5000), fixture("app_web_values_cerbo_fresh.json"))
+        self.assertEqual(display.values_json(7039), fixture("app_web_values_cerbo_fresh.json"))
+        self.assertIn("\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"old\"}", display.values_json(7040))
+        # ... gone after 10 s, and after 60. The Cerbo counts as delivering for 10 s behind its last bundle.
+        self.assertIn("{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"old\"},", display.values_json(12039))
+        self.assertEqual(display.values_json(12040), fixture("app_web_values_cerbo_alone.json"))
+        self.assertEqual(display.values_json(19999), fixture("app_web_values_cerbo_alone.json"))
+        self.assertEqual(display.values_json(62039).count("\"age\":\"old\""), 6)
+        self.assertEqual(display.values_json(62040).count("\"age\":"), 0)
+        self.assertIn("\"values\":0,\"ok\":3,", display.info_json(62040))
+        # And what a request gets: the same writers
+        self.clock.advance(2.1)
+        self.assertEqual(self.call("GET", "/api/values"), (200, fixture("app_web_values_cerbo.json")))
+
+    def test_cerbo_comes_and_goes(self):
+        display = self.display
+        self.release()
+        self.clock.advance(10)
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        info = self.call("GET", "/api/info")[1]
+        self.assertIn("\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":8,\"ok\":1,\"refused\":0,\"connects\":1,\"boots\":1,\"lag_ms\":0},\"layout\"", info)
+        values = self.call("GET", "/api/values")[1]
+        self.assertTrue(values.startswith("{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"@BATT_V\":"))
+        self.assertEqual(values.count("\"GX_"), 8)
+        self.assertEqual(values.count("\"age\":\"fresh\""), 38 + 8)
+        # Every value of the Cerbo stands behind every value of the adapter
+        self.assertLess(values.rindex("\"GLOW_ACTIVE\""), values.index("\"GX_BATT_SOC\""))
+        self.clock.advance(5.5)
+        self.assertIn("\"view\":\"live\",\"values\":8,\"ok\":6,", self.call("GET", "/api/info")[1])
+
+        # Its flow falls silent: the values grow old, and the display says what it knows
+        display.set_cerbo("silent")
+        self.clock.advance(4.999)
+        self.assertEqual(self.call("GET", "/api/values")[1].count("\"age\":\"fresh\""), 38 + 8)
+        self.clock.advance(0.001)
+        values = self.call("GET", "/api/values")[1]
+        self.assertEqual((values.count("\"age\":\"fresh\""), values.count("\"age\":\"old\"")), (38, 8))
+        self.assertIn("\"cerbo\":\"live\"", values)
+        self.clock.advance(5)
+        self.assertIn("\"cerbo\":\"quiet\"", self.call("GET", "/api/values")[1])
+        self.clock.advance(9.999)
+        self.assertIn("\"view\":\"quiet\",\"values\":8,\"ok\":6,", self.call("GET", "/api/info")[1])
+        self.clock.advance(0.001)
+        self.assertIn("\"view\":\"silent\",\"values\":8,\"ok\":6,", self.call("GET", "/api/info")[1])
+        self.clock.advance(39.999)
+        self.assertEqual(self.call("GET", "/api/values")[1].count("\"GX_"), 8)
+        self.clock.advance(0.001)
+        self.assertEqual(self.call("GET", "/api/values")[1].count("\"GX_"), 0)
+        self.assertIn("\"view\":\"silent\",\"values\":0,\"ok\":6,", self.call("GET", "/api/info")[1])
+
+        # It is gone: the display waits for fifteen seconds, then says so
+        display.set_cerbo("unreachable")
+        self.assertIn("\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"connecting\",", self.call("GET", "/api/info")[1])
+        self.clock.advance(14.999)
+        self.assertIn("\"view\":\"connecting\",\"values\":0,", self.call("GET", "/api/info")[1])
+        self.clock.advance(0.001)
+        self.assertIn("\"view\":\"unreachable\",\"values\":0,\"ok\":6,\"refused\":0,\"connects\":1,", self.call("GET", "/api/info")[1])
+        self.assertTrue(self.call("GET", "/api/values")[1].startswith("{\"view\":\"live\",\"cerbo\":\"unreachable\",\"values\":{\"@BATT_V\":"))
+        # ... and back: a second session
+        display.set_cerbo("sends")
+        self.assertIn("\"view\":\"live\",\"values\":8,\"ok\":7,\"refused\":0,\"connects\":2,", self.call("GET", "/api/info")[1])
+
+        # Another address: nothing listens there, and the values of the old one are gone at once
+        self.release()
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.9\"}")[0], 200)
+        values = self.call("GET", "/api/values")[1]
+        self.assertEqual(values.count("\"GX_"), 0)
+        self.assertIn("\"cerbo\":\"connecting\"", values)
+        self.clock.advance(15)
+        self.assertIn("\"cerbo\":{\"host\":\"192.168.88.9\",\"view\":\"unreachable\",\"values\":0,\"ok\":7,", self.call("GET", "/api/info")[1])
+        # Outside of every network the display says that first
+        display.current = ""
+        self.assertIn("\"view\":\"no_wifi\"},\"cerbo\":{\"host\":\"192.168.88.9\",\"view\":\"no_wifi\",", self.call("GET", "/api/info")[1].replace("\"live\"", "\"no_wifi\"", 1))
+        display.current = "Werkstatt"
+        # No address: the display of before
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"\"}"), (200, fixture("app_web_settings_defaults.json")))
+        self.assertNotIn("cerbo", self.call("GET", "/api/info")[1])
+        self.assertNotIn("cerbo", self.call("GET", "/api/values")[1])
+        self.assertNotIn("GX_", self.call("GET", "/api/values")[1])
+        # A restart begins the source anew
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        display.restart()
+        self.clock.advance(5)
+        self.assertIn("\"view\":\"live\",\"values\":8,\"ok\":1,\"refused\":0,\"connects\":1,", self.call("GET", "/api/info")[1])
+
+    def test_no_cerbo_without_an_address(self):
+        # A display nobody gave the address answers what it answered before there was a second source,
+        # whatever a Cerbo in its network does
+        for state in ("sends", "silent", "unreachable"):
+            with self.subTest(cerbo=state):
+                display = self.display_class(clock=self.clock)
+                self.display = display
+                display.set_cerbo(state)
+                display.access.switch_on(4651 * 1000)
+                display.update_pending = True
+                display.source = "stored"
+                self.assertEqual(display.info_json(4711 * 1000), fixture("web_info.json"))
+                display.values = lambda now: [("ENGINE_RPM", 812.5, now), ("DPF_REGEN_STATUS", "on", now - 5000)]
+                self.assertEqual(self.call("GET", "/api/values"), (200, fixture("web_values.json")))
+                self.assertEqual(display.settings_json(), fixture("settings_defaults.json"))
+                self.release()
+                self.assertEqual(self.call("POST", "/api/settings", b"{}"), (200, fixture("app_web_settings_defaults.json")))
+                self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"\"}"), (200, fixture("app_web_settings_defaults.json")))
+
+    # ------------------------------------------------------------------------------------------------
     # The release and the knob
 
     def test_release(self):
@@ -1252,6 +1410,56 @@ class TellsPasswords(mock_display.Display):
         return super().wifi_json().replace("\"password\":false", "\"password\":true")
 
 
+class TakesNamesForTheCerbo(mock_display.Display):
+    """Takes every text as the address of the Cerbo"""
+
+    def _settings(self, data, now=None):
+        with mock.patch.object(mock_display, "ADDRESS", re.compile(r".*", re.DOTALL)):
+            return super()._settings(data, now)
+
+
+class WritesAnEmptyAddress(mock_display.Display):
+    def settings_json(self):
+        text = super().settings_json()
+        return text if "cerbo" in text else text[:-1] + ",\"cerbo\":\"\"}"
+
+
+class NamesTheCerboAlways(mock_display.Display):
+    """The object and the member of the second source also on a display without its address"""
+
+    def cerbo_json(self, now):
+        return super().cerbo_json(now) or "\"cerbo\":{\"host\":\"\",\"view\":\"off\",\"values\":0,\"ok\":0,\"refused\":0,\"connects\":0,\"boots\":0,\"lag_ms\":0},"
+
+
+class NamesTheViewOfTheCerboAlways(mock_display.Display):
+    def values_json(self, now):
+        text = super().values_json(now)
+        return text if "\"cerbo\":" in text else text.replace(",\"values\":{", ",\"cerbo\":\"off\",\"values\":{", 1)
+
+
+class WrongCerbo(mock_display.Display):
+    def cerbo_json(self, now):
+        return super().cerbo_json(now).replace("\"connects\":", "\"sessions\":")
+
+
+class CerboBehindTheLayout(mock_display.Display):
+    """The object of the second source at another place of the info"""
+
+    def info_json(self, now):
+        text = super().info_json(now)
+        cerbo = self.cerbo_json(now)
+        return text.replace(cerbo, "", 1).replace("\"http\":", cerbo + "\"http\":", 1) if cerbo else text
+
+
+class KeepsTheValuesOfTheOldAddress(mock_display.Display):
+    def _settings(self, data, now=None):
+        seen = self.cerbo_seen_ms
+        answer = super()._settings(data, now)
+        if self.settings["cerbo"] != "":
+            self.cerbo_seen_ms = seen
+        return answer
+
+
 class StoresAtOnce(mock_display.Display):
     """Stores a network without the knob"""
 
@@ -1469,6 +1677,10 @@ API_MUTATIONS = {
     "test_wifi": TellsPasswords,
     "test_wifi_store_and_forget": StoresAtOnce,
     "test_settings": TakesHalfTheSettings,
+    "test_cerbo_settings": TakesNamesForTheCerbo,
+    "test_cerbo_answers": WrongCerbo,
+    "test_cerbo_comes_and_goes": ("CERBO_KEPT_MS", 59999),
+    "test_no_cerbo_without_an_address": NamesTheCerboAlways,
     "test_release": ("OPEN_MAX_MS", 1801 * 1000),
     "test_tickets": ("CONFIRM_MS", 61 * 1000),
     "test_ticket_ends": ("ASK_SHOWN_MS", 1499),
@@ -1486,6 +1698,11 @@ API_MUTATIONS = {
 # More than one thing a test guards is broken for it
 API_MUTATIONS_MORE = {
     "test_refusals_in_the_documented_order": [WrongStage, HeatBeforeTheQuestion, HeatBeforeTheBusyDisplay],
+    "test_cerbo_settings": [WritesAnEmptyAddress, ("ADDRESS", re.compile(r"[0-9.]*")), ("ADDRESS", re.compile(r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}"))],
+    "test_cerbo_answers": [("CERBO_FRESH_MS", 4999), ("CERBO_FRESH_MS", 3000), ("CERBO_KEPT_MS", 10000), ("CERBO_LIVE_MS", 9940), CerboBehindTheLayout],
+    "test_cerbo_comes_and_goes": [("CERBO_FRESH_MS", 5001), ("CERBO_LIVE_MS", 10001), ("CERBO_SILENT_MS", 20001), ("CERBO_GRACE_MS", 15001),
+                                  ("CERBO_ADDRESS", "192.168.88.9"), KeepsTheValuesOfTheOldAddress, NamesTheCerboAlways],
+    "test_no_cerbo_without_an_address": [NamesTheViewOfTheCerboAlways, WritesAnEmptyAddress],
     "test_busy_keeps_the_adapter": [AsksForANetworkWhileItReads],
     "test_heat": [UploadsInTheDark, KeepsTheQuestionInTheDark, NamesNoHeat],
     "test_refusals": [("BODY_SMALL_MAX", 513), ("OUT_SIZE", 60000), AsksForBrokenUploads],

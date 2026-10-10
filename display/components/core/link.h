@@ -178,6 +178,11 @@ bool link_ap_on(const link_t *link);
 // true in LINK_UP
 bool link_up(const link_t *link);
 
+// true while the display is in a network: in LINK_JOINED and in LINK_UP. What needs the network and not the
+// adapter asks this (cerbo.h: the adapter may sleep for days while the display stays in the network of the
+// router). False again with the order to leave a network whose list changed (LINK_DO_LEAVE), not before.
+bool link_in_network(const link_t *link);
+
 // Address or name of the adapter for the HTTP requests, empty unless LINK_UP
 const char *link_host(const link_t *link);
 

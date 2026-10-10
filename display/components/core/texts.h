@@ -15,11 +15,12 @@
 #include "conn.h"
 #include "dtc_flow.h"
 #include "guard.h"
+#include "cerbo.h"
 
 /*
- * What the display says about the state of the adapter and of a fault memory request, and the ring at the
- * edge of the screen that tells the same without reading. German texts, UTF-8, at most TEXT_MAX bytes
- * each, so that they fit two lines of the round screen.
+ * What the display says about the state of the adapter, of a fault memory request and of its second source,
+ * and the ring at the edge of the screen that tells the same without reading. German texts, UTF-8, at most
+ * TEXT_MAX bytes each, so that they fit two lines of the round screen.
  */
 
 #define TEXT_MAX    79
@@ -85,6 +86,29 @@ const char *text_reason(const char *reason);
 
 // The word for the heat level in GET /api/info: "normal", "dim", "off"; "off" for anything else
 const char *text_heat_word(guard_heat_t heat);
+
+// The line shown for the second source, the Cerbo GX (cerbo_view()). Empty for CERBO_VIEW_LIVE. safe_mode
+// tells the two reasons of CERBO_VIEW_OFF apart and counts for no other view. A value that is no member of
+// the enum gets the text of CERBO_VIEW_UNREACHABLE.
+//   OFF, safe mode  "Cerbo aus (sicherer Modus)"
+//   OFF             "Cerbo nicht eingerichtet"
+//   NO_WIFI         "Kein WLAN – Cerbo nicht erreichbar"
+//   CONNECTING      "Warte auf Cerbo …"
+//   UNREACHABLE     "Cerbo nicht erreichbar"
+//   QUIET           "Warte auf Cerbo …"
+//   SILENT          "Cerbo sendet keine Werte – Flow Display aktiv?"
+//   NEWER           "Cerbo-Flow ist neuer als dieses Display"
+const char *text_cerbo(cerbo_view_t view, bool safe_mode);
+
+// The same as a word for GET /api/info and GET /api/values: "off", "no_wifi", "connecting", "unreachable",
+// "quiet", "silent", "newer", "live"; "unreachable" for anything else
+const char *text_cerbo_word(cerbo_view_t view);
+
+// The same in the brackets of the info line "Cerbo: 192.168.88.2 (liefert)" (app.h), which only a display
+// that has the address shows - so OFF is the safe mode there: "aus (sicherer Modus)" for OFF, "kein WLAN",
+// "wartet" for CONNECTING and for QUIET, "nicht erreichbar", "keine Werte" for SILENT, "Flow zu neu" for
+// NEWER, "liefert" for LIVE; "nicht erreichbar" for anything else
+const char *text_cerbo_short(cerbo_view_t view);
 
 /*
  * The ring: a band of a few pixels at the edge of the round screen.

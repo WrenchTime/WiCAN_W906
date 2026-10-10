@@ -165,6 +165,8 @@ static bool browser_settings(const char *json)
 	if(!access_write(&app->access, now) || !settings_from_json(&app->settings, json, strlen(json), NULL, 0, app->work, app->work_count)) return false;
 
 	knob_set_reverse(&app->knob, app->settings.reverse);
+	// The second source follows its address
+	if(strcmp(app->settings.cerbo, cerbo_host(&app->cerbo)) != 0) cerbo_set_host(&app->cerbo, app->settings.cerbo, now);
 	app->events |= APP_EVENT_STORE_SETTINGS;
 	return true;
 }
@@ -187,17 +189,18 @@ static void scene_released(void);
 
 static void test_constants(void)
 {
-	check(APP_UPDATE_CONFIRM_MS == 300000 && APP_UPLOAD_IDLE_MS == 30000 && APP_INFO_LINES == 14 && APP_INFO_SIZE == 64 && APP_SWIPE_ROWS == 3,
-	      "300 s to confirm an update, 30 s until a silent upload is over, 14 info lines of 64 bytes, a swipe moves 3 rows");
+	check(APP_UPDATE_CONFIRM_MS == 300000 && APP_UPLOAD_IDLE_MS == 30000 && APP_INFO_LINES == 16 && APP_INFO_SIZE == 64 && APP_SWIPE_ROWS == 3,
+	      "300 s to confirm an update, 30 s until a silent upload is over, 16 info lines of 64 bytes, a swipe moves 3 rows");
 	check(APP_EVENT_STORE_SETTINGS == 0x1 && APP_EVENT_STORE_WIFI == 0x2 && APP_EVENT_STORE_BOUND == 0x4 && APP_EVENT_STORE_LAYOUT == 0x8 &&
 	      APP_EVENT_ERASE_LAYOUT == 0x10 && APP_EVENT_STORE_CATALOG == 0x20 && APP_EVENT_STORE_OLD == 0x40 && APP_EVENT_MARK_VALID == 0x80 &&
 	      APP_EVENT_REBOOT == 0x100 && APP_EVENT_FACTORY_RESET == 0x200 && APP_EVENT_PREVIOUS_FIRMWARE == 0x400 && APP_EVENT_INSTALL_FIRMWARE == 0x800,
 	      "the events are twelve different bits");
 	printf("  sizeof(app_t) is %lu: poll %lu, three layouts %lu, three lists of lines %lu, layout text %lu\n", (unsigned long)sizeof(app_t),
 	       (unsigned long)sizeof(app->poll), (unsigned long)(3 * sizeof(layout_t)), (unsigned long)(3 * sizeof(app->list)), (unsigned long)sizeof(app->layout_text));
-	check(sizeof(void *) != 8 || sizeof(app_t) == 227136, "app_t has the 227136 bytes app.h names (on a 64 bit host)");
-	check(sizeof(app->poll) == 39520 && 3 * sizeof(layout_t) == 105360 && 3 * sizeof(app->list) == 62376 && sizeof(app->layout_text) == 16385,
-	      "the large parts of app_t have the sizes app.h names: the poll, the two layouts and the room for a third, the lines of three lists, the layout text");
+	check(sizeof(void *) != 8 || sizeof(app_t) == 232768, "app_t has the 232768 bytes app.h names (on a 64 bit host)");
+	check(sizeof(app->poll) == 39520 && 3 * sizeof(layout_t) == 105360 && 3 * sizeof(app->list) == 62376 && sizeof(app->layout_text) == 16385 &&
+	      sizeof(app->cerbo) == 5456,
+	      "the large parts of app_t have the sizes app.h names: the poll, the two layouts and the room for a third, the lines of three lists, the layout text, the second source");
 }
 
 
@@ -612,10 +615,15 @@ static void test_platform(void)
 	given.psram = 3;
 	given.psram_min = 4;
 	given.reconnects = 5;
+	given.heap_malloc = 6;
+	given.heap_malloc_min = 7;
+	given.heap_block = 8;
 	app_platform(app, &given);
 	check(strcmp(app->ssid, "Werkstatt") == 0 && strcmp(app->ip, "10.0.0.7") == 0 && app->rssi == -71 && strcmp(app->ap_ssid, "Hotspot") == 0 &&
 	      strcmp(app->ap_password, "geheim") == 0 && strcmp(app->slot, "ota_1") == 0 && strcmp(app->reset, "panic") == 0 && app->heap == 1 && app->heap_min == 2 &&
 	      app->psram == 3 && app->psram_min == 4 && app->reconnects == 5, "what the platform tells is taken over, each text and each number into its own field");
+	check(app->heap_malloc == 6 && app->heap_malloc_min == 7 && app->heap_block == 8,
+	      "the memory malloc() hands out, its lowest stand and its largest block are taken over, each into its own field");
 	app_tick(app, now);
 	check(info_is(0, "WLAN: Werkstatt (-71 dBm)") && info_is(1, "Adresse: 10.0.0.7") && info_is(5, "Version: 0.1.0 (ota_1)") && info_is(7, "Speicher: 1 frei, min. 2") &&
 	      info_is(8, "PSRAM: 3 frei, min. 4") && info_is(10, "Neuverbindungen: 5") && info_is(12, "Letzter Neustart: panic"), "what the platform tells is in the info lines with the next tick");
@@ -3917,6 +3925,11 @@ static void test_net(void)
 	remember();
 	app_net(app, app->clock_ms);
 	check(unchanged(), "app_net() without anything new changes nothing");
+	// ... and with a later time, which the link and the poll take over, nothing of the second source
+	remember();
+	app_net(app, given(now + 100));
+	check(app->clock_ms == now + 100 && app->link.clock_ms == now + 100 && memcmp(&snapshot.cerbo, &app->cerbo, sizeof(app->cerbo)) == 0 && app->cerbo.clock_ms < app->clock_ms,
+	      "app_net() without a change of the network leaves every byte of the second source as it is, its time among them: the source is told of the network when that changes");
 }
 
 /* More refusals and failures on the way of a read and a clear --------------------------------------- */
@@ -4887,6 +4900,737 @@ static void test_real_adapter(void)
 }
 
 /* ---------------------------------------------------------------------------------------------------
+ * The second source: the Cerbo GX
+ *
+ * The Cerbo of the harness: a broker at GX_HOST whose flow publishes the six values of GX_VALUES every second,
+ * and the task of the platform that talks to it. With a display that has its address the order to open comes
+ * with the first round of the task in the network (at 0 in the stories that start in garage()), CONNECT goes
+ * out at 20, SUBSCRIBE at 40, and with its SUBACK comes the first bundle. The next ones follow at 1040, 2040, ...
+ */
+
+// garage() with a Cerbo that publishes and a display that has its address, started
+static void scene_cerbo(void)
+{
+	garage();
+	cerbo_there();
+	start();
+}
+
+static cerbo_view_t gx_view(void)
+{
+	return cerbo_view(&app->cerbo, now);
+}
+
+static const value_t *gx_value(const char *name)
+{
+	return values_find(&app->cerbo.values, name);
+}
+
+// Runs until a tick has seen what the task of the source did with what the story just gave it: a round of the
+// task first, then on to the end of a step that ticked. The info lines are those of that tick.
+static void until_ticked(void)
+{
+	step();
+	do step();
+	while((now - STEP_MS) % 200 != 0);
+}
+
+static void test_cerbo_start(void)
+{
+	// A display nobody gave an address
+	garage();
+	start();
+	check(!cerbo_on(&app->cerbo) && cerbo_host(&app->cerbo)[0] == '\0' && app->settings.cerbo[0] == '\0' && gx_view() == CERBO_VIEW_OFF,
+	      "a display without the address of a Cerbo has no second source: it is off");
+	gx.there = true;
+	gx.flow = true;
+	run(5000);
+	check(link_in_network(&app->link) && app->cerbo.network && gx.opens == 0 && gx.sends == 0 && gx.closes == 0 && app->cerbo.phase == CERBO_IDLE && gx_view() == CERBO_VIEW_OFF &&
+	      app->cerbo.bundles == 0 && app->cerbo.values.count == 0,
+	      "without the address the task of the source gets no order in five seconds in the network, although a broker listens: nothing is opened, nothing sent");
+	check(app->info_count == 13 && stores() == 0, "without the address the info page has its thirteen lines, and nothing is stored");
+
+	// A display that has it
+	scene_cerbo();
+	check(cerbo_on(&app->cerbo) && strcmp(cerbo_host(&app->cerbo), GX_HOST) == 0 && strcmp(app->settings.cerbo, GX_HOST) == 0 && !app->cerbo.safe_mode,
+	      "the address of the stored settings is the address of the source, from the start");
+	check(!app->cerbo.network && gx_view() == CERBO_VIEW_NO_WIFI && gx.opens == 0, "before the display is in a network the source is in none: no order yet");
+	run(20);
+	check(app->cerbo.network && gx.opens == 1 && strcmp(gx.opened, GX_HOST) == 0 && app->cerbo.phase == CERBO_GREETING,
+	      "with the first round of its task in the network the source orders its address opened, and the connection stands");
+	run(40);
+	check(gx.connects == 1 && gx.subscribes == 1 && gx.sends == 2 && gx.strange == 0 && app->cerbo.phase == CERBO_SESSION && app->cerbo.sessions == 1,
+	      "CONNECT and SUBSCRIBE go out, one each, and the session stands 40 ms after the order to open");
+	check(strcmp(gx.client, "WiCANDisplay") == 0, "the client id is made of the name of the own access point: WiCAN-Display becomes WiCANDisplay");
+	check(app->cerbo.bundles == 1 && app->cerbo.values.count == 6 && gx_view() == CERBO_VIEW_LIVE && gx_value("GX_BATT_SOC") != NULL && gx_value("GX_BATT_SOC")->number == 87.5 &&
+	      gx_value("GX_SW_B2B") != NULL && gx_value("GX_SW_B2B")->kind == VALUE_ON && gx_value("GX_TANK_FRESH") != NULL && gx_value("GX_TANK_FRESH")->seen_ms == 40,
+	      "the first bundle is taken with the SUBACK: six values of the Cerbo, seen at 40, the source delivers");
+	check(values_find(&app->poll.values, "GX_BATT_SOC") == NULL && values_find(&app->poll.values, "GX_SW_B2B") == NULL && gx_value("ENGINE_RPM") == NULL,
+	      "the values of the Cerbo lie in the store of the source: none of them is among the values of the adapter, and none of the adapter among them");
+	run_to(10000);
+	check(app->cerbo.bundles == 10 && gx.published == 10 && gx.pings == 0 && gx.opens == 1 && gx.closes == 0 && cerbo_refused(&app->cerbo) == 0 && stores() == 0 && app->events == 0,
+	      "ten seconds later ten bundles were taken on the one session, and the source asked for nothing to be stored");
+	run_to(10060);
+	check(gx.pings == 1 && gx.sends == 3 && gx.strange == 0 && app->cerbo.pings_open == 0, "ten seconds after the SUBACK a PINGREQ goes out, and its answer is noted");
+
+	// The name the client id is made of
+	garage();
+	cerbo_there();
+	platform.ap_ssid = "WiCAN-Display-C9A8";
+	start();
+	run(60);
+	check(strcmp(gx.client, "WiCANDisplayC9A8") == 0 && app->cerbo.phase == CERBO_SESSION, "the name of the access point of this very display makes its client id: WiCAN-Display-C9A8 becomes WiCANDisplayC9A8");
+	garage();
+	cerbo_there();
+	platform.ap_ssid = NULL;
+	start();
+	run(60);
+	check(strcmp(gx.client, CERBO_CLIENT) == 0 && app->cerbo.phase == CERBO_SESSION, "a platform that names no access point leaves the source with the client id of cerbo.h");
+
+	// In safe mode the source is off, whatever is stored
+	garage();
+	cerbo_there();
+	machine.safe_mode = true;
+	start();
+	check(!cerbo_on(&app->cerbo) && app->cerbo.safe_mode && strcmp(cerbo_host(&app->cerbo), GX_HOST) == 0 && strcmp(app->settings.cerbo, GX_HOST) == 0 && gx_view() == CERBO_VIEW_OFF,
+	      "safe mode: the source is off, and the address stays where it was stored");
+	run(20000);
+	check(wifi.joined && app->cerbo.network && gx.opens == 0 && gx.sends == 0 && app->cerbo.phase == CERBO_IDLE && gx_view() == CERBO_VIEW_OFF && app->cerbo.values.count == 0,
+	      "safe mode: in twenty seconds in the network the task of the source gets no order, although the address is stored and a broker listens");
+	check(stores() == 0 && strcmp(flash.settings, GX_SETTINGS) == 0, "safe mode: the stored settings keep the address");
+	machine.safe_mode = false;
+	start();
+	run(60);
+	check(cerbo_on(&app->cerbo) && app->cerbo.phase == CERBO_SESSION && gx_view() == CERBO_VIEW_LIVE, "the start after the safe mode: the source is on again, with the address that stayed stored");
+
+	// A restart begins anew
+	run_to(5000);
+	check(app->cerbo.bundles == 5 && app->cerbo.sessions == 1, "the scene of five bundles before a restart");
+	start();
+	check(app->cerbo.bundles == 0 && app->cerbo.sessions == 0 && app->cerbo.values.count == 0 && app->cerbo.phase == CERBO_IDLE && !app->cerbo.network &&
+	      strcmp(cerbo_host(&app->cerbo), GX_HOST) == 0, "a restart begins the source anew: no value and no count of the run before, in no network, the address of the flash");
+
+	// A stored text the reader does not take
+	garage();
+	gx.there = true;
+	gx.flow = true;
+	strcpy(flash.settings, "{\"brightness\":40,\"cerbo\":\"einstein\"}");
+	flash.has_settings = true;
+	start();
+	run(5000);
+	check(app->settings.brightness == 80 && app->settings.cerbo[0] == '\0' && !cerbo_on(&app->cerbo) && gx.opens == 0,
+	      "stored settings whose address is none are not taken, as every stored text with a bad member: the defaults, and no second source");
+	garage();
+	gx.there = true;
+	strcpy(flash.settings, "{\"brightness\":40,\"cerbo\":\"\"}");
+	flash.has_settings = true;
+	start();
+	run(5000);
+	check(app->settings.brightness == 40 && !cerbo_on(&app->cerbo) && gx.opens == 0, "stored settings with an empty address are taken, and the source is off");
+}
+
+static void test_cerbo_network(void)
+{
+	// The source follows the network of the display
+	scene_cerbo();
+	run_to(5000);
+	check(gx_view() == CERBO_VIEW_LIVE && app->cerbo.network && cerbo_shown(&app->cerbo, now) == 6, "the scene of a Cerbo that delivers");
+	wifi.in_range_count = 0;
+	lose_wifi();
+	check(!link_in_network(&app->link) && !app->cerbo.network && gx_view() == CERBO_VIEW_NO_WIFI, "when the network is lost the source is told with that very call: it is in no network");
+	check(app->cerbo.phase == CERBO_SESSION && gx.closes == 0, "the connection is closed by the order of the source, not before");
+	run(20);
+	check(gx.closes == 1 && app->cerbo.phase == CERBO_IDLE && gx.strange == 0, "with its next round the task is ordered to close");
+	check(cerbo_shown(&app->cerbo, now) == 6 && cerbo_shown(&app->cerbo, 64039) == 6 && cerbo_shown(&app->cerbo, 64040) == 0,
+	      "the values stay when the network goes: they are there to be shown until they are 60 s old");
+	run_to(8000);
+	check(!wifi.joined && gx.opens == 1 && gx_view() == CERBO_VIEW_NO_WIFI, "while the network is out of range the source orders nothing");
+	wifi.in_range_count = 1;
+	// The scan that finds the network again follows the wait of the link, 5 s behind the one before
+	run_to(13000);
+	check(wifi.joined && app->cerbo.network && gx.opens == 2 && app->cerbo.sessions == 2 && gx_view() == CERBO_VIEW_LIVE,
+	      "back in the network the source opens anew at once, and delivers again");
+
+	// The Cerbo needs the network, not the adapter: a display whose adapter is not found
+	garage();
+	cerbo_there();
+	flash.profiles[0].host[0] = '\0';
+	wifi.found = NULL;
+	start();
+	run(5000);
+	check(link_in_network(&app->link) && !link_up(&app->link) && !app->poll.wifi && view() == CONN_VIEW_NO_WIFI && requests() == 0,
+	      "the scene of a network in which the adapter is not found: the display is in it, and the poll has nobody to ask");
+	check(app->cerbo.network && gx_view() == CERBO_VIEW_LIVE && app->cerbo.bundles == 5 && app->cerbo.sessions == 1,
+	      "the source does not wait for the adapter: in the network of the router it delivers while the WiCAN is not found");
+
+	// ... and one whose adapter sleeps
+	garage();
+	cerbo_there();
+	wican.dead = true;
+	start();
+	run(30000);
+	check(view() == CONN_VIEW_NO_ANSWER && gx_view() == CERBO_VIEW_LIVE && app->cerbo.bundles == 30 && app->cerbo.sessions == 1 && gx.opens == 1,
+	      "an adapter that does not answer takes nothing from the source: thirty bundles in thirty seconds on one session");
+
+	// No network at all
+	garage();
+	cerbo_there();
+	wifi.in_range_count = 0;
+	start();
+	run(60000);
+	check(!app->cerbo.network && gx.opens == 0 && gx_view() == CERBO_VIEW_NO_WIFI, "without a network in range the source orders nothing, for as long as it lasts");
+}
+
+static void test_cerbo_info(void)
+{
+	nav_world_t seen;
+
+	// From the start
+	scene_cerbo();
+	check(app->info_count == 15 && info_is(0, "WLAN: –") && info_is(1, "Adresse: –") && info_is(2, "WiCAN: –") && info_is(3, "WiCAN-ID: " OWN) && info_is(4, "WiCAN-Firmware: –") &&
+	      info_is(5, "Cerbo: 192.168.88.2 (kein WLAN)") && info_is(6, "MQTT: 0 ok, 0 verworfen, 0 Verb.") && info_is(7, "Version: 0.1.0 (–)") &&
+	      info_is(8, "Ansichten: W906 OM651 Standard (eingebaut)") && info_is(9, "Speicher: 0 frei, min. 0") && info_is(10, "PSRAM: 0 frei, min. 0") && info_is(11, "HTTP: 0 ok, 0 Fehler") &&
+	      info_is(12, "Neuverbindungen: 0") && info_is(13, "Temperatur: –") && info_is(14, "Letzter Neustart: –"),
+	      "the info lines of a display with a Cerbo: fifteen from the start, the two of the source behind the firmware of the adapter, every other line as without it");
+	check(all_bytes(app->info[15], APP_INFO_SIZE, 0), "the info lines: the sixteenth line is not in use and empty");
+	app_world(app, &seen, now);
+	check(seen.info_lines == 15, "nav is told of fifteen info lines");
+
+	run(2100);
+	short_press();
+	turn(4);
+	short_press();
+	run_to(10000);
+	check(app->info_count == 15 && info_is(4, "WiCAN-Firmware: 4.21") && info_is(5, "Cerbo: 192.168.88.2 (liefert)") && info_is(6, "MQTT: 10 ok, 0 verworfen, 1 Verb.") &&
+	      info_is(7, "Version: 0.1.0 (ota_0)") && info_is(11, "HTTP: 21 ok, 0 Fehler") && info_is(14, "Letzter Neustart: poweron"),
+	      "the info lines after ten seconds: the address and that the Cerbo delivers; ten bundles, none refused, one session - and the 21 answers of the adapter as without a Cerbo");
+	shows("info_top_cerbo", "the info screen of a display with a Cerbo shows the same first five lines, of fifteen");
+	turn(5);
+	shows("info_cerbo", "the info screen five detents further: the two lines of the Cerbo in the middle");
+	turn(12);
+	shows("info_end_cerbo", "the info screen at its hard end: the same last five lines, of fifteen");
+	short_press();
+	check(on(NAV_MENU) && app->nav.row == 4, "the info screen of a display with a Cerbo is left by a short press");
+
+	// What the Cerbo does, in the words of the line. The last bundle came at 10040.
+	gx.flow = false;
+	run_to(20020);
+	check(gx_view() == CERBO_VIEW_LIVE && info_is(5, "Cerbo: 192.168.88.2 (liefert)") && info_is(6, "MQTT: 11 ok, 0 verworfen, 1 Verb."),
+	      "the info lines: ten seconds after its last bundle the Cerbo still counts as delivering");
+	run_to(20220);
+	check(gx_view() == CERBO_VIEW_QUIET && info_is(5, "Cerbo: 192.168.88.2 (wartet)"), "the info lines: a session that brings nothing for ten seconds: wartet");
+	run_to(30020);
+	check(gx_view() == CERBO_VIEW_QUIET && info_is(5, "Cerbo: 192.168.88.2 (wartet)") && gx.pings == 2,
+	      "the info lines: still wartet before the broker has answered a PINGREQ behind twenty seconds of silence");
+	run_to(30220);
+	check(gx_view() == CERBO_VIEW_SILENT && info_is(5, "Cerbo: 192.168.88.2 (keine Werte)") && gx.pings == 3,
+	      "the info lines: the broker answers and the flow is silent for twenty seconds: keine Werte");
+	gx_publish(CERBO_TOPIC, false, "{\"v\":2,\"boot\":7,\"t\":1,\"values\":{}}");
+	until_ticked();
+	check(gx_view() == CERBO_VIEW_NEWER && info_is(5, "Cerbo: 192.168.88.2 (Flow zu neu)") && info_is(6, "MQTT: 11 ok, 1 verworfen, 1 Verb."),
+	      "the info lines: a bundle of a newer contract: Flow zu neu, and one message refused");
+	gx_publish(CERBO_TOPIC, false, "kein JSON");
+	gx_publish("display/gx/other", false, "{}");
+	gx_publish(CERBO_TOPIC, true, "{\"v\":1,\"boot\":7,\"t\":1,\"values\":{}}");
+	until_ticked();
+	check(info_is(6, "MQTT: 11 ok, 4 verworfen, 1 Verb."), "the info lines: messages refused for whatever reason are counted together");
+	// The broker goes: the session ends at 31000
+	run_to(31000);
+	gx.there = false;
+	until_ticked();
+	check(gx_view() == CERBO_VIEW_CONNECTING && info_is(5, "Cerbo: 192.168.88.2 (wartet)") && gx.lost == 1, "the info lines: the broker is gone: wartet, for the first fifteen seconds");
+	run_to(45820);
+	check(gx_view() == CERBO_VIEW_CONNECTING && info_is(5, "Cerbo: 192.168.88.2 (wartet)") && gx.unreachable == 2,
+	      "the info lines: still wartet a moment before the fifteen seconds are over, behind the two attempts that failed at 33000 and at 38000");
+	run_to(46220);
+	check(gx_view() == CERBO_VIEW_UNREACHABLE && info_is(5, "Cerbo: 192.168.88.2 (nicht erreichbar)") && info_is(6, "MQTT: 11 ok, 4 verworfen, 1 Verb."),
+	      "the info lines: fifteen seconds without a session: nicht erreichbar");
+	gx.there = true;
+	gx.flow = true;
+	// The next attempt follows the wait of 10 s behind the second one that failed: at 48000
+	run_to(47980);
+	check(gx_view() == CERBO_VIEW_UNREACHABLE && gx.opens == 3, "a broker that is back is not found before the next attempt is due");
+	run_to(49020);
+	check(gx_view() == CERBO_VIEW_LIVE && info_is(5, "Cerbo: 192.168.88.2 (liefert)") && info_is(6, "MQTT: 12 ok, 4 verworfen, 2 Verb.") && app->cerbo.sessions == 2 && gx.opens == 4 &&
+	      gx.unreachable == 2, "the info lines: the broker is back: liefert, on the second session");
+	wifi.in_range_count = 0;
+	lose_wifi();
+	run(1200);
+	check(info_is(0, "WLAN: –") && info_is(5, "Cerbo: 192.168.88.2 (kein WLAN)"), "the info lines without a network: kein WLAN for the Cerbo");
+
+	// Safe mode: the line says why the source is off
+	garage();
+	cerbo_there();
+	machine.safe_mode = true;
+	start();
+	run(1000);
+	check(app->info_count == 15 && info_is(5, "Cerbo: 192.168.88.2 (aus (sicherer Modus))") && info_is(6, "MQTT: 0 ok, 0 verworfen, 0 Verb."),
+	      "the info lines in safe mode: the address, and that the source is off for the safe mode");
+	garage();
+	strcpy(flash.settings, "{\"cerbo\":\"255.255.255.255\"}");
+	flash.has_settings = true;
+	machine.safe_mode = true;
+	start();
+	check(info_is(5, "Cerbo: 255.255.255.255 (aus (sicherer Modus))") && strlen(app->info[5]) == 45, "the info lines: the longest address with the longest word has room in its line, 45 bytes of 63");
+
+	// Sixteen lines: the most there are
+	garage();
+	cerbo_there();
+	machine.rolled_back = true;
+	start();
+	app_world(app, &seen, now);
+	check(app->info_count == 16 && APP_INFO_LINES == 16 && seen.info_lines == 16 && info_is(0, "Update nicht übernommen – vorherige Version aktiv") && info_is(1, "WLAN: –") &&
+	      info_is(5, "WiCAN-Firmware: –") && info_is(6, "Cerbo: 192.168.88.2 (kein WLAN)") && info_is(7, "MQTT: 0 ok, 0 verworfen, 0 Verb.") && info_is(8, "Version: 0.1.0 (–)") &&
+	      info_is(15, "Letzter Neustart: –"),
+	      "the info lines after an update that was taken back, on a display with a Cerbo: sixteen lines, every one of them there, the last one as well");
+
+	// The address comes and goes with the settings
+	drive();
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	gx.there = true;
+	gx.flow = true;
+	app_tick(app, now);
+	check(app->info_count == 13 && info_is(4, "WiCAN-Firmware: 4.21") && info_is(5, "Version: 0.1.0 (ota_0)"), "the scene of a display without an address: thirteen lines");
+	check(browser_settings("{\"cerbo\":\"" GX_HOST "\"}"), "the browser sets the address of the Cerbo");
+	check(app->info_count == 13, "the info lines follow with the next tick, not before");
+	app_tick(app, now);
+	check(app->info_count == 15 && info_is(4, "WiCAN-Firmware: 4.21") && info_is(5, "Cerbo: 192.168.88.2 (wartet)") && info_is(6, "MQTT: 0 ok, 0 verworfen, 0 Verb.") &&
+	      info_is(7, "Version: 0.1.0 (ota_0)") && info_is(14, "Letzter Neustart: poweron"),
+	      "the info lines with the address set: the two lines of the Cerbo appear, and the lines behind them move down");
+	carry_out();
+	run(1000);
+	check(info_is(5, "Cerbo: 192.168.88.2 (liefert)") && info_is(6, "MQTT: 1 ok, 0 verworfen, 1 Verb."), "the info lines a second later: the Cerbo delivers");
+	check(browser_settings("{\"cerbo\":\"\"}"), "the browser takes the address away");
+	app_tick(app, now);
+	check(app->info_count == 13 && info_is(4, "WiCAN-Firmware: 4.21") && info_is(5, "Version: 0.1.0 (ota_0)") && info_is(12, "Letzter Neustart: poweron") &&
+	      all_bytes(app->info[13], APP_INFO_SIZE, 0) && all_bytes(app->info[14], APP_INFO_SIZE, 0),
+	      "the info lines with the address taken away: thirteen lines as before, and nothing is left in the two that are not in use any more");
+}
+
+/*
+ * What the app does not take from the second source (app.h): the fault memory, the poll and the link, the
+ * standby rule, busy, the release, nav and the idle times. First by examples, then by stories told twice.
+ */
+
+// The clear dialog would open: the reason why clearing is not offered right now
+static dtc_flow_block_t clear_block(void)
+{
+	const poll_t *poll = &app->poll;
+
+	return dtc_flow_clear_block(&poll->flow, &poll->conn, &poll->values, &poll->catalog, hold_is_stuck(&app->hold), now);
+}
+
+static void test_cerbo_apart(void)
+{
+	static char without_rpm[sizeof(w906_values) + 2];
+	uint64_t nav_input, light_input;
+	int plain, with;
+
+	// The standby rule: a parked camper, the ignition off, the Cerbo delivers
+	scene_cerbo();
+	run(2100);
+	wican.ignition = false;
+	run_to(4100);
+	check(view() == CONN_VIEW_ECU_OFFLINE && gx_view() == CERBO_VIEW_LIVE && cerbo_showing(&app->cerbo, now) && on(NAV_PAGES),
+	      "the scene of a parked camper: the ignition is off, the Cerbo delivers, the value pages show");
+	check(app_backlight(app, 59999) == 80 && app_backlight(app, 60000) == 0, "values of the Cerbo are nothing to show for the standby rule: the backlight goes off 60 s after the start, not 1 ms before");
+	run_to(62200);
+	check(light() == 0 && gx_view() == CERBO_VIEW_LIVE && cerbo_shown(&app->cerbo, now) == 6 && app->cerbo.bundles == 63 && cerbo_age(gx_value("GX_BATT_SOC"), now) == VALUE_AGE_FRESH,
+	      "ignition off for a minute: the screen is dark although the Cerbo delivers - 63 bundles, six fresh values");
+	tap(0);
+	check(light() == 80 && app->last_input_ms == 62200, "a tap wakes the screen of the parked camper");
+	run(59980);
+	check(light() == 80 && app_backlight(app, now + 19) == 80 && app_backlight(app, now + 20) == 0, "... and 60 s later it is dark again: the session went on, the idle time counts from the tap alone");
+
+	// A firmware without the API is judged by its values - those of the adapter
+	garage();
+	cerbo_there();
+	wican.api = false;
+	wican.ignition = false;
+	start();
+	run_to(70000);
+	check(view() == CONN_VIEW_NO_API && app->poll.values.count == 0 && gx_view() == CERBO_VIEW_LIVE && cerbo_shown(&app->cerbo, now) == 6 && light() == 0,
+	      "a firmware without the API and without a value of its own is nothing to show: the values of the Cerbo are no sign of a vehicle that runs");
+	wican.ignition = true;
+	run_to(72100);
+	check(light() == 80, "... and its own values light the screen up again");
+
+	// Busy, events, requests
+	scene_cerbo();
+	check(!app_busy(app), "not busy: a source that is in no network yet");
+	run(20);
+	check(app->cerbo.phase == CERBO_GREETING && !app_busy(app), "not busy: the connection to the broker stands and CONNECT waits");
+	run(20);
+	check(app->cerbo.phase == CERBO_SUBSCRIBING && !app_busy(app), "not busy: SUBSCRIBE waits");
+	run(20);
+	check(app->cerbo.phase == CERBO_SESSION && !app_busy(app), "not busy: a session with the broker, a bundle just taken");
+	gx.there = false;
+	run_to(30000);
+	check(app->cerbo.phase == CERBO_IDLE && gx.unreachable >= 3 && !app_busy(app) && stores() == 0 && restarts() == 0 && done.valid == 0 && app->events == 0,
+	      "not busy while the broker is out of reach, and in thirty seconds of sessions and failed attempts the source asked the platform for nothing");
+	with = requests();
+	garage();
+	start();
+	run_to(30000);
+	plain = requests();
+	check(plain == with && plain == 61, "the adapter is asked as often with a Cerbo as without one: 61 requests in thirty seconds");
+
+	// The fault memory sees the adapter alone. The engine runs, and the Cerbo says it stands.
+	garage();
+	cerbo_there();
+	gx.values = "\"ENGINE_RPM\":0,\"GX_ENGINE_RPM\":0,\"GX_BATT_SOC\":50";
+	start();
+	run(2100);
+	short_press();
+	short_press();
+	short_press();
+	run_to(7100);
+	check(on(NAV_DTC_LIST) && can_clear() && clear_block() == DTC_FLOW_ALLOWED, "the scene of a list that may be cleared, on a display with a Cerbo");
+	wican.rpm = 800;
+	run_to(8100);
+	check(values_find(&app->poll.values, "ENGINE_RPM")->number == 800 && gx_value("GX_ENGINE_RPM") != NULL && gx_value("GX_ENGINE_RPM")->number == 0 && gx_value("ENGINE_RPM") == NULL &&
+	      app->cerbo.skipped == 9, "the adapter says 800 rpm; every bundle named the engine speed as 0, under the key of the adapter - passed over - and under a key of its own");
+	check(!can_clear() && clear_block() == DTC_FLOW_ENGINE_RUNNING, "the engine runs: clearing is not offered, whatever speed a bundle of the Cerbo names");
+	turn(8);
+	short_press();
+	check(on(NAV_DTC_LIST) && !app->hold.open && sent[POLL_DTC_CLEAR] == 0, "... and no dialog opens");
+
+	// The engine stands, and the Cerbo says it runs
+	garage();
+	cerbo_there();
+	gx.values = "\"ENGINE_RPM\":3000,\"GX_ENGINE_RPM\":3000,\"@BATT_V\":3.3";
+	start();
+	run(2100);
+	check(can_read(), "the engine stands by the adapter: reading is offered although every bundle of the Cerbo names 3000 rpm");
+	short_press();
+	short_press();
+	short_press();
+	run_to(7100);
+	check(values_find(&app->poll.values, "ENGINE_RPM")->number == 0 && values_find(&app->poll.values, CATALOG_BATTERY)->number == 12.4 && gx_value("GX_ENGINE_RPM")->number == 3000 &&
+	      app->cerbo.values.count == 1, "the engine speed and the battery voltage of the adapter are untouched by a bundle that names them: of its three members one is taken, the one with the prefix");
+	check(on(NAV_DTC_LIST) && can_clear() && clear_block() == DTC_FLOW_ALLOWED, "the engine stands by the adapter: clearing is offered although the Cerbo names 3000 rpm");
+
+	// An engine speed nobody knows is not known from a bundle
+	garage();
+	cerbo_there();
+	gx.values = "\"ENGINE_RPM\":0,\"GX_ENGINE_RPM\":0";
+	snprintf(without_rpm, sizeof(without_rpm), "{%s", w906_values + 16);
+	wican.values = without_rpm;
+	start();
+	run(2100);
+	check(values_find(&app->poll.values, "ENGINE_RPM") == NULL && app->cerbo.bundles == 3 && !can_read(),
+	      "an adapter that delivers no engine speed: reading is not offered, and the speed a bundle names does not stand in for it");
+
+	// A bundle is no input: the idle times and the screens
+	scene_cerbo();
+	run(2100);
+	short_press();
+	check(on(NAV_MENU), "the scene of the menu, on a display with a Cerbo");
+	nav_input = app->nav.last_input_ms;
+	light_input = app->last_input_ms;
+	run_to(122000);
+	check(on(NAV_MENU) && app->nav.last_input_ms == nav_input && app->last_input_ms == light_input && app->cerbo.bundles == 122,
+	      "122 bundles later nav and the standby rule still count from the last press: a bundle is no input");
+	run_to(nav_input + NAV_IDLE_MS + 220);
+	check(on(NAV_PAGES), "the menu is left with the first tick 120 s behind that press, as on a display without a Cerbo");
+
+	// The release is not renewed by anything the source does
+	scene_cerbo();
+	run(2100);
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	gx.noisy = true;
+	stride = 200;
+	run_to(602000);
+	check(access_is_open(&app->access, 602099) && !access_is_open(&app->access, 602100) && app->cerbo.sessions > 50 && cerbo_refused(&app->cerbo) > 50,
+	      "the release ends ten minutes after it was given, whatever the source took, refused and lost meanwhile: nothing of it is a change through the web");
+	stride = STEP_MS;
+
+	// The address through the settings: the source follows at once
+	scene_cerbo();
+	run(5000);
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	remember();
+	check(browser_settings("{\"brightness\":40}") && memcmp(&snapshot.cerbo, &app->cerbo, sizeof(app->cerbo)) == 0,
+	      "settings that do not name the address leave every byte of the source as it is");
+	check(browser_settings("{\"cerbo\":\"" GX_HOST "\"}") && memcmp(&snapshot.cerbo, &app->cerbo, sizeof(app->cerbo)) == 0 && cerbo_shown(&app->cerbo, now) == 6,
+	      "settings that name the address the source has leave every byte of it as it is: its values stay");
+	check(browser_settings("{\"cerbo\":\"" GX_ELSE "\"}") && strcmp(cerbo_host(&app->cerbo), GX_ELSE) == 0 && app->cerbo.values.count == 0 && cerbo_shown(&app->cerbo, now) == 0 &&
+	      gx_view() != CERBO_VIEW_LIVE, "another address: the source has it at once, the values of the old one are forgotten, and it does not count as delivering any more");
+	carry_out();
+	run(20);
+	check(gx.closes == 1 && app->cerbo.phase == CERBO_IDLE && gx_view() == CERBO_VIEW_CONNECTING, "... the connection to the old address is ordered closed with the next round of the task");
+	run(20);
+	check(gx.opens == 2 && strcmp(gx.opened, GX_ELSE) == 0 && gx.unreachable == 1, "... and the new address is opened with the one after it");
+	check(browser_settings("{\"cerbo\":\"\"}") && !cerbo_on(&app->cerbo) && cerbo_host(&app->cerbo)[0] == '\0' && gx_view() == CERBO_VIEW_OFF, "no address: the source is off at once");
+	carry_out();
+	run(30000);
+	check(gx.opens == 2 && app->cerbo.phase == CERBO_IDLE && flash_settings_are("{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}"),
+	      "... no order follows, and the stored settings are those of a display without a Cerbo, byte for byte");
+	check(browser_settings("{\"cerbo\":\"" GX_HOST "\"}"), "the address is set again");
+	carry_out();
+	run(60);
+	check(gx.opens == 3 && strcmp(gx.opened, GX_HOST) == 0 && gx_view() == CERBO_VIEW_LIVE && flash_settings_are("{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"" GX_HOST "\"}"),
+	      "... the source opens it at once, without waiting, and the stored settings name it");
+	remember();
+	check(!browser_settings("{\"cerbo\":\"einstein\"}") && memcmp(&snapshot.cerbo, &app->cerbo, sizeof(app->cerbo)) == 0 && strcmp(app->settings.cerbo, GX_HOST) == 0,
+	      "an address that is none is refused, and source and settings stay as they are");
+}
+
+/* A story told twice ----------------------------------------------------------------------------------- */
+
+#define TRACE_EVERY     50      // every this many steps the whole app and the screen go into the number of a step
+
+// Every step of a story as a number
+typedef struct
+{
+	uint64_t *steps;
+	uint64_t *times;
+	long count, room;
+	bool full;              // a step had no room
+} trace_t;
+
+static trace_t trace_plain, trace_cerbo;
+static trace_t *tracing;
+static int trace_every = TRACE_EVERY;
+
+static uint64_t mix(uint64_t number, uint64_t word)
+{
+	number ^= word;
+	number *= 0x100000001B3ull;
+	number ^= number >> 29;
+	return number;
+}
+
+static uint64_t mix_bytes(uint64_t number, const void *memory, size_t size)
+{
+	const unsigned char *bytes = memory;
+	size_t at = 0;
+
+	for(; at + 8 <= size; at += 8)
+	{
+		uint64_t word;
+
+		memcpy(&word, bytes + at, 8);
+		number = mix(number, word);
+	}
+	for(; at < size; at++) number = mix(number, bytes[at]);
+	return number;
+}
+
+// Every byte of the app but the second source itself, its address in the settings and the info lines - and,
+// while the info screen shows, where nav stands on it: that screen has two lines more with a Cerbo
+static uint64_t mix_app(uint64_t number)
+{
+	const unsigned char *bytes = (const unsigned char *)app;
+	size_t nav_end = offsetof(app_t, nav) + sizeof(app->nav);
+	size_t settings_end = offsetof(app_t, settings) + sizeof(app->settings);
+	size_t cerbo_end = offsetof(app_t, cerbo) + sizeof(app->cerbo);
+
+	number = mix_bytes(number, bytes, offsetof(app_t, nav));
+	if(app->nav.screen != NAV_INFO) number = mix_bytes(number, &app->nav, sizeof(app->nav));
+	number = mix_bytes(number, bytes + nav_end, offsetof(app_t, settings) + offsetof(settings_t, cerbo) - nav_end);
+	number = mix_bytes(number, bytes + settings_end, offsetof(app_t, cerbo) - settings_end);
+	return mix_bytes(number, bytes + cerbo_end, offsetof(app_t, info) - cerbo_end);
+}
+
+// The end of a step: what the driver sees and what the display does around the second source
+static void trace_step(void)
+{
+	static scene_t shown;
+	trace_t *trace = tracing;
+	uint64_t number = 14695981039346656037ull;
+
+	if(trace == NULL) return;
+	if(trace->count == trace->room)
+	{
+		long room = trace->room == 0 ? 65536 : 2 * trace->room;
+		uint64_t *steps = realloc(trace->steps, (size_t)room * sizeof(uint64_t));
+		uint64_t *times = steps != NULL ? realloc(trace->times, (size_t)room * sizeof(uint64_t)) : NULL;
+
+		if(steps != NULL) trace->steps = steps;
+		if(times == NULL)
+		{
+			trace->full = true;
+			return;
+		}
+		trace->times = times;
+		trace->room = room;
+	}
+
+	number = mix(number, now);
+	number = mix(number, (uint64_t)app->nav.screen);
+	number = mix(number, (uint64_t)(int64_t)app->nav.page);
+	if(app->nav.screen != NAV_INFO) number = mix(number, (uint64_t)(int64_t)app->nav.row);
+	number = mix(number, (uint64_t)phase());
+	number = mix(number, (uint64_t)app->poll.flow.to_send);
+	number = mix(number, (uint64_t)view());
+	number = mix(number, (uint64_t)(int64_t)light());
+	number = mix(number, access_is_open(&app->access, now));
+	number = mix(number, (uint64_t)access_asking(&app->access, now));
+	number = mix(number, app_busy(app));
+	number = mix(number, (uint64_t)app->link.phase);
+	number = mix(number, app->poll.wifi);
+	number = mix(number, app->last_input_ms);
+	number = mix(number, app->clock_ms);
+	number = mix(number, app->events);
+	number = mix(number, (uint64_t)app->heat);
+	number = mix_bytes(number, sent, sizeof(sent));
+	number = mix_bytes(number, &done, sizeof(done));
+	number = mix(number, (uint64_t)(wifi.scans + 31 * wifi.joins + 961 * wifi.leaves + 29791 * wifi.finds));
+	number = mix(number, (uint64_t)(wifi.aps_on + 31 * wifi.aps_off));
+	number = mix(number, wifi.joined);
+	if(trace->count % trace_every == 0)
+	{
+		number = mix_app(number);
+		// The info screen is the one screen that differs: two lines more
+		if(app->nav.screen != NAV_INFO)
+		{
+			app_scene(app, &shown, now);
+			number = mix_bytes(number, &shown, sizeof(shown));
+		}
+	}
+	trace->steps[trace->count] = number;
+	trace->times[trace->count] = now;
+	trace->count++;
+}
+
+// The two traces are one story, step for step
+static bool same_story(const trace_t *plain, const trace_t *with_cerbo)
+{
+	long count = plain->count < with_cerbo->count ? plain->count : with_cerbo->count;
+
+	if(plain->full || with_cerbo->full)
+	{
+		printf("  a trace had no room\n");
+		return false;
+	}
+	for(long i = 0; i < count; i++)
+	{
+		if(plain->steps[i] == with_cerbo->steps[i]) continue;
+
+		printf("  the two displays part at step %ld of %ld: at %" PRIu64 " ms without a Cerbo, at %" PRIu64 " ms with one\n", i, plain->count, plain->times[i], with_cerbo->times[i]);
+		return false;
+	}
+	if(plain->count != with_cerbo->count) printf("  the story has %ld steps without a Cerbo and %ld with one\n", plain->count, with_cerbo->count);
+	return plain->count == with_cerbo->count;
+}
+
+// The story on a display without a second source, and once more on one with the Cerbo of gx_script(): what the
+// second run saw of its source is left in gx_seen
+static bool told_twice(void (*story)(void))
+{
+	bool same;
+
+	trace_plain.count = 0;
+	trace_cerbo.count = 0;
+	watch_trace = trace_step;
+
+	gx_everywhere = false;
+	tracing = &trace_plain;
+	story();
+
+	memset(&gx_seen, 0, sizeof(gx_seen));
+	gx_everywhere = true;
+	tracing = &trace_cerbo;
+	story();
+
+	gx_everywhere = false;
+	tracing = NULL;
+	watch_trace = NULL;
+	same = trace_plain.count > 0 && same_story(&trace_plain, &trace_cerbo);
+	printf("  told twice: %ld steps; the source took %ld bundles, refused %ld messages, made %ld sessions and was ordered to close %ld times; %ld bundles while a request was under way, "
+	       "%ld while the clear dialog showed\n", trace_plain.count, gx_seen.taken, gx_seen.refused, gx_seen.sessions, gx_seen.closed, gx_seen.during_request, gx_seen.during_dialog);
+	return same;
+}
+
+// A read, its list, the clear dialog, the hold, the clear and its outcome; then the outcome is left
+static void story_read_and_clear(void)
+{
+	scene_clearing();
+	run_to(20000);
+	short_press();
+	run_to(30000);
+}
+
+// A read whose adapter falls silent for more than the three minutes it is given
+static void story_read_given_up(void)
+{
+	scene_dtc();
+	short_press();
+	run_to(3000);
+	wican.dead = true;
+	stride = 200;
+	run_to(200000);
+	wican.dead = false;
+	run_to(230000);
+	stride = STEP_MS;
+	short_press();
+	run(2000);
+}
+
+// A parked camper: the ignition goes off, the screen goes dark, a tap wakes it, and it goes dark again
+static void story_parked(void)
+{
+	drive();
+	wican.ignition = false;
+	run_to(70000);
+	tap(0);
+	run_to(80000);
+	turn(2);
+	run_to(150000);
+	long_press();
+	run_to(152000);
+}
+
+// The release, given at the knob and left alone until it ends; then a network asked for without it
+static void story_release(void)
+{
+	drive();
+	short_press();
+	turn(3);
+	short_press();
+	short_press();
+	stride = 200;
+	run_to(700000);
+	stride = STEP_MS;
+}
+
+// The network goes during a clear, comes back, and the adapter has restarted meanwhile
+static void story_network_goes(void)
+{
+	scene_clearing();
+	wifi.in_range_count = 0;
+	lose_wifi();
+	run(5000);
+	wifi.in_range_count = 1;
+	adapter_restart(&wican, BOOT + 1, 7);
+	run(40000);
+	short_press();
+	run(3000);
+}
+
+static void test_cerbo_twice(void)
+{
+	check(told_twice(story_read_and_clear),
+	      "a read, the list, the clear dialog, the hold, the clear and its outcome are the same story step for step on a display with a Cerbo that sends bundles, rubbish and breaks off: "
+	      "screen, flow, requests, events, backlight, and once a second every byte of the app but the source itself");
+	check(gx_seen.taken >= 15 && gx_seen.refused >= 8 && gx_seen.closed >= 2 && gx_seen.sessions >= 4 && gx_seen.during_request >= 5 && gx_seen.during_dialog >= 1,
+	      "... during which the source took bundles while the read and the clear were under way and while the dialog showed, refused messages, was ordered to close and made sessions anew");
+	check(told_twice(story_read_given_up), "a read whose adapter falls silent until it is given up is the same story step for step with such a Cerbo");
+	check(gx_seen.during_request >= 60, "... during which the source took more than sixty bundles while the read waited");
+	check(told_twice(story_parked), "a parked camper - ignition off, the screen dark by the standby rule, woken, dark again - is the same story step for step with such a Cerbo");
+	check(gx_seen.taken >= 60, "... during which the source took bundles all along");
+	check(told_twice(story_release), "the release of the web interface, given at the knob and ended by its time, is the same story step for step with such a Cerbo");
+	check(gx_seen.taken >= 250 && gx_seen.sessions >= 50, "... during which the source took bundles and made sessions for eleven minutes");
+	check(told_twice(story_network_goes), "a clear whose network goes, and an adapter that has restarted when it is back, are the same story step for step with such a Cerbo");
+	check(gx_seen.closed >= 1, "... during which the source lost its network as well");
+}
+
+// The stories of the fault memory once more: each begins with a display that has the address of a Cerbo that
+// sends bundles, rubbish and breaks off, and each of their screens has to be the hand-written one all the same
+static void test_fault_memory_with_cerbo(void);
+
+/* ---------------------------------------------------------------------------------------------------
  * Random runs: the harness driven by a random number generator - inputs at the knob and the screen, a
  * browser, faults of the adapter and of the network, times that step back - with what app.h promises
  * watched around every call. The promises are written here once more from the headers and in another
@@ -4897,6 +5641,8 @@ static void test_real_adapter(void)
 
 #define RUNS            24
 #define RUN_DEEDS       240     // things a run does: an input, a wait, a fault, something the user sets out to do
+#define TWIN_RUNS       3       // every this many runs one is told a second time, in a world without a Cerbo
+#define TWIN_EVERY      64      // every this many steps of such a run the whole app goes into the number of a step
 #define SHOWN           4       // broken promises of each kind that are printed
 
 enum
@@ -4918,10 +5664,15 @@ enum
 	PROMISE_END,        // the end of a request of the display was not noted as an input by the tick behind it, or a tick
 	                    // made something else of nav than that and what nav_tick() says
 	PROMISE_HEAL,       // no way back to live values on the first page
+	PROMISE_CERBO,      // the second source does not follow the stored address, the safe mode or the network, was ordered to
+	                    // open without them, sent what a subscriber never sends, or does not come back to delivering
+	PROMISE_APART,      // a round of the task of the second source changed something of the display outside of the source
+	PROMISE_TWIN,       // the run is another one than the same run on a display in a world without a Cerbo
 	PROMISES,
 };
 
-static const char *const PROMISE_NAMES[PROMISES] = {"clear", "danger", "store", "old list", "scene", "light", "wake", "world", "layout", "info", "memory", "pause", "end", "heal"};
+static const char *const PROMISE_NAMES[PROMISES] = {"clear", "danger", "store", "old list", "scene", "light", "wake", "world", "layout", "info", "memory", "pause", "end", "heal",
+                                                    "cerbo", "apart", "twin"};
 
 #define RESTARTS        (APP_EVENT_REBOOT | APP_EVENT_FACTORY_RESET | APP_EVENT_PREVIOUS_FIRMWARE | APP_EVENT_INSTALL_FIRMWARE)
 // The events with one cause each that the run knows before the call
@@ -4968,6 +5719,20 @@ typedef struct
 	                            // showed would have been left by the next one
 	long ended_dark;            // ... on a screen that was dark by the standby rule, and lit up
 	long ended_hot;             // ... on a screen the heat kept dark, which nothing wakes
+	// The second source
+	long gx_views[CERBO_VIEW_LIVE + 1];     // steps of a display that has the address of the Cerbo, by what it shows of it
+	long gx_none;               // steps of a display without the address
+	long gx_safe;               // steps in safe mode with the address stored
+	long gx_dark;               // steps on a screen dark by the standby rule while the source had values to show
+	long gx_taken, gx_refused, gx_sessions, gx_closed;  // what the source did in all runs (gx_seen)
+	long gx_during_request, gx_during_dialog;
+	long gx_opens, gx_lost, gx_unreachable; // orders to open, connections the broker ended, attempts that failed
+	long gx_rounds, gx_looked;  // rounds of its task, and those around which every byte of the app outside of it was compared
+	long gx_set, gx_moved, gx_cleared;      // settings of the browser that gave the address, another one, or took it away
+	long gx_healed;             // runs behind which a source that is on and has the address of the Cerbo delivered again
+	long gx_wrong;              // ... of them those that ended without such a source - no address, safe mode, another address -
+	                            // and got there by a restart with the address
+	long twins, twin_steps;     // runs told a second time in a world without a Cerbo, and their steps
 } run_result_t;
 
 // What the run knows by itself
@@ -5038,6 +5803,20 @@ typedef struct
 	uint32_t sum;
 	char layout_text[LAYOUT_TEXT_MAX + 1];  // the layout of the user, as the browser sent or the flash held it
 	bool wifi_good;             // the network the browser asked for is one net_store() takes
+	bool info_cerbo;            // the info lines of the last tick, or of the start, had the two of the Cerbo
+
+	// Around the round of the task of the second source that is going on
+	int gx_opens;               // orders to open before it
+	bool gx_may_open;           // ... and whether one may come: an address, no safe mode, in a network
+	uint32_t gx_events;
+	dtc_flow_phase_t gx_phase;
+	dtc_flow_send_t gx_to_send;
+	int gx_requests;
+	uint64_t gx_input, gx_clock;
+	bool gx_open, gx_busy;
+	int gx_light;
+	nav_t gx_nav;
+	bool gx_whole;              // every byte of the app outside of the source was kept for this round
 } model_t;
 
 static model_t m;
@@ -5045,6 +5824,9 @@ static run_result_t *tally;
 static uint32_t run_number;
 static const char *doing = "";
 static uint32_t dice;
+// The Cerbo of the run has a die of its own: the run rolls the same numbers with it and without it
+static uint32_t gx_dice;
+static bool gx_world;           // there is a Cerbo in the world of this run
 static bool quiet;              // no faults are drawn
 static int storm;               // one reading in this many brings a fault
 static layout_t builtin_layout;
@@ -5072,6 +5854,7 @@ static void model_start(void)
 	m.source = app->source;
 	m.sum = app->catalog_sum;
 	m.page = app->nav.page;
+	m.info_cerbo = m.settings.cerbo[0] != '\0';
 	if(flash.has_layout) strcpy(m.layout_text, flash.layout);
 	// In safe mode the stored layout is not used; every layout the runs store is one that can be read
 	if((app->source == APP_LAYOUT_STORED) != (flash.has_layout && !machine.safe_mode)) broke(PROMISE_LAYOUT, "the start does not use the stored layout, or uses it in safe mode");
@@ -5095,6 +5878,24 @@ static int pick(int count)
 static bool chance(int percent)
 {
 	return pick(100) < percent;
+}
+
+static uint32_t gx_roll(void)
+{
+	gx_dice ^= gx_dice << 13;
+	gx_dice ^= gx_dice >> 17;
+	gx_dice ^= gx_dice << 5;
+	return gx_dice;
+}
+
+static int gx_pick(int count)
+{
+	return (int)(gx_roll() % (uint32_t)count);
+}
+
+static bool gx_chance(int percent)
+{
+	return gx_pick(100) < percent;
 }
 
 /*
@@ -5349,7 +6150,7 @@ static void world_holds(void)
 	{
 		broke(PROMISE_WORLD, "nav is told another layout, catalogue or flow, or another answer to whether reading and clearing are allowed");
 	}
-	if(seen.list_lines != list || seen.cleared_lines != cleared || seen.old_lines != old || seen.info_lines != (machine.rolled_back ? 14 : 13))
+	if(seen.list_lines != list || seen.cleared_lines != cleared || seen.old_lines != old || seen.info_lines != (machine.rolled_back ? 14 : 13) + (m.info_cerbo ? 2 : 0))
 	{
 		broke(PROMISE_WORLD, "nav is told other numbers of lines than the results the poll holds have");
 	}
@@ -5439,6 +6240,18 @@ static void info_holds(void)
 	snprintf(lines[count++], sizeof(lines[0]), "WiCAN: %s", or_dash(link_host(&app->link)));
 	snprintf(lines[count++], sizeof(lines[0]), "WiCAN-ID: %s", or_dash(flash.has_bound ? flash.bound : ""));
 	snprintf(lines[count++], sizeof(lines[0]), "WiCAN-Firmware: %s", or_dash(state != NULL ? state->fw : ""));
+	// The two lines of the second source, exactly on a display that has its address. What it shows of the source
+	// is asked of cerbo.h and texts.h, the counters are those of the source, the refused ones added here.
+	if(m.settings.cerbo[0] != '\0')
+	{
+		const cerbo_t *cerbo = &app->cerbo;
+		uint64_t refused = (uint64_t)cerbo->refused_invalid + cerbo->refused_version + cerbo->refused_retained + cerbo->refused_topic + cerbo->refused_long;
+
+		snprintf(lines[count++], sizeof(lines[0]), "Cerbo: %s (%s)", m.settings.cerbo, text_cerbo_short(cerbo_view(cerbo, app->clock_ms)));
+		// A display that has the address is off for the safe mode alone: the line says so exactly then
+		if((strstr(lines[count - 1], "(aus (sicherer Modus))") != NULL) != machine.safe_mode) broke(PROMISE_INFO, "the info line of the Cerbo says that it is off outside the safe mode, or something else in it");
+		snprintf(lines[count++], sizeof(lines[0]), "MQTT: %" PRIu32 " ok, %" PRIu64 " verworfen, %" PRIu32 " Verb.", cerbo->bundles, refused, cerbo->sessions);
+	}
 	snprintf(lines[count++], sizeof(lines[0]), "Version: %s (%s)", VERSION, platform.slot);
 	snprintf(lines[count++], sizeof(lines[0]), "Ansichten: %s (%s)", or_dash(app->layout.name), words[m.source]);
 	snprintf(lines[count++], sizeof(lines[0]), "Speicher: %" PRIu32 " frei, min. %" PRIu32, platform.heap, platform.heap_min);
@@ -5584,6 +6397,11 @@ static void behind(bool stepped, bool quick)
 		if(!settings_from_json(&m.settings, flash.settings, strlen(flash.settings), NULL, 0, work, SETTINGS_TOKENS)) broke(PROMISE_STORE, "the settings stored cannot be read");
 	}
 	if(memcmp(&m.settings, &app->settings, sizeof(settings_t)) != 0 || app->knob.reverse != m.settings.reverse) broke(PROMISE_STORE, "the settings in use are not the settings stored");
+	// The second source has the address that is stored, and is on exactly with one and outside the safe mode
+	if(strcmp(cerbo_host(&app->cerbo), m.settings.cerbo) != 0 || app->cerbo.safe_mode != machine.safe_mode || cerbo_on(&app->cerbo) != (m.settings.cerbo[0] != '\0' && !machine.safe_mode))
+	{
+		broke(PROMISE_CERBO, "the second source does not have the address of the stored settings, or is on in safe mode or without an address");
+	}
 	if(app->profile_count != flash.profile_count || memcmp(app->profiles, flash.profiles, sizeof(flash.profiles)) != 0 || app->link.profile_count != flash.profile_count)
 	{
 		broke(PROMISE_STORE, "the networks in use are not the networks stored");
@@ -5623,6 +6441,9 @@ static void behind(bool stepped, bool quick)
 }
 
 static void trouble(void);
+static void gx_trouble(void);
+static void gx_calm(void);
+static uint64_t gx_until_ms;
 
 static void run_step(void)
 {
@@ -5635,6 +6456,16 @@ static void run_step(void)
 
 	// A fault can strike between any two readings
 	if(!quiet && storm != 0 && pick(storm) == 0) trouble();
+	// ... and so can the Cerbo, by its own die. What lasts with it ends by its time.
+	if(gx_world && !quiet)
+	{
+		if(gx_until_ms != 0 && world() >= gx_until_ms)
+		{
+			gx_calm();
+			gx_until_ms = 0;
+		}
+		else if(gx_until_ms == 0 && gx_pick(500) == 0) gx_trouble();
+	}
 	before(screen_time());
 	focus = on(NAV_DTC_CONFIRM) && app->nav.row == 1 && m.over == NAV_OVER_NONE;
 	m.knob = knob_sample(&twin, switch_pressed, switch_ok, m.time);
@@ -5734,6 +6565,7 @@ static void run_button(void)
 static void run_tick(void)
 {
 	info_holds();
+	m.info_cerbo = m.settings.cerbo[0] != '\0';
 	m.page = app->nav.page;
 
 	// The end of a request of the display was an input for nav, before nav followed the flow, and nothing else was
@@ -5780,6 +6612,16 @@ static void run_after(void)
 			if(m.paused && flow == DTC_FLOW_LIST) tally->paused_lists++;
 			m.paused = false;
 		}
+	}
+
+	// The second source follows the network of the display, not the adapter
+	if(app->cerbo.network != link_in_network(&app->link)) broke(PROMISE_CERBO, "the second source is not told the network the display is in behind a step");
+	if(m.settings.cerbo[0] == '\0') tally->gx_none++;
+	else
+	{
+		tally->gx_views[cerbo_view(&app->cerbo, now)]++;
+		if(machine.safe_mode) tally->gx_safe++;
+		if(m.heat != GUARD_HEAT_OFF && light_at(now) == 0 && cerbo_showing(&app->cerbo, now)) tally->gx_dark++;
 	}
 
 	tally->steps++;
@@ -5868,6 +6710,157 @@ static void run_touched(void)
 	if(!on(NAV_BRIGHTNESS)) m.preview = -1;
 	behind(false, false);
 	tally->touches++;
+}
+
+// Around every round of the task of the second source: nothing of the display outside of the source changes
+// with it, and it is ordered to open only where app.h lets it
+static void run_gx(bool round_over)
+{
+	static app_t kept;
+	size_t cerbo_end = offsetof(app_t, cerbo) + sizeof(app->cerbo);
+
+	if(!round_over)
+	{
+		m.gx_opens = gx.opens;
+		m.gx_may_open = m.settings.cerbo[0] != '\0' && !machine.safe_mode && wifi.joined;
+		m.gx_events = app->events;
+		m.gx_phase = phase();
+		m.gx_to_send = app->poll.flow.to_send;
+		m.gx_requests = requests();
+		m.gx_input = app->last_input_ms;
+		m.gx_clock = app->clock_ms;
+		m.gx_open = access_is_open(&app->access, now);
+		m.gx_busy = app_busy(app);
+		m.gx_light = app_backlight(app, now);
+		m.gx_nav = app->nav;
+		// Now and then every byte
+		m.gx_whole = tally->gx_rounds % 97 == 0;
+		if(m.gx_whole) memcpy(&kept, app, sizeof(kept));
+		tally->gx_rounds++;
+		return;
+	}
+
+	if(gx.opens != m.gx_opens && !m.gx_may_open) broke(PROMISE_CERBO, "the task of the second source was ordered to open without an address, in safe mode or outside of a network");
+	if(gx.strange != 0)
+	{
+		broke(PROMISE_CERBO, "the second source sent what is no CONNECT, SUBSCRIBE or PINGREQ, sent without a connection, or opened a second one");
+		gx.strange = 0;
+	}
+	if(app->events != m.gx_events || phase() != m.gx_phase || app->poll.flow.to_send != m.gx_to_send || requests() != m.gx_requests || app->last_input_ms != m.gx_input ||
+	   app->clock_ms != m.gx_clock || access_is_open(&app->access, now) != m.gx_open || app_busy(app) != m.gx_busy || app_backlight(app, now) != m.gx_light ||
+	   memcmp(&m.gx_nav, &app->nav, sizeof(nav_t)) != 0)
+	{
+		broke(PROMISE_APART, "a round of the task of the second source raised an event, moved the fault memory flow, sent a request, counted as an input, or changed the time, the release, busy, the backlight or nav");
+	}
+	if(m.gx_whole)
+	{
+		if(memcmp(&kept, app, offsetof(app_t, cerbo)) != 0 || memcmp((const char *)&kept + cerbo_end, (const char *)app + cerbo_end, sizeof(app_t) - cerbo_end) != 0)
+		{
+			broke(PROMISE_APART, "a round of the task of the second source changed a byte of the app outside of the source");
+		}
+		tally->gx_looked++;
+	}
+}
+
+// The values of the Cerbo of the runs, and a bundle that names the engine speed and the battery voltage of the
+// adapter as well - under their keys, which no bundle may set, and with the prefix
+static const char RUN_VALUES[] = GX_VALUES;
+static const char RUN_VALUES_ENGINE[] = "\"ENGINE_RPM\":3000,\"GX_ENGINE_RPM\":3000,\"@BATT_V\":9.9,\"GX_BATT_SOC\":12.5,\"lower\":1,\"GX_LIST\":[1,2]";
+
+// A Cerbo with which nothing is wrong
+static void gx_calm(void)
+{
+	gx.there = true;
+	gx.answers = true;
+	gx.flow = true;
+	gx.every_ms = 1000;
+	gx.version = CERBO_VERSION;
+	gx.read_max = CERBO_READ_MAX;
+	gx.held_until_ms = 0;
+	gx.values = RUN_VALUES;
+	gx_skew = 0;
+}
+
+// The Cerbo comes and goes, falls silent, stops answering, runs a newer flow, sends rubbish, repeats itself, piles
+// up behind a radio link that stands. What lasts, lasts for a time of its own and then all is well with it again.
+static uint64_t gx_until_ms;    // the time of the world at which the trouble of the Cerbo is over, 0: there is none
+
+static void gx_trouble(void)
+{
+	static const uint8_t qos1[] = {0x32, 0x05, 0x00, 0x01, 'a', 0x00, 0x01};
+	static const uint8_t rubbish[] = {0xFF, 0x00, 0x13, 0x37};
+	static const uint32_t paces[] = {100, 200, 1000, 1000, 5000};
+	static const uint64_t skews[] = {0, 20, 400, 3000};
+	static const uint64_t lasts[] = {3000, 12000, 25000, 45000, 90000, 200000};
+	static int turn_of;
+	bool connected = gx.socket && !gx.connecting;
+	uint64_t lasting = lasts[gx_pick(COUNT(lasts))];
+
+	switch(turn_of++ % 18)
+	{
+		// What lasts
+		case 0: gx.there = false; gx_until_ms = world() + lasting; break;
+		case 1:
+		case 2: gx.flow = false; gx_until_ms = world() + lasting; break;
+		case 3: gx.answers = false; gx_until_ms = world() + lasting; break;
+		// The flow is one of a newer contract
+		case 4: gx.version = CERBO_VERSION + 1; gx_until_ms = world() + lasting; break;
+		// The radio link stands, and what the flow publishes piles up
+		case 5: gx.held_until_ms = world() + lasting / 3; break;
+		// The bytes arrive in small pieces
+		case 6: gx.read_max = (size_t)(1 + gx_pick(48)); gx_until_ms = world() + lasting; break;
+		// Every bundle names the engine speed and the battery voltage of the adapter
+		case 7: gx.values = RUN_VALUES_ENGINE; gx_until_ms = world() + lasting; break;
+		case 8: gx.every_ms = paces[gx_pick(COUNT(paces))]; gx_until_ms = world() + lasting; break;
+		case 9: gx_skew = skews[gx_pick(COUNT(skews))]; gx_until_ms = world() + lasting; break;
+		// What happens once
+		case 10: if(connected) gx_send(rubbish, sizeof(rubbish)); break;
+		case 11: if(connected) gx_send(qos1, sizeof(qos1)); break;
+		case 12: if(connected) gx_publish(CERBO_TOPIC, false, "kein JSON"); break;
+		case 13: if(connected) gx_publish(CERBO_TOPIC, true, "{\"v\":1,\"boot\":7,\"t\":1,\"values\":{\"GX_BATT_SOC\":1}}"); break;
+		case 14: if(connected) gx_publish("display/gx/other", false, "{\"v\":1,\"boot\":7,\"t\":1,\"values\":{\"ENGINE_RPM\":3000}}"); break;
+		case 15:
+			// The flow repeats itself: the same bundle three times
+			if(connected)
+			{
+				gx_bundle_of(gx.values);
+				gx_bundle_of(gx.values);
+				gx_bundle_of(gx.values);
+			}
+			break;
+		case 16:
+			// The flow starts anew: another run of it, its clock at zero
+			gx.boot = 1 + (uint32_t)gx_pick(2000000000);
+			gx.boot_ms = world();
+			break;
+		// The broker ends the connection, and is there again at once
+		default:
+			if(connected)
+			{
+				gx.socket = false;
+				gx.subscribed = false;
+				gx.wire_length = 0;
+				gx.lost++;
+				cerbo_down(&app->cerbo, now);
+			}
+			break;
+	}
+}
+
+// The settings the browser of a run sends, with what it does about the address of the Cerbo: mostly nothing,
+// else it gives the address, another one at which nothing listens, or takes it away. Every text of the runs
+// is an object; one that is refused for another member stays refused.
+static const char *with_address(const char *settings)
+{
+	static char text[160];
+	int what_now = gx_pick(100);
+	const char *address = what_now < 30 ? NULL : what_now < 65 ? GX_HOST : what_now < 80 ? GX_ELSE : "";
+	size_t length = strlen(settings);
+
+	if(address == NULL || length < 2 || settings[length - 1] != '}') return settings;
+
+	snprintf(text, sizeof(text), "%.*s%s\"cerbo\":\"%s\"}", (int)(length - 1), settings, length > 2 ? "," : "", address);
+	return text;
 }
 
 static void run_request(const poll_request_t *asked)
@@ -6074,13 +7067,16 @@ static void calm(void)
 	screen_skew = 0;
 }
 
+// The faults take turns from run to run: whose turn it is. Kept outside of trouble(), so that a run that is told
+// a second time begins where its first telling began.
+static int trouble_turn;
+
 // Something goes wrong, or everything is well again
 static void trouble(void)
 {
 	static const char *const reasons[] = {"busy", "read_required", "stale_seq", "nothing_to_clear", "not_ready", "forbidden", "bad_request"};
 	static const int statuses[] = {409, 409, 409, 409, 503, 403, 400};
 	static const uint64_t skews[] = {0, 20, 400, 3000, 20000};
-	static int turn_of;
 	int reason = pick(COUNT(reasons));
 
 	// Every second time all is well again; the faults take turns, so that each of them comes in every run
@@ -6089,7 +7085,7 @@ static void trouble(void)
 		calm();
 		return;
 	}
-	switch(turn_of++ % 29)
+	switch(trouble_turn++ % 29)
 	{
 		case 0: wican.dead = !wican.dead; break;
 		case 1: wican.api = !wican.api; break;
@@ -6389,6 +7385,8 @@ static void intent(void)
 	int password = pick(5);
 	int which = pick(25);
 	const char *host;
+	const char *sent_settings;
+	char address_before[SETTINGS_CERBO_SIZE];
 	uint32_t ticket;
 	bool ok;
 
@@ -6567,8 +7565,22 @@ static void intent(void)
 			break;
 		case 11:
 			web_begin("the browser sets the settings");
-			ok = browser_settings(settings[pick(COUNT(settings))]);
+			sent_settings = settings[pick(COUNT(settings))];
+			if(gx_world) sent_settings = with_address(sent_settings);
+			strcpy(address_before, app->settings.cerbo);
+			ok = browser_settings(sent_settings);
 			web_end(ok ? APP_EVENT_STORE_SETTINGS : 0);
+			if(ok && strcmp(address_before, app->settings.cerbo) != 0)
+			{
+				// Another address, or none: nothing of the old one is left to show, at once
+				if(app->cerbo.values.count != 0 || cerbo_shown(&app->cerbo, now) != 0 || cerbo_view(&app->cerbo, now) == CERBO_VIEW_LIVE)
+				{
+					broke(PROMISE_CERBO, "the address changed and the source still holds values of the old one, or counts as delivering");
+				}
+				if(app->settings.cerbo[0] == '\0') tally->gx_cleared++;
+				else if(address_before[0] == '\0') tally->gx_set++;
+				else tally->gx_moved++;
+			}
 			break;
 		case 12:
 			web_begin("the browser restarts the display");
@@ -6841,14 +7853,20 @@ static bool heal(void)
 	return at_home();
 }
 
-static void random_run(uint32_t number, run_result_t *result)
+// cerbo_world: there is a Cerbo in the world of the run. Without one the run is the same run: the Cerbo rolls
+// a die of its own, and nothing the run does depends on it.
+static void random_run(uint32_t number, run_result_t *result, bool cerbo_world)
 {
 	static const char *const settings[] = {"{\"brightness\":60,\"night\":15,\"night_mode\":true,\"reverse\":true,\"standby_s\":0}", "{\"standby_s\":2}", "{\"reverse\":true}"};
 	static const int storms[] = {0, 1200, 400, 150};
+	trace_t *traced = tracing;
 
 	run_number = number;
 	tally = result;
 	dice = number * 2654435761u + 977u;
+	gx_dice = number * 2246822519u + 40503u;
+	gx_world = cerbo_world;
+	memset(&gx_seen, 0, sizeof(gx_seen));
 	doing = "start";
 	quiet = false;
 	// One run in four without faults, the others with more and more of them
@@ -6885,6 +7903,21 @@ static void random_run(uint32_t number, run_result_t *result)
 	machine.rolled_back = chance(15);
 	machine.no_builtin = chance(10);
 	machine.safe_mode = chance(10);
+	gx_until_ms = 0;
+	if(gx_world)
+	{
+		gx_calm();
+		// Six displays in ten were given the address of the Cerbo before the run begins
+		if(gx_chance(60))
+		{
+			// Behind the settings the run chose, in the place of their closing brace, or as the only member
+			size_t used = flash.has_settings ? strlen(flash.settings) : 0;
+
+			if(used > 0) snprintf(flash.settings + used - 1, sizeof(flash.settings) - used + 1, ",\"cerbo\":\"" GX_HOST "\"}");
+			else strcpy(flash.settings, "{\"cerbo\":\"" GX_HOST "\"}");
+			flash.has_settings = true;
+		}
+	}
 
 	watch_step = run_step;
 	watch_button = run_button;
@@ -6895,6 +7928,7 @@ static void random_run(uint32_t number, run_result_t *result)
 	on_request = run_request;
 	on_answer = run_answer;
 	watch_events = run_events;
+	watch_gx = run_gx;
 	start();
 	model_start();
 	if(machine.update_pending && chance(50))
@@ -6920,6 +7954,64 @@ static void random_run(uint32_t number, run_result_t *result)
 
 	if(heal()) result->healed++;
 	else broke(PROMISE_HEAL, "a healthy adapter, honest inputs and time do not lead back to live values on the first page");
+
+	// What follows is no part of the run that is told twice, and none of its steps is counted with it
+	tracing = NULL;
+	if(gx_world)
+	{
+		static run_result_t aside;
+		// The display has the address at which the Cerbo listens, not another one
+		bool right = cerbo_on(&app->cerbo) && strcmp(cerbo_host(&app->cerbo), GX_HOST) == 0;
+		uint32_t sessions = app->cerbo.sessions;
+
+		// A Cerbo with which nothing is wrong, and time: a source that is on and has its address delivers again.
+		// The longest wait between two attempts is 30 s, a session that does not come about is given up after 15.
+		memset(&aside, 0, sizeof(aside));
+		tally = &aside;
+		doing = "the way back of the Cerbo";
+		quiet = true;
+		gx_calm();
+		gx_until_ms = 0;
+		for(int i = 0; i < 80 && (!right || cerbo_view(&app->cerbo, now) != CERBO_VIEW_LIVE); i++) run(1000);
+		// Without the address, in safe mode and with an address at which nothing listens there is no session in 80 s
+		if(!right)
+		{
+			settings_t given = app->settings;
+
+			if(app->cerbo.sessions != sessions || cerbo_view(&app->cerbo, now) == CERBO_VIEW_LIVE || cerbo_showing(&app->cerbo, now))
+			{
+				broke(PROMISE_CERBO, "a display without the address of the Cerbo, in safe mode or with another address made a session, or has values to show after 80 s");
+			}
+			result->gx_wrong++;
+			// The owner gives it the address and starts it outside the safe mode: the way back is the same from here
+			doing = "the address of the Cerbo and a restart";
+			memset(given.cerbo, 0, sizeof(given.cerbo));
+			strcpy(given.cerbo, GX_HOST);
+			settings_to_json(&given, flash.settings, sizeof(flash.settings));
+			flash.has_settings = true;
+			machine.safe_mode = false;
+			start();
+			model_start();
+			for(int i = 0; i < 80 && cerbo_view(&app->cerbo, now) != CERBO_VIEW_LIVE; i++) run(1000);
+		}
+		quiet = false;
+		tally = result;
+		for(int i = 0; i < PROMISES; i++) result->broken[i] += aside.broken[i];
+		result->gx_rounds += aside.gx_rounds;
+		result->gx_looked += aside.gx_looked;
+		if(cerbo_view(&app->cerbo, now) != CERBO_VIEW_LIVE || !cerbo_showing(&app->cerbo, now) || cerbo_shown(&app->cerbo, now) == 0)
+		{
+			broke(PROMISE_CERBO, "a Cerbo that is there and publishes, a display in its network with its address, and time do not lead back to a source that delivers");
+		}
+		else result->gx_healed++;
+		result->gx_taken += gx_seen.taken;
+		result->gx_refused += gx_seen.refused;
+		result->gx_sessions += gx_seen.sessions;
+		result->gx_closed += gx_seen.closed;
+		result->gx_during_request += gx_seen.during_request;
+		result->gx_during_dialog += gx_seen.during_dialog;
+	}
+	tracing = traced;
 }
 
 static void test_random_runs(void)
@@ -6944,6 +8036,13 @@ static void test_random_runs(void)
 		"in every random run the first tick behind the end of a request of the display notes it as an input that acts on nothing before nav follows the flow, and every tick "
 		"makes of nav exactly that and what nav_tick() says: no tick is an input otherwise",
 		"after every random run a healthy adapter, honest inputs and time lead back to live values on the first page",
+		"in every random run the second source has the address of the stored settings, is on exactly with an address and outside the safe mode, is told the network the display is in, "
+		"is ordered to open only then, sends nothing but CONNECT, SUBSCRIBE and PINGREQ, forgets the values of an address that changed - and delivers again behind every run "
+		"once nothing is wrong with the Cerbo",
+		"in every random run no round of the task of the second source raises an event, moves the fault memory flow, sends a request to the adapter, counts as an input or changes "
+		"the time of the app, the release, busy, the backlight or nav - and, where every byte was looked at, no byte of the app outside of the source",
+		"every random run that is told a second time in a world without a Cerbo is the same run step for step: screen, flow, requests, events, backlight, release, and every "
+		"64 steps every byte of the app but the source, its address and the info lines",
 	};
 	run_result_t result;
 	int ends[2];
@@ -6968,7 +8067,46 @@ static void test_random_runs(void)
 		close(ends[0]);
 		alarm(300);
 		if(!layout_parse(builtin_text, strlen(builtin_text), &builtin_layout, NULL, work, LAYOUT_TOKENS)) _exit(2);
-		for(uint32_t number = 1; number <= RUNS; number++) random_run(number, &result);
+		watch_trace = trace_step;
+		trace_every = TWIN_EVERY;
+		for(uint32_t number = 1; number <= RUNS; number++)
+		{
+			static run_result_t apart;
+			bool twin = number % TWIN_RUNS == 0;
+			int turn_before = trouble_turn, turn_after;
+
+			// Every run has a Cerbo in its world. Every third one is told a second time without one - the same
+			// numbers rolled, no address ever, no broker - and has to be the same run, step for step.
+			trace_cerbo.count = 0;
+			tracing = twin ? &trace_cerbo : NULL;
+			random_run(number, &result, true);
+			result.gx_opens += gx.opens;
+			result.gx_lost += gx.lost;
+			result.gx_unreachable += gx.unreachable;
+			if(!twin) continue;
+
+			// The second telling begins where the first began, also in the turns of its faults
+			turn_after = trouble_turn;
+			trouble_turn = turn_before;
+			memset(&apart, 0, sizeof(apart));
+			trace_plain.count = 0;
+			tracing = &trace_plain;
+			random_run(number, &apart, false);
+			tracing = NULL;
+			tally = &result;
+			doing = "the same run without a Cerbo";
+			if(trouble_turn != turn_after) broke(PROMISE_TWIN, "a run with a Cerbo in its world and the same run without one met another number of faults");
+			trouble_turn = turn_after;
+			for(int i = 0; i < PROMISES; i++) result.broken[i] += apart.broken[i];
+			if(gx.opens != 0 || gx.sends != 0 || apart.gx_views[CERBO_VIEW_LIVE] != 0 || apart.gx_none != apart.steps)
+			{
+				broke(PROMISE_CERBO, "in a world without a Cerbo, on a display that never had an address, the task of the second source got an order");
+			}
+			if(!same_story(&trace_plain, &trace_cerbo)) broke(PROMISE_TWIN, "a run with a Cerbo in its world and the same run without one part");
+			result.twins++;
+			result.twin_steps += trace_plain.count;
+		}
+		watch_trace = NULL;
 		fflush(stdout);
 		_exit(write(ends[1], &result, sizeof(result)) == (ssize_t)sizeof(result) ? 0 : 1);
 	}
@@ -7015,7 +8153,7 @@ static void test_random_runs(void)
 	       "%ld of them on the progress 120 s or more behind the last input, %ld on a screen dark by standby that lit up, %ld on a screen the heat kept dark\n",
 	       result.ended[0], result.ended[1], result.ended[2], result.ended[3], result.ended[4], result.ended_late, result.ended_dark, result.ended_hot);
 
-	check(complete && status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0, "24 random runs of 240 deeds each: no crash and no hang");
+	check(complete && status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0, "24 random runs of 240 deeds each, eight of them told twice: no crash and no hang");
 	for(int i = 0; i < PROMISES; i++) check(complete && result.broken[i] == 0, promises[i]);
 	check(complete && result.healed == RUNS, "every one of the 24 random runs ends on live values");
 
@@ -7047,8 +8185,51 @@ static void test_random_runs(void)
 	check(complete && result.ended[0] >= 50 && result.ended[1] >= 12 && result.ended[2] >= 5 && result.ended[3] >= 2 && result.ended_late >= 8 && result.ended_dark >= 3 && result.ended_hot >= 3,
 	      "the random runs let requests of the display end with a list, as failed, with the outcome of a clear and as unknown - on a progress nobody touched for 120 s and more, on "
 	      "screens dark by standby that light up, and on screens the heat keeps dark");
+
+	printf("  random runs, the second source: steps by what the display shows of it:");
+	for(int i = 0; i <= CERBO_VIEW_LIVE; i++) printf(" %ld", result.gx_views[i]);
+	printf("; %ld steps without the address, %ld in safe mode with it, %ld dark by standby while the source had values to show\n", result.gx_none, result.gx_safe, result.gx_dark);
+	printf("  random runs, the second source: %ld orders to open, %ld attempts that failed, %ld sessions, %ld connections the broker ended, %ld orders to close; %ld bundles taken, "
+	       "%ld messages refused; %ld bundles while a request of the display was under way, %ld while the clear dialog showed\n",
+	       result.gx_opens, result.gx_unreachable, result.gx_sessions, result.gx_lost, result.gx_closed, result.gx_taken, result.gx_refused, result.gx_during_request, result.gx_during_dialog);
+	printf("  random runs, the second source: %ld rounds of its task, every byte of the app outside of it compared around %ld of them; the browser gave the address %ld times, another one "
+	       "%ld times and took it away %ld times; behind %ld runs the source delivered again, behind %ld of them only after the display was given the address and started anew; "
+	       "%ld runs told twice, %ld steps each way\n",
+	       result.gx_rounds, result.gx_looked, result.gx_set, result.gx_moved, result.gx_cleared, result.gx_healed, result.gx_wrong, result.twins, result.twin_steps);
+	for(int i = 0; i <= CERBO_VIEW_LIVE; i++) reached = reached && result.gx_views[i] >= 100;
+	check(complete && reached && result.gx_none >= 10000 && result.gx_safe >= 100 && result.gx_dark >= 100,
+	      "the random runs reach every view of the second source, displays without its address, the safe mode with the address stored, and screens dark by standby while the source has values to show");
+	check(complete && result.gx_opens >= 100 && result.gx_unreachable >= 20 && result.gx_sessions >= 50 && result.gx_lost >= 10 && result.gx_closed >= 20 && result.gx_taken >= 5000 &&
+	      result.gx_refused >= 50 && result.gx_during_request >= 100 && result.gx_during_dialog >= 5,
+	      "the random runs let the Cerbo come and go, refuse and deliver: sessions, attempts that fail, connections that end, bundles and refused messages - also while requests of the "
+	      "display are under way and while the clear dialog shows");
+	check(complete && result.gx_rounds >= 400000 && result.gx_looked >= 4000 && result.gx_set >= 3 && result.gx_moved >= 1 && result.gx_cleared >= 3,
+	      "the random runs look at every round of the task of the second source, and set its address, change it and take it away through the browser");
+	check(complete && result.gx_healed == RUNS && result.gx_wrong >= 5 && result.gx_wrong < RUNS,
+	      "behind every one of the 24 random runs the second source delivers again - where the display had lost the address or was in safe mode, once it was given the address and started anew");
+	check(complete && result.twins == RUNS / TWIN_RUNS && result.twin_steps >= 50000, "every third random run is told a second time in a world without a Cerbo");
 }
 
+static void test_fault_memory_with_cerbo(void)
+{
+	memset(&gx_seen, 0, sizeof(gx_seen));
+	gx_everywhere = true;
+	printf("  the stories of the fault memory once more, on a display with a Cerbo that sends bundles, rubbish and breaks off\n");
+	test_read_and_clear();
+	test_list_and_dialog();
+	test_refusals();
+	test_blocks();
+	test_more_failures();
+	test_read_through_pause();
+	test_request_ends();
+	test_dialog_under_question();
+	test_replaced();
+	gx_everywhere = false;
+	printf("  the source of these stories: %ld bundles taken, %ld messages refused, %ld sessions, %ld orders to close; %ld bundles while a request was under way, %ld while the clear dialog showed\n",
+	       gx_seen.taken, gx_seen.refused, gx_seen.sessions, gx_seen.closed, gx_seen.during_request, gx_seen.during_dialog);
+	check(gx_seen.taken >= 1000 && gx_seen.refused >= 500 && gx_seen.sessions >= 300 && gx_seen.closed >= 100 && gx_seen.during_request >= 100 && gx_seen.during_dialog >= 10,
+	      "the stories of the fault memory ran a second time with a source that took bundles, refused messages and lost its connection - also while requests were under way and while the clear dialog showed");
+}
 
 int main(void)
 {
@@ -7094,6 +8275,12 @@ int main(void)
 	test_dialog_under_question();
 	test_replaced();
 	test_real_adapter();
+	test_cerbo_start();
+	test_cerbo_network();
+	test_cerbo_info();
+	test_cerbo_apart();
+	test_cerbo_twice();
+	test_fault_memory_with_cerbo();
 	test_random_runs();
 
 	return test_end();

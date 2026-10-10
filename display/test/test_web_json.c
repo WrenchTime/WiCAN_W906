@@ -123,6 +123,21 @@ static int call_values(char *out, size_t size)
 	return web_values_json(values_now.values, values_now.view, values_now.now_ms, out, size);
 }
 
+// The answer of a display with a second source: the stores and views of both
+static struct
+{
+	const values_t *values;
+	const char *view;
+	const values_t *cerbo;
+	const char *cerbo_view;
+	uint64_t now_ms;
+} both_now;
+
+static int call_both(char *out, size_t size)
+{
+	return web_values_cerbo_json(both_now.values, both_now.view, both_now.cerbo, both_now.cerbo_view, both_now.now_ms, out, size);
+}
+
 static int call_wifi(char *out, size_t size)
 {
 	return web_wifi_json(wifi_now.profiles, wifi_now.profile_count, wifi_now.current, wifi_now.seen, wifi_now.seen_count, out, size);
@@ -285,17 +300,29 @@ static const char *embedded(const char *json)
 
 static void model_info(const web_info_t *i)
 {
+	// The object of the second source, with its comma: nothing for a display that has none. Two texts of up
+	// to 80 bytes, of which every byte may become six.
+	char cerbo[1280] = "";
+
+	if(i->cerbo_host != NULL && i->cerbo_host[0] != '\0')
+	{
+		snprintf(cerbo, sizeof(cerbo), "\"cerbo\":{\"host\":%s,\"view\":%s,\"values\":%lu,\"ok\":%lu,\"refused\":%lu,\"connects\":%lu,\"boots\":%lu,\"lag_ms\":%lu},",
+		         q(i->cerbo_host), q(i->cerbo_view), (unsigned long)i->cerbo_values, (unsigned long)i->cerbo_ok, (unsigned long)i->cerbo_refused,
+		         (unsigned long)i->cerbo_connects, (unsigned long)i->cerbo_boots, (unsigned long)i->cerbo_lag_ms);
+	}
 	snprintf(expected, sizeof(expected),
 	         "{\"project\":\"wican-display\",\"version\":%s,\"git\":%s,\"slot\":%s,\"reset\":%s,\"up\":%lu,\"safe_mode\":%s,"
-	         "\"rolled_back\":%s,\"update_pending\":%s,\"heap\":%lu,\"heap_min\":%lu,\"psram\":%lu,\"psram_min\":%lu,\"temp_c\":%d,\"heat\":%s,"
+	         "\"rolled_back\":%s,\"update_pending\":%s,\"heap\":%lu,\"heap_min\":%lu,\"psram\":%lu,\"psram_min\":%lu,"
+	         "\"heap_malloc\":%lu,\"heap_malloc_min\":%lu,\"heap_block\":%lu,\"temp_c\":%d,\"heat\":%s,"
 	         "\"release\":{\"open\":%s,\"left_s\":%lu},\"wifi\":{\"ssid\":%s,\"ip\":%s,\"rssi\":%d,\"ap\":%s,\"ap_ssid\":%s},"
-	         "\"wican\":{\"host\":%s,\"id\":%s,\"fw\":%s,\"view\":%s},\"layout\":{\"name\":%s,\"source\":%s},"
+	         "\"wican\":{\"host\":%s,\"id\":%s,\"fw\":%s,\"view\":%s},%s\"layout\":{\"name\":%s,\"source\":%s},"
 	         "\"http\":{\"ok\":%lu,\"failed\":%lu,\"reconnects\":%lu},\"settings\":%s}",
 	         q(i->version), q(i->git), q(i->slot), q(i->reset), (unsigned long)i->up_s, b(i->safe_mode),
 	         b(i->rolled_back), b(i->update_pending), (unsigned long)i->heap, (unsigned long)i->heap_min, (unsigned long)i->psram,
-	         (unsigned long)i->psram_min, i->temp_c, q(i->heat),
+	         (unsigned long)i->psram_min, (unsigned long)i->heap_malloc, (unsigned long)i->heap_malloc_min, (unsigned long)i->heap_block,
+	         i->temp_c, q(i->heat),
 	         b(i->release_open), (unsigned long)i->release_left_s, q(i->ssid), q(i->ip), i->rssi, b(i->ap_on), q(i->ap_ssid),
-	         q(i->wican_host), q(i->wican_id), q(i->wican_fw), q(i->view), q(i->layout_name), q(i->layout_source),
+	         q(i->wican_host), q(i->wican_id), q(i->wican_fw), q(i->view), cerbo, q(i->layout_name), q(i->layout_source),
 	         (unsigned long)i->http_ok, (unsigned long)i->http_failed, (unsigned long)i->reconnects, embedded(i->settings));
 }
 
@@ -509,7 +536,8 @@ static void test_escaping(void)
 static const web_info_t typical_info = {
 	.version = "0.1.0", .git = "display-v0.1.0-3-g1a2b3c4", .slot = "ota_0", .reset = "poweron", .up_s = 4711,
 	.safe_mode = false, .rolled_back = false, .update_pending = true,
-	.heap = 182340, .heap_min = 151200, .psram = 7340032, .psram_min = 7100416, .temp_c = 47, .heat = "normal",
+	.heap = 182340, .heap_min = 151200, .psram = 7340032, .psram_min = 7100416,
+	.heap_malloc = 149572, .heap_malloc_min = 118432, .heap_block = 94208, .temp_c = 47, .heat = "normal",
 	.release_open = true, .release_left_s = 540,
 	.ssid = "Werkstatt", .ip = "192.168.1.77", .rssi = -61, .ap_on = false, .ap_ssid = "WiCAN-Display",
 	.wican_host = "192.168.1.50", .wican_id = "a1b2c3d4e5f6", .wican_fw = "4.21", .view = "live",
@@ -521,7 +549,8 @@ static const web_info_t typical_info = {
 static const web_info_t safe_mode_info = {
 	.version = "0.2.0-rc1", .git = "", .slot = "ota_1", .reset = "panic", .up_s = 0,
 	.safe_mode = true, .rolled_back = true, .update_pending = false,
-	.heap = 4294967295u, .heap_min = 0, .psram = 0, .psram_min = 0, .temp_c = -12, .heat = "off",
+	.heap = 4294967295u, .heap_min = 0, .psram = 0, .psram_min = 0,
+	.heap_malloc = 0, .heap_malloc_min = 0, .heap_block = 4294967295u, .temp_c = -12, .heat = "off",
 	.release_open = false, .release_left_s = 0,
 	.ssid = NULL, .ip = "", .rssi = 0, .ap_on = true, .ap_ssid = "WiCAN-Display \"Bus\"",
 	.wican_host = "", .wican_id = NULL, .wican_fw = "", .view = "no_wifi",
@@ -533,7 +562,8 @@ static const web_info_t safe_mode_info = {
 // An info with no text, every number 0 and every boolean false
 static const char empty_info_text[] =
 	"{\"project\":\"wican-display\",\"version\":\"\",\"git\":\"\",\"slot\":\"\",\"reset\":\"\",\"up\":0,\"safe_mode\":false,"
-	"\"rolled_back\":false,\"update_pending\":false,\"heap\":0,\"heap_min\":0,\"psram\":0,\"psram_min\":0,\"temp_c\":0,\"heat\":\"\","
+	"\"rolled_back\":false,\"update_pending\":false,\"heap\":0,\"heap_min\":0,\"psram\":0,\"psram_min\":0,"
+	"\"heap_malloc\":0,\"heap_malloc_min\":0,\"heap_block\":0,\"temp_c\":0,\"heat\":\"\","
 	"\"release\":{\"open\":false,\"left_s\":0},\"wifi\":{\"ssid\":\"\",\"ip\":\"\",\"rssi\":0,\"ap\":false,\"ap_ssid\":\"\"},"
 	"\"wican\":{\"host\":\"\",\"id\":\"\",\"fw\":\"\",\"view\":\"\"},\"layout\":{\"name\":\"\",\"source\":\"\"},"
 	"\"http\":{\"ok\":0,\"failed\":0,\"reconnects\":0},\"settings\":null}";
@@ -571,7 +601,10 @@ static void test_info(void)
 		{offsetof(web_info_t, heap), "\"update_pending\":false,\"heap\":4294967295,\"heap_min\":0", "info: heap stands at its place with all 32 bit"},
 		{offsetof(web_info_t, heap_min), "\"heap\":0,\"heap_min\":4294967295,\"psram\":0", "info: heap_min stands at its place with all 32 bit"},
 		{offsetof(web_info_t, psram), "\"heap_min\":0,\"psram\":4294967295,\"psram_min\":0", "info: psram stands at its place with all 32 bit"},
-		{offsetof(web_info_t, psram_min), "\"psram\":0,\"psram_min\":4294967295,\"temp_c\":0", "info: psram_min stands at its place with all 32 bit"},
+		{offsetof(web_info_t, psram_min), "\"psram\":0,\"psram_min\":4294967295,\"heap_malloc\":0", "info: psram_min stands at its place with all 32 bit"},
+		{offsetof(web_info_t, heap_malloc), "\"psram_min\":0,\"heap_malloc\":4294967295,\"heap_malloc_min\":0", "info: heap_malloc stands at its place with all 32 bit"},
+		{offsetof(web_info_t, heap_malloc_min), "\"heap_malloc\":0,\"heap_malloc_min\":4294967295,\"heap_block\":0", "info: heap_malloc_min stands at its place with all 32 bit"},
+		{offsetof(web_info_t, heap_block), "\"heap_malloc_min\":0,\"heap_block\":4294967295,\"temp_c\":0", "info: heap_block stands at its place with all 32 bit"},
 		{offsetof(web_info_t, release_left_s), "\"release\":{\"open\":false,\"left_s\":4294967295},\"wifi\"", "info: release.left_s stands at its place with all 32 bit"},
 		{offsetof(web_info_t, http_ok), "\"http\":{\"ok\":4294967295,\"failed\":0", "info: http.ok stands at its place with all 32 bit"},
 		{offsetof(web_info_t, http_failed), "\"ok\":0,\"failed\":4294967295,\"reconnects\":0", "info: http.failed stands at its place with all 32 bit"},
@@ -637,7 +670,7 @@ static void test_info(void)
 	memset(&info, 0, sizeof(info));
 	info.temp_c = -2147483647 - 1;
 	call_info((char *)room, ROOM_SIZE);
-	check(strstr((char *)room, "\"psram_min\":0,\"temp_c\":-2147483648,\"heat\"") != NULL && count_of((char *)room, "-") == 2,
+	check(strstr((char *)room, "\"heap_block\":0,\"temp_c\":-2147483648,\"heat\"") != NULL && count_of((char *)room, "-") == 2,
 	      "info: temp_c stands at its place, the smallest int is written completely");
 	info.temp_c = 0;
 	info.rssi = -2147483647 - 1;
@@ -1070,6 +1103,337 @@ static void test_values_size(void)
 	check(rooms_around(call_values, text), "values: the longest text of all is written, and refused with a room of 15062 bytes or less");
 	check(room_is_right(call_values, text, WEB_VALUES_SIZE) && WEB_VALUES_SIZE >= 15062 + 1,
 	      "values: WEB_VALUES_SIZE is enough for 64 values with the longest names and a view of 32 bytes, all of them escaped");
+}
+
+/*
+ * GET /api/values of a display with a second source
+ */
+
+static values_t gx;
+
+static void no_gx(void)
+{
+	memset(&gx, 0, sizeof(gx));
+}
+
+static void add_gx(const char *name, value_kind_t kind, double number, uint64_t seen_ms)
+{
+	value_t *value = &gx.items[gx.count++];
+
+	memset(value, 'y', sizeof(*value));
+	strcpy(value->name, name);
+	value->kind = kind;
+	value->number = number;
+	value->seen_ms = seen_ms;
+}
+
+static bool both_give(const char *view, const char *cerbo_view, uint64_t now_ms, const char *wanted)
+{
+	both_now.values = &values;
+	both_now.view = view;
+	both_now.cerbo = &gx;
+	both_now.cerbo_view = cerbo_view;
+	both_now.now_ms = now_ms;
+	return every_room(call_both, wanted);
+}
+
+// The format of the header written a second time, with printf. Each store with the limits of its source.
+static size_t model_store(size_t at, const values_t *store, uint64_t now_ms, uint64_t fresh_below, uint64_t gone_from, bool *first)
+{
+	int i;
+
+	for(i = 0; i < store->count; i++)
+	{
+		const value_t *value = &store->items[i];
+		uint64_t age = now_ms > value->seen_ms ? now_ms - value->seen_ms : 0;
+		char shown[40];
+
+		if(age >= gone_from) continue;
+		if(value->kind == VALUE_ON) snprintf(shown, sizeof(shown), "\"on\"");
+		else if(value->kind == VALUE_OFF) snprintf(shown, sizeof(shown), "\"off\"");
+		else if(value->kind != VALUE_NUMBER || isnan(value->number) || isinf(value->number)) continue;
+		else if(value->number == 0) snprintf(shown, sizeof(shown), "0");
+		else snprintf(shown, sizeof(shown), "%.9g", value->number);
+
+		at += (size_t)snprintf(expected + at, sizeof(expected) - at, "%s%s:{\"v\":%s,\"age\":\"%s\"}", *first ? "" : ",", q_limited(value->name, 32), shown,
+		                       age < fresh_below ? "fresh" : "old");
+		*first = false;
+	}
+	return at;
+}
+
+static void model_both(const values_t *wican, const char *view, const values_t *cerbo, const char *cerbo_view, uint64_t now_ms)
+{
+	bool first = true;
+	size_t at = 0;
+
+	at += (size_t)snprintf(expected + at, sizeof(expected) - at, "{\"view\":%s,", q(view));
+	at += (size_t)snprintf(expected + at, sizeof(expected) - at, "\"cerbo\":%s,\"values\":{", q(cerbo_view));
+	at = model_store(at, wican, now_ms, 3000, 10000, &first);
+	at = model_store(at, cerbo, now_ms, 5000, 60000, &first);
+	snprintf(expected + at, sizeof(expected) - at, "}}");
+}
+
+// The answer of web_values_json() for these values with the view of the Cerbo put in behind the view of the
+// adapter: what a display with a second source that holds no value of it has to answer
+static bool with_word(const values_t *store, const char *view, const char *cerbo_view, uint64_t now_ms)
+{
+	static char plain[ROOM_SIZE];
+	const char *behind;
+	int length = web_values_json(store, view, now_ms, plain, sizeof(plain));
+
+	if(length < 0) return false;
+	// {"view":".." ends where ,"values":{ begins: no text of the answer holds a quote that is not escaped
+	behind = strstr(plain, ",\"values\":{");
+	if(behind == NULL) return false;
+	snprintf(text, sizeof(text), "%.*s,\"cerbo\":%s%s", (int)(behind - plain), plain, q(cerbo_view), behind);
+	return true;
+}
+
+static void test_values_cerbo(void)
+{
+	static const struct
+	{
+		uint64_t now_ms;        // both values were seen at 5000
+		const char *written;
+		const char *what;
+	} ages[] = {
+		{5000, "\"A\":{\"v\":1,\"age\":\"fresh\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen just now: both fresh"},
+		{7999, "\"A\":{\"v\":1,\"age\":\"fresh\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen 2999 ms ago: both fresh"},
+		{8000, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen 3000 ms ago: the value of the adapter is old, the one of the Cerbo fresh"},
+		{9999, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen 4999 ms ago: the value of the Cerbo is still fresh"},
+		{10000, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 5000 ms ago: the value of the Cerbo is old as well"},
+		{14999, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 9999 ms ago: both old"},
+		{15000, "\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 10000 ms ago: the value of the adapter is left out, the one of the Cerbo stays, without a comma in front"},
+		{64999, "\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 59999 ms ago: the value of the Cerbo is still there"},
+		{65000, "", "values with a Cerbo: seen 60000 ms ago: the value of the Cerbo is left out as well"},
+		{UINT64_MAX, "", "values with a Cerbo: seen the longest time ago: both left out"},
+		{4999, "\"A\":{\"v\":1,\"age\":\"fresh\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: the clock stepped back by 1 ms: both fresh"},
+		{0, "\"A\":{\"v\":1,\"age\":\"fresh\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: the clock stepped back to 0: both fresh"},
+	};
+	char wanted[1024];
+	bool all;
+	size_t i;
+	int gone;
+
+	// The example
+	no_values();
+	add_value("ENGINE_RPM", VALUE_NUMBER, 812.5, 10000);
+	add_value("DPF_REGEN_STATUS", VALUE_ON, 0, 5000);
+	no_gx();
+	add_gx("GX_BATT_SOC", VALUE_NUMBER, 99.7, 10000);
+	add_gx("GX_SW_B2B", VALUE_ON, 0, 8500);
+	add_gx("GX_TANK_FRESH", VALUE_NUMBER, 77, 5000);
+	add_gx("GX_T_BOILER", VALUE_NUMBER, 61.1, 0);
+	both_now.values = &values;
+	both_now.view = "live";
+	both_now.cerbo = &gx;
+	both_now.cerbo_view = "live";
+	both_now.now_ms = 12999;
+	check(gives_fixture(call_both, "fixtures/web_values_cerbo.json"),
+	      "values with a Cerbo: the example gives the fixture, with every room from 0 bytes on: the view of the Cerbo behind the one of the adapter, its values behind those of the adapter");
+	no_values();
+	no_gx();
+	both_now.view = "no_wifi";
+	both_now.cerbo_view = "off";
+	check(gives_fixture(call_both, "fixtures/web_values_cerbo_empty.json"), "values with a Cerbo: no values of either source give the fixture with an empty object");
+
+	// One store empty, and the other
+	no_values();
+	add_value("ENGINE_RPM", VALUE_NUMBER, 812.5, 1000);
+	no_gx();
+	check(both_give("live", "unreachable", 1000, "{\"view\":\"live\",\"cerbo\":\"unreachable\",\"values\":{\"ENGINE_RPM\":{\"v\":812.5,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: no value of the Cerbo: those of the adapter alone, and nothing behind them");
+	no_values();
+	add_gx("GX_BATT_SOC", VALUE_NUMBER, 99.7, 1000);
+	check(both_give("no_answer", "live", 1000, "{\"view\":\"no_answer\",\"cerbo\":\"live\",\"values\":{\"GX_BATT_SOC\":{\"v\":99.7,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: no value of the adapter: those of the Cerbo alone, and no comma in front of the first");
+	add_value("ENGINE_RPM", VALUE_NUMBER, 812.5, 1000);
+	add_gx("GX_SW_B2B", VALUE_OFF, 0, 1000);
+	check(both_give("live", "live", 1000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"ENGINE_RPM\":{\"v\":812.5,\"age\":\"fresh\"},"
+	                "\"GX_BATT_SOC\":{\"v\":99.7,\"age\":\"fresh\"},\"GX_SW_B2B\":{\"v\":\"off\",\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: one value of the adapter and two of the Cerbo: in that order, with commas between them");
+
+	// Each source with its own limits
+	for(i = 0; i < sizeof(ages) / sizeof(ages[0]); i++)
+	{
+		no_values();
+		add_value("A", VALUE_NUMBER, 1, 5000);
+		no_gx();
+		add_gx("GX_A", VALUE_NUMBER, 2, 5000);
+		snprintf(wanted, sizeof(wanted), "{\"view\":\"live\",\"cerbo\":\"quiet\",\"values\":{%s}}", ages[i].written);
+		check(both_give("live", "quiet", ages[i].now_ms, wanted), ages[i].what);
+	}
+	// Nothing is looked at but the stores: the name of a value says nothing about its source
+	no_values();
+	add_value("GX_A", VALUE_NUMBER, 1, 5000);
+	no_gx();
+	add_gx("ENGINE_RPM", VALUE_NUMBER, 2, 5000);
+	check(both_give("live", "live", 9000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_A\":{\"v\":1,\"age\":\"old\"},\"ENGINE_RPM\":{\"v\":2,\"age\":\"fresh\"}}}") &&
+	      both_give("live", "live", 20000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"ENGINE_RPM\":{\"v\":2,\"age\":\"old\"}}}"),
+	      "values with a Cerbo: a value is as old as its store says, whatever its name: one named GX_A among those of the adapter is old after 3 s and gone after 10");
+	no_values();
+	no_gx();
+	add_gx("GX_SW_B2B", VALUE_ON, 0, 5000);
+	check(both_give("live", "live", 64999, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_SW_B2B\":{\"v\":\"on\",\"age\":\"old\"}}}") &&
+	      both_give("live", "live", 65000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{}}"),
+	      "values with a Cerbo: a switch of the Cerbo is left out when it is gone as well, and old 1 ms before");
+
+	// What is left out, in the store of the Cerbo
+	no_values();
+	no_gx();
+	add_gx("GX_A", VALUE_NUMBER, 1, 1000);
+	add_gx("GX_B", VALUE_NUMBER, HUGE_VAL, 1000);
+	add_gx("GX_C", VALUE_NUMBER, NAN, 1000);
+	add_gx("GX_D", VALUE_NUMBER, -HUGE_VAL, 1000);
+	add_gx("GX_E", (value_kind_t)3, 5, 1000);
+	add_gx("GX_F", (value_kind_t)-1, 6, 1000);
+	add_gx("GX_G", (value_kind_t)256, 7, 1000);
+	add_gx("GX_H", VALUE_OFF, HUGE_VAL, 1000);
+	add_gx("GX_I", VALUE_NUMBER, -0.0, 1000);
+	add_gx("GX_J", VALUE_ON, NAN, 1000);
+	add_gx("GX_K", VALUE_ON, 7.5, 1000);
+	add_gx("GX_L", VALUE_OFF, 1, 1000);
+	check(both_give("live", "live", 1000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_A\":{\"v\":1,\"age\":\"fresh\"},\"GX_H\":{\"v\":\"off\",\"age\":\"fresh\"},"
+	                "\"GX_I\":{\"v\":0,\"age\":\"fresh\"},\"GX_J\":{\"v\":\"on\",\"age\":\"fresh\"},\"GX_K\":{\"v\":\"on\",\"age\":\"fresh\"},"
+	                "\"GX_L\":{\"v\":\"off\",\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: numbers that are not finite and values whose kind is none of the three are left out, minus zero is written as 0, the number of a switch does not matter");
+	no_gx();
+	add_gx("GX_A", VALUE_NUMBER, -1.23456789e-308, 1000);
+	add_gx("GX_B", VALUE_NUMBER, 1e9, 1000);
+	add_gx("GX_C", VALUE_NUMBER, 1234567890, 1000);
+	add_gx("GX_D", VALUE_NUMBER, 0.00001, 1000);
+	add_gx("GX_E", VALUE_NUMBER, 28.68, 1000);
+	check(both_give("live", "live", 1000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_A\":{\"v\":-1.23456789e-308,\"age\":\"fresh\"},\"GX_B\":{\"v\":1e+09,\"age\":\"fresh\"},"
+	                "\"GX_C\":{\"v\":1.23456789e+09,\"age\":\"fresh\"},\"GX_D\":{\"v\":1e-05,\"age\":\"fresh\"},\"GX_E\":{\"v\":28.68,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: a number of the Cerbo is written as one of the adapter: nine digits, with an exponent where printf writes one");
+
+	// Two values of each source, of which every subset is gone: commas only between those that stay
+	all = true;
+	for(gone = 0; gone < 16; gone++)
+	{
+		no_values();
+		add_value("A", VALUE_NUMBER, 1, (gone & 1) ? 0 : 100000);
+		add_value("B", VALUE_ON, 0, (gone & 2) ? 0 : 100000);
+		no_gx();
+		add_gx("GX_C", VALUE_NUMBER, 3, (gone & 4) ? 0 : 100000);
+		add_gx("GX_D", VALUE_OFF, 0, (gone & 8) ? 0 : 100000);
+		snprintf(wanted, sizeof(wanted), "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{%s%s%s%s%s%s%s}}",
+		         (gone & 1) ? "" : "\"A\":{\"v\":1,\"age\":\"fresh\"}", (gone & 3) == 0 ? "," : "",
+		         (gone & 2) ? "" : "\"B\":{\"v\":\"on\",\"age\":\"fresh\"}", (gone & 3) != 3 && (gone & 12) != 12 ? "," : "",
+		         (gone & 4) ? "" : "\"GX_C\":{\"v\":3,\"age\":\"fresh\"}", (gone & 12) == 0 ? "," : "",
+		         (gone & 8) ? "" : "\"GX_D\":{\"v\":\"off\",\"age\":\"fresh\"}");
+		if(!both_give("live", "live", 100000, wanted)) all = false;
+	}
+	check(all, "values with a Cerbo: of two values of each source every subset may be gone: the others stay in their order, with commas only between them, across the two sources as well");
+
+	// Only the values that are counted
+	no_values();
+	add_value("A", VALUE_NUMBER, 1, 1000);
+	add_value("B", VALUE_NUMBER, 2, 1000);
+	no_gx();
+	add_gx("GX_C", VALUE_NUMBER, 3, 1000);
+	add_gx("GX_D", VALUE_NUMBER, 4, 1000);
+	values.count = 1;
+	gx.count = 1;
+	check(both_give("live", "live", 1000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"A\":{\"v\":1,\"age\":\"fresh\"},\"GX_C\":{\"v\":3,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: an item behind the count of either store is not written");
+	gx.count = 0;
+	check(both_give("live", "live", 1000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"A\":{\"v\":1,\"age\":\"fresh\"}}}"), "values with a Cerbo: with the count 0 nothing of the Cerbo is written");
+
+	// Texts
+	no_values();
+	add_value("a\"b", VALUE_NUMBER, 1, 1000);
+	no_gx();
+	add_gx("c\\d\x01\x7f", VALUE_NUMBER, 2, 1000);
+	add_gx("\xc3\x96l", VALUE_OFF, 0, 1000);
+	add_gx("", VALUE_NUMBER, 4, 1000);
+	check(both_give("li\"ve\n", "qu\\iet\t", 1000, "{\"view\":\"li\\\"ve\\u000a\",\"cerbo\":\"qu\\\\iet\\u0009\",\"values\":{\"a\\\"b\":{\"v\":1,\"age\":\"fresh\"},"
+	                "\"c\\\\d\\u0001\\u007f\":{\"v\":2,\"age\":\"fresh\"},\"\xc3\x96l\":{\"v\":\"off\",\"age\":\"fresh\"},\"\":{\"v\":4,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: both views and the names of both stores are escaped, UTF-8 and the empty name are passed on");
+	no_gx();
+	check(both_give(NULL, NULL, 1000, "{\"view\":\"\",\"cerbo\":\"\",\"values\":{\"a\\\"b\":{\"v\":1,\"age\":\"fresh\"}}}"), "values with a Cerbo: views that are NULL count as empty texts");
+	no_values();
+	add_gx("GX_45678901234567890123456789012", VALUE_NUMBER, 1, 1000);
+	check(both_give("live", "live", 1000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_45678901234567890123456789012\":{\"v\":1,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: a name of 32 bytes is written completely");
+
+	// A display that holds no value of the Cerbo answers what it answered before, with the one member more
+	no_values();
+	add_value("COOLANT_TMP", VALUE_NUMBER, 88.25, 20000);
+	add_value("GLOW_ACTIVE", VALUE_OFF, 0, 17001);
+	add_value("LONG_AGO", VALUE_NUMBER, 5, 10000);
+	add_value("@BATT_V", VALUE_NUMBER, 12.4, 17000);
+	add_value("BEYOND_RANGE", VALUE_NUMBER, HUGE_VAL, 20000);
+	add_value("RAIL_PRESSURE", VALUE_NUMBER, -0.0, 10001);
+	add_value("NO_NUMBER", VALUE_NUMBER, NAN, 20000);
+	add_value("NO_KIND", (value_kind_t)7, 1, 20000);
+	no_gx();
+	check(with_word(&values, "ecu_offline", "connecting", 20000) && both_give("ecu_offline", "connecting", 20000, text) && count_of(text, "\"age\":") == 4,
+	      "values with a Cerbo: with an empty store of the Cerbo the answer is the one of web_values_json() with the view of the Cerbo put in, for values of every kind and age");
+}
+
+// Both stores filled to the edge
+static void test_values_cerbo_size(void)
+{
+	char view[33], cerbo_view[33];
+	char name[33];
+	size_t length;
+	int i, at;
+
+	check(WEB_VALUES_CERBO_SIZE == 4672, "WEB_VALUES_CERBO_SIZE is 4672");
+
+	// The adapter: 64 names and a view of which every byte becomes six. The Cerbo: 64 keys of 32 bytes as cerbo.h
+	// takes them, the longest number, the longer age, a view of 32 bytes.
+	no_values();
+	for(i = 0; i < VALUES_MAX; i++)
+	{
+		for(at = 0; at < 32; at++) name[at] = (char)(1 + (i + at) % 31);
+		name[32] = '\0';
+		add_value(name, VALUE_NUMBER, -1.23456789e-308, 1000);
+	}
+	no_gx();
+	for(i = 0; i < VALUES_MAX; i++)
+	{
+		snprintf(name, sizeof(name), "GX_KEY_OF_32_BYTES_%02d_ABCDEFGHIJ", i);
+		add_gx(name, VALUE_NUMBER, -1.23456789e-308, 1000);
+	}
+	memset(view, 0x7F, 32);
+	view[32] = '\0';
+	memset(cerbo_view, 'c', 32);
+	cerbo_view[32] = '\0';
+	// What the Cerbo adds to the longest text of web_values_json(): ,"cerbo":".." and 64 times ,"KEY":{"v":NUMBER,"age":"fresh"}
+	length = 9 + 2 + 32 + 64 * (1 + 2 + 32 + 6 + 16 + 15);
+	check(strlen(name) == 32 && gx.count == 64 && length == 4651, "the values of the Cerbo and its view add 4651 bytes to an answer at most, while their names need no escape");
+	check(WEB_VALUES_CERBO_SIZE >= 4651, "WEB_VALUES_CERBO_SIZE is enough for them");
+	check(15062 + length == 19713, "the longest text of all with a Cerbo has 19713 bytes: every byte of the names and the view of the adapter escaped, the Cerbo with the longest keys it takes");
+
+	// Built by the test: the model writes the view of the adapter in one piece that is too short for it
+	model_both(&values, NULL, &gx, cerbo_view, 1000);
+	snprintf(text, sizeof(text), "{\"view\":\"");
+	for(at = 0; at < 32; at++) strcat(text, "\\u007f");
+	strcat(text, expected + 9);
+	check(strlen(text) == 19713 && is_json_object(text), "the longest text of all with a Cerbo is built by the test, 19713 bytes of JSON");
+	both_now.values = &values;
+	both_now.view = view;
+	both_now.cerbo = &gx;
+	both_now.cerbo_view = cerbo_view;
+	both_now.now_ms = 1000;
+	check(rooms_around(call_both, text), "values with a Cerbo: the longest text of all is written, and refused with a room of 19713 bytes or less");
+	check(room_is_right(call_both, text, WEB_VALUES_SIZE + WEB_VALUES_CERBO_SIZE) && WEB_VALUES_SIZE + WEB_VALUES_CERBO_SIZE >= 19713 + 1,
+	      "values with a Cerbo: WEB_VALUES_SIZE and WEB_VALUES_CERBO_SIZE together are enough for both stores filled to the edge");
+
+	// Names of the Cerbo that need an escape - which cerbo.h never takes - have no room there: -1, never a text cut short
+	no_gx();
+	for(i = 0; i < VALUES_MAX; i++)
+	{
+		for(at = 0; at < 32; at++) name[at] = (char)(1 + (i + at) % 31);
+		name[32] = '\0';
+		add_gx(name, VALUE_NUMBER, -1.23456789e-308, 1000);
+	}
+	memset(room, GUARD, sizeof(room));
+	check(call_both((char *)room, WEB_VALUES_SIZE + WEB_VALUES_CERBO_SIZE) == -1 && room[0] == '\0' && room[WEB_VALUES_SIZE + WEB_VALUES_CERBO_SIZE] == GUARD,
+	      "values with a Cerbo: two stores of names that all need an escape do not fit that room: -1 and an empty text, nothing behind the room");
 }
 
 /*
@@ -3205,6 +3569,9 @@ static void test_random_info(void)
 		info.heap_min = random_number();
 		info.psram = random_number();
 		info.psram_min = random_number();
+		info.heap_malloc = random_number();
+		info.heap_malloc_min = random_number();
+		info.heap_block = random_number();
 		info.temp_c = random_int();
 		info.heat = random_text();
 		info.release_open = rnd(2) == 1;
@@ -3224,6 +3591,8 @@ static void test_random_info(void)
 		info.http_failed = random_number();
 		info.reconnects = random_number();
 		info.settings = settings[rnd(6)];
+		// A display without a second source
+		info.cerbo_host = NULL;
 
 		model_info(&info);
 		info_now = &info;
@@ -3233,6 +3602,220 @@ static void test_random_info(void)
 	}
 	check(different == 0, "info: 3000 random infos are written as the format of the header says, each also with a random room");
 	check(invalid == 0, "info: every one of the 3000 random answers is JSON for the reader of the project");
+}
+
+// GET /api/info of a display with a second source: the object "cerbo" behind "wican", and only then
+static void test_info_cerbo(void)
+{
+	static const struct
+	{
+		size_t offset;
+		const char *where;
+		const char *what;
+	} numbers[] = {
+		{offsetof(web_info_t, cerbo_values), "\"view\":\"\",\"values\":4294967295,\"ok\":0", "info: cerbo.values stands at its place with all 32 bit"},
+		{offsetof(web_info_t, cerbo_ok), "\"values\":0,\"ok\":4294967295,\"refused\":0", "info: cerbo.ok stands at its place with all 32 bit"},
+		{offsetof(web_info_t, cerbo_refused), "\"ok\":0,\"refused\":4294967295,\"connects\":0", "info: cerbo.refused stands at its place with all 32 bit"},
+		{offsetof(web_info_t, cerbo_connects), "\"refused\":0,\"connects\":4294967295,\"boots\":0", "info: cerbo.connects stands at its place with all 32 bit"},
+		{offsetof(web_info_t, cerbo_boots), "\"connects\":0,\"boots\":4294967295,\"lag_ms\":0", "info: cerbo.boots stands at its place with all 32 bit"},
+		{offsetof(web_info_t, cerbo_lag_ms), "\"boots\":0,\"lag_ms\":4294967295},\"layout\"", "info: cerbo.lag_ms stands at its place with all 32 bit"},
+	};
+	// The empty info with the address "h" and nothing else of the second source
+	static const char bare[] =
+		"{\"project\":\"wican-display\",\"version\":\"\",\"git\":\"\",\"slot\":\"\",\"reset\":\"\",\"up\":0,\"safe_mode\":false,"
+		"\"rolled_back\":false,\"update_pending\":false,\"heap\":0,\"heap_min\":0,\"psram\":0,\"psram_min\":0,"
+		"\"heap_malloc\":0,\"heap_malloc_min\":0,\"heap_block\":0,\"temp_c\":0,\"heat\":\"\","
+		"\"release\":{\"open\":false,\"left_s\":0},\"wifi\":{\"ssid\":\"\",\"ip\":\"\",\"rssi\":0,\"ap\":false,\"ap_ssid\":\"\"},"
+		"\"wican\":{\"host\":\"\",\"id\":\"\",\"fw\":\"\",\"view\":\"\"},"
+		"\"cerbo\":{\"host\":\"h\",\"view\":\"\",\"values\":0,\"ok\":0,\"refused\":0,\"connects\":0,\"boots\":0,\"lag_ms\":0},"
+		"\"layout\":{\"name\":\"\",\"source\":\"\"},\"http\":{\"ok\":0,\"failed\":0,\"reconnects\":0},\"settings\":null}";
+	web_info_t info = typical_info;
+	uint32_t most = 4294967295u;
+	char chunk[64], back[64];
+	bool written = true, returned = true;
+	size_t i, at;
+	int start, index, bytes = 0;
+
+	// The display of the first fixture with a Cerbo that delivers
+	info.cerbo_host = "192.168.88.2";
+	info.cerbo_view = "live";
+	info.cerbo_values = 41;
+	info.cerbo_ok = 12345;
+	info.cerbo_refused = 7;
+	info.cerbo_connects = 31;
+	info.cerbo_boots = 1;
+	info.cerbo_lag_ms = 120;
+	info.settings = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"192.168.88.2\"}";
+	info_now = &info;
+	check(gives_fixture(call_info, "fixtures/web_info_cerbo.json"), "info: a display with a Cerbo gives the fixture, with every room from 0 bytes on: the object cerbo behind wican");
+
+	// Without an address the answer is the one of a display without a second source, whatever else is set
+	info = typical_info;
+	info.cerbo_view = "live";
+	info.cerbo_values = 41;
+	info.cerbo_ok = 12345;
+	info.cerbo_refused = 7;
+	info.cerbo_connects = 31;
+	info.cerbo_boots = 1;
+	info.cerbo_lag_ms = 120;
+	check(read_fixture("fixtures/web_info.json", fixture, sizeof(fixture)) && every_room(call_info, fixture) && strstr(fixture, "cerbo") == NULL,
+	      "info: without an address of a Cerbo (NULL) the answer is the fixture of a display without one, byte for byte, whatever the other members of the second source hold");
+	info.cerbo_host = "";
+	check(every_room(call_info, fixture), "info: with an empty address of a Cerbo the answer is the fixture of a display without one, byte for byte");
+	info.cerbo_host = "x";
+	call_info((char *)room, ROOM_SIZE);
+	check(strstr((char *)room, "\"view\":\"live\"},\"cerbo\":{\"host\":\"x\",\"view\":\"live\",\"values\":41,\"ok\":12345,\"refused\":7,\"connects\":31,\"boots\":1,\"lag_ms\":120},\"layout\":{") != NULL &&
+	      strlen((char *)room) == strlen(fixture) + 107 && is_json_object((char *)room),
+	      "info: an address of one byte is an address: the object stands between wican and layout, and nothing else of the answer changes");
+
+	// One member at a time
+	memset(&info, 0, sizeof(info));
+	info.cerbo_host = "h";
+	check(every_room(call_info, bare) && is_json_object(bare), "info: an address and nothing else of the second source: every number 0, the view empty");
+	for(i = 0; i < sizeof(numbers) / sizeof(numbers[0]); i++)
+	{
+		memset(&info, 0, sizeof(info));
+		info.cerbo_host = "h";
+		memcpy((char *)&info + numbers[i].offset, &most, sizeof(most));
+		call_info((char *)room, ROOM_SIZE);
+		check(strstr((char *)room, numbers[i].where) != NULL && count_of((char *)room, "4294967295") == 1 && strlen((char *)room) == strlen(bare) + 9, numbers[i].what);
+	}
+	memset(&info, 0, sizeof(info));
+	info.cerbo_host = "a\"MARK";
+	call_info((char *)room, ROOM_SIZE);
+	check(strstr((char *)room, "\"view\":\"\"},\"cerbo\":{\"host\":\"a\\\"MARK\",\"view\":\"\",\"values\"") != NULL && count_of((char *)room, "MARK") == 1 &&
+	      strlen((char *)room) == strlen(bare) + 6, "info: cerbo.host stands at its place and is escaped");
+	info.cerbo_host = "h";
+	info.cerbo_view = "a\"MARK";
+	call_info((char *)room, ROOM_SIZE);
+	check(strstr((char *)room, "\"cerbo\":{\"host\":\"h\",\"view\":\"a\\\"MARK\",\"values\":0") != NULL && count_of((char *)room, "MARK") == 1 &&
+	      strlen((char *)room) == strlen(bare) + 7, "info: cerbo.view stands at its place and is escaped");
+	info.cerbo_view = NULL;
+	check(gives(call_info, bare), "info: a view of the Cerbo that is NULL counts as an empty text");
+
+	// Every byte value in the two texts, read back by the reader of the project
+	for(start = 1; start <= 255; start += 60)
+	{
+		size_t length = 255 - start + 1 < 60 ? (size_t)(255 - start + 1) : 60;
+
+		for(at = 0; at < length; at++) chunk[at] = (char)(start + (int)at);
+		chunk[length] = '\0';
+		bytes += (int)length;
+
+		memset(&info, 0, sizeof(info));
+		info.version = "0.1.0";
+		info.cerbo_host = chunk;
+		info.cerbo_view = "live";
+		model_info(&info);
+		if(!gives(call_info, expected)) written = false;
+		index = json_parse((char *)room, strlen((char *)room), tokens, 4096) > 0 ? token_at((char *)room, "cerbo.host") : -1;
+		if(index < 0 || !json_text((char *)room, &tokens[index], back, sizeof(back)) || strcmp(back, chunk) != 0) returned = false;
+
+		info.cerbo_host = "192.168.88.2";
+		info.cerbo_view = chunk;
+		model_info(&info);
+		if(!gives(call_info, expected)) written = false;
+		index = json_parse((char *)room, strlen((char *)room), tokens, 4096) > 0 ? token_at((char *)room, "cerbo.view") : -1;
+		if(index < 0 || !json_text((char *)room, &tokens[index], back, sizeof(back)) || strcmp(back, chunk) != 0) returned = false;
+	}
+	check(bytes == 255 && written && returned, "every byte value in info cerbo.host and cerbo.view: written as the rule says, in an answer that is JSON, and read back from it as it was");
+}
+
+// 3000 random infos of a display with a second source
+static void test_random_info_cerbo(void)
+{
+	static const char *const settings[] = {NULL, "", "{\"brightness\":80,\"cerbo\":\"192.168.88.2\"}", "{}"};
+	web_info_t info;
+	int different = 0, invalid = 0, with = 0;
+	int round;
+
+	for(round = 0; round < 3000; round++)
+	{
+		memset(&info, 0, sizeof(info));
+		info.version = random_text();
+		info.up_s = random_number();
+		info.view = random_text();
+		info.layout_name = random_text();
+		info.settings = settings[rnd(4)];
+		// One in five has no second source
+		info.cerbo_host = rnd(5) == 0 ? (rnd(2) == 0 ? NULL : "") : random_text();
+		info.cerbo_view = random_text();
+		info.cerbo_values = random_number();
+		info.cerbo_ok = random_number();
+		info.cerbo_refused = random_number();
+		info.cerbo_connects = random_number();
+		info.cerbo_boots = random_number();
+		info.cerbo_lag_ms = random_number();
+
+		model_info(&info);
+		info_now = &info;
+		if(!gives(call_info, expected) || !room_is_right(call_info, expected, rnd(1400))) different++;
+		if(!is_json_object(expected)) invalid++;
+		if(strstr(expected, "},\"cerbo\":{\"host\":") != NULL) with++;
+	}
+	printf("  infos with a second source %d of 3000\n", with);
+	check(different == 0, "info: 3000 random infos with and without a second source are written as the format of the header says, each also with a random room");
+	check(invalid == 0 && with > 1500 && with < 2900, "info: every one of these 3000 random answers is JSON for the reader of the project, and both kinds are among them");
+}
+
+// 3000 random pairs of stores
+static void test_random_values_cerbo(void)
+{
+	int different = 0, invalid = 0, left_out = 0, written = 0, alike = 0;
+	int round, i, store;
+
+	for(round = 0; round < 3000; round++)
+	{
+		uint64_t now_ms = 100000 + rnd(1000);
+		const char *view = random_text();
+		const char *cerbo_view = random_text();
+		int counts[2];
+
+		counts[0] = (int)rnd(8);
+		counts[1] = (int)rnd(8);
+		no_values();
+		no_gx();
+		for(store = 0; store < 2; store++)
+		{
+			for(i = 0; i < counts[store]; i++)
+			{
+				static const double numbers[] = {0, -0.0, 1, -1, 812.5, 0.001, 1e9, 999999999, 1234567890, 1e-5, 1e300, -1e-300, 12.4, 187432};
+				static const uint64_t ages[] = {0, 1, 2999, 3000, 3001, 4999, 5000, 5001, 9999, 10000, 10001, 59999, 60000, 60001, 90000};
+				uint32_t kind = rnd(10);
+				const char *name = random_text();
+				double number = rnd(8) == 0 ? (rnd(2) ? HUGE_VAL : NAN) : numbers[rnd(14)];
+				uint64_t age = ages[rnd(15)];
+				uint64_t seen_ms;
+				value_kind_t made;
+
+				if(name == NULL || strlen(name) > 32) name = store == 0 ? "PLAIN_NAME" : "GX_PLAIN";
+				seen_ms = rnd(10) == 0 ? now_ms + age : now_ms - age;
+				made = kind < 6 ? VALUE_NUMBER : kind < 8 ? VALUE_ON : kind == 8 ? VALUE_OFF : (value_kind_t)(3 + rnd(3));
+				if(store == 0) add_value(name, made, number, seen_ms);
+				else add_gx(name, made, number, seen_ms);
+			}
+		}
+		model_both(&values, view, &gx, cerbo_view, now_ms);
+		both_now.values = &values;
+		both_now.view = view;
+		both_now.cerbo = &gx;
+		both_now.cerbo_view = cerbo_view;
+		both_now.now_ms = now_ms;
+		if(!gives(call_both, expected) || !room_is_right(call_both, expected, rnd(900))) different++;
+		if(!is_json_object(expected)) invalid++;
+		written += count_of(expected, "\"age\":");
+		left_out += counts[0] + counts[1] - count_of(expected, "\"age\":");
+
+		// The values of the adapter alone: what web_values_json() writes for them, with the one member more
+		no_gx();
+		both_now.cerbo = &gx;
+		if(with_word(&values, view, cerbo_view, now_ms) && gives(call_both, text)) alike++;
+	}
+	printf("  values of two sources written %d, left out %d\n", written, left_out);
+	check(written > 3000 && left_out > 3000, "values with a Cerbo: 3000 random pairs of stores hold values that are written and values that are left out");
+	check(different == 0, "values with a Cerbo: 3000 random pairs of stores are written as the format of the header says, each with the limits of its source, each also with a random room");
+	check(invalid == 0, "values with a Cerbo: every one of the 3000 random answers is JSON for the reader of the project");
+	check(alike == 3000, "values with a Cerbo: for each of 3000 random stores of the adapter the answer without a value of the Cerbo is the one of web_values_json() with the view of the Cerbo put in");
 }
 
 static void test_random_values(void)
@@ -3422,6 +4005,11 @@ static void test_ordinary(void)
 	model_info(&info);
 	info_now = &info;
 	check(gives(call_info, expected), "ordinary input: info");
+	info.cerbo_host = "192.168.88.2";
+	info.cerbo_view = "live";
+	info.cerbo_values = 41;
+	model_info(&info);
+	check(gives(call_info, expected), "ordinary input: info of a display with a Cerbo");
 
 	no_values();
 	add_value("ENGINE_RPM", VALUE_NUMBER, 812.5, 20000);
@@ -3573,6 +4161,8 @@ int main(void)
 	test_values();
 	test_values_numbers();
 	test_values_size();
+	test_values_cerbo();
+	test_values_cerbo_size();
 	test_wifi();
 	in_child(test_wifi_large_counts, "wifi: profile counts that are a list only in their low bits: nothing behind the list is read");
 	test_wifi_damaged();
@@ -3592,6 +4182,9 @@ int main(void)
 	in_child(test_random_info, "info: 3000 random infos: no crash, no hang");
 	in_child(test_random_values, "values: 3000 random lists: no crash, no hang");
 	in_child(test_random_report, "report: 3000 random reports: no crash, no hang");
+	test_info_cerbo();
+	in_child(test_random_info_cerbo, "info with a Cerbo: 3000 random infos: no crash, no hang");
+	in_child(test_random_values_cerbo, "values with a Cerbo: 3000 random pairs of stores: no crash, no hang");
 
 	check(work[WEB_WIFI_TOKENS].start == 0x5A5A5A5A && work[WEB_WIFI_TOKENS + 1].start == 0x5A5A5A5A,
 	      "no call wrote behind the WEB_WIFI_TOKENS tokens it was given");

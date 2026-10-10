@@ -1,0 +1,6 @@
+# What a broker may send in one piece: five packets, one behind the other
+20 02 00 00                 # CONNACK, accepted
+90 03 00 01 00              # SUBACK to the packet identifier 1
+30 1b 00 11 'display/gx/values' 'first' 80 00 ff    # PUBLISH: 27 = 2 + 17 + 8, the payload is five letters and three bytes
+d0 00                       # PINGRESP
+31 05 00 03 'a/b'           # PUBLISH, retained, on another topic and without payload: 5 = 2 + 3

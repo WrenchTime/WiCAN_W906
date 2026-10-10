@@ -47,6 +47,11 @@ Taken from the sources, read and written a second time here:
   - the catalogue of the W906 (tools/w906/fixtures/car_config_w906.json), its values with the
     ignition on (autopid_data_ignition_on.json), fault memory lists (dtc_result_*.json) and the
     built-in views (display/layouts/w906_default.json)
+  - the second source, the Cerbo GX (cerbo.c, settings.c, web_json.c, app_web.c): the setting
+    "cerbo" - empty or an IPv4 address in dotted form, written only while it is set -, the object
+    "cerbo" in /api/info and the member "cerbo" and the values with GX_ in /api/values, each only
+    while an address is set, the values fresh under 5 s and left out from 60 s on. A mock nobody
+    gave an address answers byte for byte what it answered before there was a second source
 
 What the check of a layout does not check as the display does:
   - a text that is not UTF-8. The display reads bytes and passes them on; the mock answers
@@ -78,11 +83,20 @@ Invented, because nothing fixes it. The page must not rely on any of this:
     network with every change of the list and looks anew (link.h)
   - after a factory reset the mock goes on answering at its address; the device is then only
     reachable through its own access point
+  - the Cerbo: one listens at CERBO_ADDRESS and nowhere else, and it "sends" (a bundle with every
+    request, so every value is fresh), is "silent" (its broker answers, its flow publishes nothing)
+    or "unreachable" - set_cerbo(), and three buttons of the strip. What the display then shows
+    of it follows the times of cerbo.h in a simple form: live for 10 s behind the last bundle,
+    then quiet, silent from 20 s on (the device says so with the first answer of the broker behind
+    those 20 s, up to 10 s later); without a session connecting for 15 s, then unreachable. Its
+    values and counters are invented, the lag is always 0, and nothing is ever refused
 
 Not modelled:
   - views made from the catalogue (layout_from_catalog): the built-in views always suit the
     catalogue of the mock, POST /api/layout/reset always answers them
   - the safe mode, the heat that only dims the backlight, the stored layout "one step back"
+  - of the Cerbo: the views "off" (safe mode), "no_wifi" and "newer", the wait between two
+    attempts to reach the broker, a bundle that arrives late, values a bundle does not name
   - a firmware image is not verified beyond its first 112 bytes; every upload that arrives whole
     counts as good
   - the display ends an upload that brings nothing for 30 seconds from its own clock (app_tick);
@@ -159,6 +173,12 @@ WICAN_AP_PREFIX = "WiCAN_"
 # values.h
 VALUE_FRESH_MS = 3000
 VALUE_KEPT_MS = 10000
+# cerbo.h
+CERBO_FRESH_MS = 5000
+CERBO_KEPT_MS = 60000
+CERBO_LIVE_MS = 10000
+CERBO_SILENT_MS = 20000
+CERBO_GRACE_MS = 15000
 # catalog.h
 CATALOG_BATTERY = "@BATT_V"
 # ota_check.h
@@ -169,6 +189,10 @@ OTA_DESCRIPTION_MAGIC = 0xABCD5432
 
 # Invented
 RESTART_MS = 4000
+# Where the Cerbo of the mock listens, and what its flow publishes: a few of the values of a camper
+CERBO_ADDRESS = "192.168.88.2"
+CERBO_VALUES = (("GX_BATT_SOC", 87.5), ("GX_BATT_V", 26.41), ("GX_BATT_I", -6.2), ("GX_PV_P", 212), ("GX_TANK_FRESH", 77),
+                ("GX_T_BOILER", 61.1), ("GX_SW_B2B", "on"), ("GX_SW_VALVE", "off"))
 HOSTILE_VALUE = "X<img src=x onerror=hacked=1>"
 HOSTILE_NETWORKS = ("<img src=x onerror=hacked=1>", "\"><script>hacked=1</script>")
 
@@ -201,6 +225,9 @@ REASONS = {200: "OK", 202: "Accepted", 400: "Bad Request", 403: "Forbidden", 404
            422: "Unprocessable Content", 500: "Internal Server Error"}
 JSON = "application/json"
 PAGE_TYPE = "text/html; charset=utf-8"
+
+# settings_is_address(): four numbers from 0 to 255 without a sign and without a leading zero, three dots
+ADDRESS = re.compile(r"(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])", re.ASCII)
 
 # An IPv4 address or the name of the display, with or without a port (web_host_allowed()). Letters are
 # compared without case, and only the letters of ASCII have a second form.
@@ -714,7 +741,15 @@ class Display:
         # ssid, rssi, secure
         self.seen = [["Werkstatt", -52, True], ["WiCAN_a1b2c3d4e5f6", -40, True], ["Freifunk", -88, False],
                      [HOSTILE_NETWORKS[0], -70, False], [HOSTILE_NETWORKS[1], -75, True], ["Café ☕ 2,4 GHz", -81, True]]
-        self.settings = {"brightness": 80, "night": 25, "night_mode": False, "reverse": False, "standby_s": 60}
+        self.settings = {"brightness": 80, "night": 25, "night_mode": False, "reverse": False, "standby_s": 60, "cerbo": ""}
+        # The Cerbo: "sends", "silent" or "unreachable"; the last bundle the display took and the end of
+        # its last session (or the moment it was given the address), while the Cerbo does not send
+        self.cerbo = "sends"
+        self.cerbo_base = CERBO_VALUES  # what its flow publishes
+        self.cerbo_seen_ms = None       # when the last bundle arrived
+        self.cerbo_counted_ms = 0       # ... and the last one that was counted
+        self.cerbo_since_ms = 0
+        self.cerbo_numbers = {"ok": 0, "connects": 0}
 
         self.version = "0.1.0"
         self.git = "display-v0.1.0-3-g1a2b3c4"
@@ -723,7 +758,8 @@ class Display:
         self.rolled_back = False
         self.update_pending = False
         self.previous = None            # version, git and slot the boot loader goes back to
-        self.numbers = {"heap": 182340, "heap_min": 151200, "psram": 7340032, "psram_min": 7100416, "temp_c": COOL_C}
+        self.numbers = {"heap": 182340, "heap_min": 151200, "psram": 7340032, "psram_min": 7100416,
+                        "heap_malloc": 149572, "heap_malloc_min": 118432, "heap_block": 94208, "temp_c": COOL_C}
         self.ip = "192.168.1.77"
         self.rssi = -61
         self.ap_ssid = "WiCAN-Display"
@@ -775,7 +811,7 @@ class Display:
         elif confirmed == "reset":
             self.profiles = []
             self.current = ""
-            self.settings = {"brightness": 80, "night": 25, "night_mode": False, "reverse": False, "standby_s": 60}
+            self.settings = {"brightness": 80, "night": 25, "night_mode": False, "reverse": False, "standby_s": 60, "cerbo": ""}
             self.wican_id = ""
             self.wican_host = ""
             self.restart("sw")
@@ -816,6 +852,11 @@ class Display:
         self.uploading = False
         self.reading = False
         self.asked_network = None
+        # The second source begins anew: no value and no count of the run before
+        self.cerbo_seen_ms = None
+        self.cerbo_counted_ms = 0
+        self.cerbo_since_ms = 0
+        self.cerbo_numbers = {"ok": 0, "connects": 0}
         if self.stored is not None:
             self._use(self.stored, "stored")
         else:
@@ -825,6 +866,65 @@ class Display:
         if self.adapter and not on:
             self.adapter_seen_ms = self.now()
         self.adapter = on
+
+    def set_cerbo(self, state):
+        """The Cerbo "sends", is "silent" (its broker answers, its flow publishes nothing) or is
+        "unreachable". What the display took until now stays, and grows old."""
+        if state not in ("sends", "silent", "unreachable"):
+            raise KeyError(state)
+        self._cerbo_settle(self.now())
+        if state == "unreachable" and self.cerbo != "unreachable":
+            self.cerbo_since_ms = self.now()
+        if state == "sends" and self.cerbo == "unreachable":
+            # A new session: its first bundle counts as one
+            self.cerbo_seen_ms = None
+        self.cerbo = state
+
+    def _cerbo_delivers(self):
+        """A session with the broker brings bundles: the display has the address at which the Cerbo
+        listens, is in a network, and the Cerbo sends"""
+        return self.settings["cerbo"] == CERBO_ADDRESS and self.cerbo == "sends" and self.current != ""
+
+    def _cerbo_settle(self, now):
+        """What the display took of the Cerbo until now: while it delivers, a bundle a second and the
+        last one just now"""
+        if not self._cerbo_delivers():
+            return
+        if self.cerbo_seen_ms is None:
+            # A session, and its first bundle
+            self.cerbo_numbers["connects"] += 1
+            self.cerbo_numbers["ok"] += 1
+            self.cerbo_counted_ms = now
+        else:
+            bundles = max(0, now - self.cerbo_counted_ms) // 1000
+            self.cerbo_numbers["ok"] += bundles
+            self.cerbo_counted_ms += bundles * 1000
+        self.cerbo_seen_ms = now
+
+    def cerbo_view(self, now):
+        """cerbo_view() as a word, in the simple form the head of this file names"""
+        self._cerbo_settle(now)
+        if self.current == "":
+            return "no_wifi"
+        if self._cerbo_delivers():
+            return "live"
+        if self.settings["cerbo"] == CERBO_ADDRESS and self.cerbo == "silent":
+            quiet = now - (self.cerbo_seen_ms if self.cerbo_seen_ms is not None else self.cerbo_since_ms)
+            return "live" if self.cerbo_seen_ms is not None and quiet < CERBO_LIVE_MS else "quiet" if quiet < CERBO_SILENT_MS else "silent"
+        return "connecting" if now - self.cerbo_since_ms < CERBO_GRACE_MS else "unreachable"
+
+    def cerbo_values(self, now):
+        """The values of the last bundle: (name, a number or "on" or "off", when it arrived)"""
+        self._cerbo_settle(now)
+        if self.cerbo_seen_ms is None:
+            return []
+        seconds = self.cerbo_seen_ms / 1000
+        moving = dict(self.cerbo_base)
+        if self.cerbo_base is CERBO_VALUES:
+            # Two of them move with the time, so that the page has something to follow
+            moving["GX_BATT_I"] = round(-6.2 + 2 * math.sin(seconds / 5), 1)
+            moving["GX_PV_P"] = int(212 + 40 * math.sin(seconds / 13))
+        return [(name, value, self.cerbo_seen_ms) for name, value in moving.items()]
 
     def set_lists(self, which):
         """The fault memory lists the display holds: "none", "read", "cleared" (the list before the
@@ -874,26 +974,40 @@ class Display:
         release = self.access.is_open(now)
         return ("{\"project\":\"wican-display\",\"version\":%s,\"git\":%s,\"slot\":%s,\"reset\":%s,\"up\":%d,"
                 "\"safe_mode\":false,\"rolled_back\":%s,\"update_pending\":%s,"
-                "\"heap\":%d,\"heap_min\":%d,\"psram\":%d,\"psram_min\":%d,\"temp_c\":%d,\"heat\":\"%s\","
+                "\"heap\":%d,\"heap_min\":%d,\"psram\":%d,\"psram_min\":%d,"
+                "\"heap_malloc\":%d,\"heap_malloc_min\":%d,\"heap_block\":%d,\"temp_c\":%d,\"heat\":\"%s\","
                 "\"release\":{\"open\":%s,\"left_s\":%d},"
                 "\"wifi\":{\"ssid\":%s,\"ip\":%s,\"rssi\":%d,\"ap\":%s,\"ap_ssid\":%s},"
-                "\"wican\":{\"host\":%s,\"id\":%s,\"fw\":%s,\"view\":%s},"
+                "\"wican\":{\"host\":%s,\"id\":%s,\"fw\":%s,\"view\":%s},%s"
                 "\"layout\":{\"name\":%s,\"source\":%s},"
                 "\"http\":{\"ok\":%d,\"failed\":%d,\"reconnects\":%d},\"settings\":%s}"
                 % (quote(self.version), quote(self.git), quote(self.slot), quote(self.reset_reason), now // 1000,
                    boolean(self.rolled_back), boolean(self.update_pending),
                    self.numbers["heap"], self.numbers["heap_min"], self.numbers["psram"], self.numbers["psram_min"],
+                   self.numbers["heap_malloc"], self.numbers["heap_malloc_min"], self.numbers["heap_block"],
                    self.numbers["temp_c"], "off" if self.hot else "normal", boolean(release), self.access.seconds_left(now),
                    quote(self.current), quote(self.ip if self.current else ""), self.rssi if self.current else 0,
                    boolean(not self.profiles), quote(self.ap_ssid),
-                   quote(self.wican_host), quote(self.wican_id), quote(self.wican_fw), quote(self.view()),
+                   quote(self.wican_host), quote(self.wican_id), quote(self.wican_fw), quote(self.view()), self.cerbo_json(now),
                    quote(self.layout_name), quote(self.source),
                    self.http["ok"], self.http["failed"], self.http["reconnects"], self.settings_json()))
 
+    def cerbo_json(self, now):
+        """The object of the second source in /api/info with its comma, nothing without an address"""
+        if self.settings["cerbo"] == "":
+            return ""
+        view = self.cerbo_view(now)
+        shown = [1 for name, value, seen in self.cerbo_values(now) if now - seen < CERBO_KEPT_MS]
+        return ("\"cerbo\":{\"host\":%s,\"view\":%s,\"values\":%d,\"ok\":%d,\"refused\":0,\"connects\":%d,\"boots\":%d,\"lag_ms\":0},"
+                % (quote(self.settings["cerbo"]), quote(view), len(shown), self.cerbo_numbers["ok"], self.cerbo_numbers["connects"],
+                   1 if self.cerbo_numbers["ok"] > 0 else 0))
+
     def settings_json(self):
-        return ("{\"brightness\":%d,\"night\":%d,\"night_mode\":%s,\"reverse\":%s,\"standby_s\":%d}"
+        """settings_to_json(): the address of the Cerbo behind the five members, and only while it is set"""
+        return ("{\"brightness\":%d,\"night\":%d,\"night_mode\":%s,\"reverse\":%s,\"standby_s\":%d%s}"
                 % (self.settings["brightness"], self.settings["night"], boolean(self.settings["night_mode"]),
-                   boolean(self.settings["reverse"]), self.settings["standby_s"]))
+                   boolean(self.settings["reverse"]), self.settings["standby_s"],
+                   ",\"cerbo\":%s" % quote(self.settings["cerbo"]) if self.settings["cerbo"] != "" else ""))
 
     def view(self):
         return "live" if self.adapter else "no_answer"
@@ -920,15 +1034,23 @@ class Display:
         return values
 
     def values_json(self, now):
+        """web_values_json(), and with an address of the Cerbo web_values_cerbo_json(): its view behind
+        the one of the adapter, its values behind those of the adapter, each source with its own limits"""
+        has_cerbo = self.settings["cerbo"] != ""
+        stores = [(self.values(now), VALUE_FRESH_MS, VALUE_KEPT_MS)]
+        if has_cerbo:
+            stores.append((self.cerbo_values(now), CERBO_FRESH_MS, CERBO_KEPT_MS))
         written = []
-        for name, value, seen in self.values(now):
-            age = max(0, now - seen)
-            if age >= VALUE_KEPT_MS:
-                continue
-            # printf would write minus zero as "-0"
-            shown = "\"%s\"" % value if isinstance(value, str) else "%.9g" % (value if value != 0 else 0)
-            written.append("%s:{\"v\":%s,\"age\":\"%s\"}" % (quote(name), shown, "fresh" if age < VALUE_FRESH_MS else "old"))
-        return "{\"view\":%s,\"values\":{%s}}" % (quote(self.view()), ",".join(written))
+        for values, fresh_ms, kept_ms in stores:
+            for name, value, seen in values:
+                age = max(0, now - seen)
+                if age >= kept_ms:
+                    continue
+                # printf would write minus zero as "-0"
+                shown = "\"%s\"" % value if isinstance(value, str) else "%.9g" % (value if value != 0 else 0)
+                written.append("%s:{\"v\":%s,\"age\":\"%s\"}" % (quote(name), shown, "fresh" if age < fresh_ms else "old"))
+        cerbo = ",\"cerbo\":%s" % quote(self.cerbo_view(now)) if has_cerbo else ""
+        return "{\"view\":%s%s,\"values\":{%s}}" % (quote(self.view()), cerbo, ",".join(written))
 
     def wifi_json(self):
         profiles = ["{\"ssid\":%s,\"host\":%s,\"password\":%s,\"factory\":%s,\"wican_ap\":%s}"
@@ -1153,7 +1275,7 @@ class Display:
                 self.current = ""
             return 200, "{\"ok\":true}"
         if route == "settings":
-            return self._settings(data)
+            return self._settings(data, now)
         # The restart: one would leave a read without its list and a clear without its outcome
         if self.busy():
             return 409, error_body("busy")
@@ -1177,8 +1299,9 @@ class Display:
             self._use(data, "stored")
         return 200, self.report_json(layout)
 
-    def _settings(self, data):
-        """settings_from_json(): nothing changes before the whole text is known to be good"""
+    def _settings(self, data, now=None):
+        """settings_from_json(): nothing changes before the whole text is known to be good. The second
+        source follows its address at once (app_web_settings())."""
         ranges = {"brightness": (5, 100), "night": (5, 100), "standby_s": (0, 3600)}
         changed = dict(self.settings)
         try:
@@ -1192,8 +1315,16 @@ class Display:
                 changed[name] = int(value.literal)
             elif name in ("night_mode", "reverse") and isinstance(value, bool):
                 changed[name] = value
+            # Empty, or an IPv4 address in dotted form and nothing else
+            elif name == "cerbo" and isinstance(value, str) and (value == "" or ADDRESS.fullmatch(value) is not None):
+                changed[name] = value
             elif name in changed:
                 return 400, "{\"error\":\"body\",\"member\":\"%s\"}" % name
+        if changed["cerbo"] != self.settings["cerbo"]:
+            # Another address, or none: what another broker sent says nothing about this one. The counters stay.
+            self._cerbo_settle(now if now is not None else self.now())
+            self.cerbo_seen_ms = None
+            self.cerbo_since_ms = now if now is not None else self.now()
         self.settings = changed
         return 200, self.settings_json()
 
@@ -1267,6 +1398,7 @@ class Display:
                 "/mock/busy": lambda: setattr(self, "reading", query == "on"),
                 "/mock/hot": lambda: self.set_hot(query == "on"),
                 "/mock/adapter": lambda: self.set_adapter(query == "on"),
+                "/mock/cerbo": lambda: self.set_cerbo(query),
                 "/mock/away": lambda: setattr(self, "away", query == "on"),
                 "/mock/lists": lambda: self.set_lists(query),
                 # Digits only: the strip cannot turn the clock back
@@ -1293,6 +1425,7 @@ class Display:
             "release": self.access.seconds_left(now), "question": question,
             "detail": self.asked_detail if question else "", "left": self.access.ask_seconds_left(now),
             "busy": self.reading, "hot": self.hot, "uploading": self.uploading, "adapter": self.adapter,
+            "cerbo": self.cerbo if self.settings["cerbo"] != "" else "",
             "update_pending": self.update_pending, "version": self.version, "source": self.source,
         }, ensure_ascii=False)
 
@@ -1364,6 +1497,7 @@ const BUTTONS = [
 	["beschäftigt", "busy?on"], ["frei", "busy?off"],
 	["zu heiß", "hot?on"], ["abgekühlt", "hot?off"],
 	["Adapter weg", "adapter?off"], ["Adapter da", "adapter?on"],
+	["Cerbo sendet", "cerbo?sends"], ["Cerbo schweigt", "cerbo?silent"], ["Cerbo weg", "cerbo?unreachable"],
 	["Listen: keine", "lists?none"], ["gelesen", "lists?read"], ["gelöscht", "lists?cleared"], ["beide", "lists?both"],
 	["Neustart", "restart"], ["Update in Ordnung", "update_ok"],
 	["Display weg", "away?on"], ["wieder da", "away?off"]
@@ -1380,6 +1514,8 @@ function show(state)
 	if(state.hot) parts.push("zu heiß: Bildschirm aus");
 	if(state.uploading) parts.push("empfängt Firmware");
 	if(!state.adapter) parts.push("Adapter antwortet nicht");
+	if(state.cerbo === "silent") parts.push("Cerbo sendet keine Werte");
+	if(state.cerbo === "unreachable") parts.push("Cerbo nicht erreichbar");
 	parts.push("Ansichten: " + state.source);
 	document.getElementById("screen").textContent = parts.join(" | ");
 }

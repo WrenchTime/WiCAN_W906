@@ -285,6 +285,13 @@ MUTATIONS = [
     info("heap_min_is_heap", "\tinfo.heap_min = app->heap_min;", "\tinfo.heap_min = app->heap;"),
     info("psram_is_heap", "\tinfo.psram = app->psram;", "\tinfo.psram = app->heap;"),
     info("psram_min_is_psram", "\tinfo.psram_min = app->psram_min;", "\tinfo.psram_min = app->psram;"),
+    info("without_heap_malloc", "\tinfo.heap_malloc = app->heap_malloc;\n", ""),
+    info("without_heap_malloc_min", "\tinfo.heap_malloc_min = app->heap_malloc_min;\n", ""),
+    info("without_heap_block", "\tinfo.heap_block = app->heap_block;\n", ""),
+    info("heap_malloc_is_heap", "\tinfo.heap_malloc = app->heap_malloc;", "\tinfo.heap_malloc = app->heap;"),
+    info("heap_malloc_min_is_heap_min", "\tinfo.heap_malloc_min = app->heap_malloc_min;", "\tinfo.heap_malloc_min = app->heap_min;"),
+    info("heap_malloc_min_is_heap_malloc", "\tinfo.heap_malloc_min = app->heap_malloc_min;", "\tinfo.heap_malloc_min = app->heap_malloc;"),
+    info("heap_block_is_heap_malloc", "\tinfo.heap_block = app->heap_block;", "\tinfo.heap_block = app->heap_malloc;"),
     info("without_temperature", "\tinfo.temp_c = app->temp_c;\n", ""),
     info("temperature_only_while_read", "\tinfo.temp_c = app->temp_c;", "\tinfo.temp_c = app->has_temp ? app->temp_c : 0;"),
     info("heat_always_normal", "\tinfo.heat = text_heat_word(app->heat);", "\tinfo.heat = text_heat_word(GUARD_HEAT_NORMAL);"),
@@ -800,3 +807,85 @@ MUTATIONS = [
     ("app_web_end_previous_firmware_back", T, F, E_ASK, "\tapp->previous_firmware = true;\n" + E_ASK),
     ("app_web_end_broken_previous_firmware_back", T, F, E_BROKEN, E_BROKEN.replace("\tif(!ok || !running) return", "\tif(!ok) app->previous_firmware = true;\n\tif(!ok || !running) return")),
 ]
+
+# The second source, the Cerbo GX: in GET /api/info and GET /api/values while the display has its address, and
+# its address through POST /api/settings
+C_HOST = "\tinfo.cerbo_host = cerbo_host(&app->cerbo);"
+C_VIEW = "\tinfo.cerbo_view = text_cerbo_word(cerbo_view(&app->cerbo, now));"
+C_VALUES = "\tinfo.cerbo_values = (uint32_t)cerbo_shown(&app->cerbo, now);"
+C_OK = "\tinfo.cerbo_ok = app->cerbo.bundles;"
+C_REFUSED = "\tinfo.cerbo_refused = cerbo_refused(&app->cerbo);"
+C_CONNECTS = "\tinfo.cerbo_connects = app->cerbo.sessions;"
+C_BOOTS = "\tinfo.cerbo_boots = app->cerbo.boots;"
+C_LAG = "\tinfo.cerbo_lag_ms = app->cerbo.lag_ms;"
+C_BRANCH = "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0')\n"
+C_BOTH = ("\t\t\t\twritten = web_values_cerbo_json(&poll->values, text_view_word(conn_view(&poll->conn, now)), &app->cerbo.values,\n"
+          "\t\t\t\t                                text_cerbo_word(cerbo_view(&app->cerbo, now)), now, out, APP_WEB_OUT_SIZE);")
+C_FOLLOW = "\tif(strcmp(app->settings.cerbo, cerbo_host(&app->cerbo)) != 0) cerbo_set_host(&app->cerbo, app->settings.cerbo, app->clock_ms);"
+
+MUTATIONS += [
+    # GET /api/info
+    ("app_web_info_cerbo_not_named", T, F, C_HOST, "\tinfo.cerbo_host = NULL;"),
+    ("app_web_info_cerbo_not_in_safe_mode", T, F, C_HOST, "\tinfo.cerbo_host = cerbo_on(&app->cerbo) ? cerbo_host(&app->cerbo) : NULL;"),
+    ("app_web_info_cerbo_only_in_a_network", T, F, C_HOST, "\tinfo.cerbo_host = app->cerbo.network ? cerbo_host(&app->cerbo) : NULL;"),
+    ("app_web_info_cerbo_only_with_a_bundle", T, F, C_HOST, "\tinfo.cerbo_host = app->cerbo.bundles > 0 ? cerbo_host(&app->cerbo) : NULL;"),
+    ("app_web_info_cerbo_named_whatever_the_address", T, F, C_HOST, "\tinfo.cerbo_host = app->cerbo.bundles > 0 ? \"192.168.88.2\" : cerbo_host(&app->cerbo);"),
+    ("app_web_info_cerbo_host_of_the_adapter", T, F, C_HOST, "\tinfo.cerbo_host = cerbo_host(&app->cerbo)[0] != '\\0' ? app_host(app) : NULL;"),
+    ("app_web_info_cerbo_view_of_the_adapter", T, F, C_VIEW, "\tinfo.cerbo_view = text_view_word(conn_view(&app->poll.conn, now));"),
+    ("app_web_info_cerbo_view_as_the_text_of_the_screen", T, F, C_VIEW, "\tinfo.cerbo_view = text_cerbo(cerbo_view(&app->cerbo, now), app->safe_mode);"),
+    ("app_web_info_cerbo_view_at_the_time_of_the_app", T, F, C_VIEW, "\tinfo.cerbo_view = text_cerbo_word(cerbo_view(&app->cerbo, app->clock_ms));"),
+    ("app_web_info_cerbo_view_missing", T, F, C_VIEW + "\n", ""),
+    ("app_web_info_cerbo_values_of_the_store", T, F, C_VALUES, "\tinfo.cerbo_values = (uint32_t)app->cerbo.values.count;\n\t(void)cerbo_shown;"),
+    ("app_web_info_cerbo_values_at_the_time_of_the_app", T, F, C_VALUES, "\tinfo.cerbo_values = (uint32_t)cerbo_shown(&app->cerbo, app->clock_ms);"),
+    ("app_web_info_cerbo_values_of_the_adapter", T, F, C_VALUES, "\tinfo.cerbo_values = (uint32_t)app->poll.values.count;\n\t(void)cerbo_shown;"),
+    ("app_web_info_cerbo_ok_is_the_sessions", T, F, C_OK, "\tinfo.cerbo_ok = app->cerbo.sessions;"),
+    ("app_web_info_cerbo_ok_is_http_ok", T, F, C_OK, "\tinfo.cerbo_ok = app->poll.http_ok;"),
+    ("app_web_info_cerbo_ok_missing", T, F, C_OK + "\n", ""),
+    ("app_web_info_cerbo_refused_only_the_invalid", T, F, C_REFUSED, "\tinfo.cerbo_refused = app->cerbo.refused_invalid;\n\t(void)cerbo_refused;"),
+    ("app_web_info_cerbo_refused_are_the_members", T, F, C_REFUSED, "\tinfo.cerbo_refused = app->cerbo.skipped;\n\t(void)cerbo_refused;"),
+    ("app_web_info_cerbo_refused_are_the_lags", T, F, C_REFUSED, "\tinfo.cerbo_refused = app->cerbo.distrusted;\n\t(void)cerbo_refused;"),
+    ("app_web_info_cerbo_connects_are_the_bundles", T, F, C_CONNECTS, "\tinfo.cerbo_connects = app->cerbo.bundles;"),
+    ("app_web_info_cerbo_connects_are_the_boots", T, F, C_CONNECTS, "\tinfo.cerbo_connects = app->cerbo.boots;"),
+    ("app_web_info_cerbo_boots_are_the_sessions", T, F, C_BOOTS, "\tinfo.cerbo_boots = app->cerbo.sessions;"),
+    ("app_web_info_cerbo_boots_is_the_boot", T, F, C_BOOTS, "\tinfo.cerbo_boots = app->cerbo.boot;"),
+    ("app_web_info_cerbo_lag_missing", T, F, C_LAG + "\n", ""),
+    ("app_web_info_cerbo_lag_in_seconds", T, F, C_LAG, "\tinfo.cerbo_lag_ms = app->cerbo.lag_ms / 1000;"),
+
+    # GET /api/values
+    ("app_web_values_cerbo_always", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo) != NULL)\n"),
+    ("app_web_values_cerbo_never", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo)[0] == '\\1')\n"),
+    ("app_web_values_cerbo_not_in_safe_mode", T, F, C_BRANCH, "\t\t\tif(cerbo_on(&app->cerbo))\n"),
+    ("app_web_values_cerbo_only_while_it_holds_values", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.values.count > 0)\n"),
+    ("app_web_values_cerbo_whenever_it_holds_values", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' || app->cerbo.values.count > 0)\n"),
+    ("app_web_values_cerbo_only_in_a_session", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.phase == CERBO_SESSION)\n"),
+    ("app_web_values_cerbo_the_adapter_twice", T, F, C_BOTH, C_BOTH.replace("&app->cerbo.values,", "&poll->values,")),
+    ("app_web_values_cerbo_without_the_adapter", T, F, C_BOTH, C_BOTH.replace("web_values_cerbo_json(&poll->values,", "web_values_cerbo_json(&app->cerbo.values,")),
+    ("app_web_values_cerbo_view_of_the_adapter", T, F, C_BOTH, C_BOTH.replace("text_cerbo_word(cerbo_view(&app->cerbo, now))", "text_view_word(conn_view(&poll->conn, now))")),
+    ("app_web_values_cerbo_views_swapped", T, F,
+     C_BOTH, C_BOTH.replace("text_view_word(conn_view(&poll->conn, now)), &app->cerbo.values,", "text_cerbo_word(cerbo_view(&app->cerbo, now)), &app->cerbo.values,").replace(
+         "\t\t\t\t                                text_cerbo_word(cerbo_view(&app->cerbo, now)), now,", "\t\t\t\t                                text_view_word(conn_view(&poll->conn, now)), now,")),
+    ("app_web_values_cerbo_view_at_the_time_of_the_app", T, F, C_BOTH, C_BOTH.replace("text_cerbo_word(cerbo_view(&app->cerbo, now))", "text_cerbo_word(cerbo_view(&app->cerbo, app->clock_ms))")),
+    ("app_web_values_cerbo_ages_at_the_time_of_the_app", T, F, C_BOTH, C_BOTH.replace("now, out, APP_WEB_OUT_SIZE);", "app->clock_ms, out, APP_WEB_OUT_SIZE);")),
+    ("app_web_values_cerbo_in_the_room_of_the_adapter_alone", T, F, C_BOTH, C_BOTH.replace("now, out, APP_WEB_OUT_SIZE);", "now, out, WEB_VALUES_SIZE);")),
+    ("app_web_values_cerbo_falls_through_to_the_old_answer", T, F, C_BOTH + "\n\t\t\t\tbreak;\n", C_BOTH + "\n"),
+
+    # POST /api/settings
+    ("app_web_settings_source_not_told", T, F, C_FOLLOW + "\n", ""),
+    ("app_web_settings_source_told_with_every_text", T, F, C_FOLLOW, "\tcerbo_set_host(&app->cerbo, app->settings.cerbo, app->clock_ms);"),
+    ("app_web_settings_source_only_given_an_address", T, F, C_FOLLOW, C_FOLLOW.replace("if(strcmp(", "if(app->settings.cerbo[0] != '\\0' && strcmp(")),
+    ("app_web_settings_source_only_loses_its_address", T, F, C_FOLLOW, C_FOLLOW.replace("if(strcmp(", "if(app->settings.cerbo[0] == '\\0' && strcmp(")),
+    ("app_web_settings_source_gets_its_first_address_only", T, F, C_FOLLOW, C_FOLLOW.replace("if(strcmp(", "if(cerbo_host(&app->cerbo)[0] == '\\0' && strcmp(")),
+    ("app_web_settings_source_gets_no_address", T, F, C_FOLLOW, C_FOLLOW.replace("cerbo_set_host(&app->cerbo, app->settings.cerbo,", "cerbo_set_host(&app->cerbo, \"\",")),
+    ("app_web_settings_source_told_before_the_text_is_read", T, F,
+     "\tbody = body_of(body, &body_length);\n\tif(!settings_from_json(&app->settings, body, body_length, member, sizeof(member), app->work, app->work_count))",
+     "\tbody = body_of(body, &body_length);\n\tif(body_length > 30 && memcmp(body, \"{\\\"brightness\\\":50,\\\"cerbo\\\":\\\"192.168.88.256\\\"\", 39) == 0) cerbo_set_host(&app->cerbo, \"192.168.88.25\", app->clock_ms);\n"
+     "\tif(!settings_from_json(&app->settings, body, body_length, member, sizeof(member), app->work, app->work_count))"),
+    ("app_web_settings_bad_address_named_as_no_member", T, F, S_REFUSED, S_REFUSED.replace(", member), out, length);", ", strcmp(member, \"cerbo\") == 0 ? \"\" : member), out, length);")),
+    ("app_web_settings_source_makes_the_display_busy", T, F,
+     "\trequest->busy = app_busy(app);", "\trequest->busy = app_busy(app) || app->cerbo.phase == CERBO_SESSION;"),
+    ("app_web_settings_address_needs_no_release", T, F,
+     "\tif(!access_write(&app->access, advance(app, now_ms))) return refuse(403, \"locked\", out, length);\n\n\tbody = body_of(body, &body_length);\n\tif(!settings_from_json(",
+     "\tif(!access_write(&app->access, advance(app, now_ms)) && (body == NULL || strstr(body, \"cerbo\") == NULL)) return refuse(403, \"locked\", out, length);\n\n"
+     "\tbody = body_of(body, &body_length);\n\tif(!settings_from_json("),
+]
+

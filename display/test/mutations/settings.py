@@ -332,8 +332,100 @@ MUTATIONS = [
     ("settings_brightness_max_higher", T, H, "#define SETTINGS_BRIGHTNESS_MAX 100", "#define SETTINGS_BRIGHTNESS_MAX 101"),
     ("settings_standby_max_lower", T, H, "#define SETTINGS_STANDBY_MAX    3600", "#define SETTINGS_STANDBY_MAX    3599"),
     ("settings_standby_max_higher", T, H, "#define SETTINGS_STANDBY_MAX    3600", "#define SETTINGS_STANDBY_MAX    3601"),
-    ("settings_json_size_too_small", T, H, "#define SETTINGS_JSON_SIZE      96 ", "#define SETTINGS_JSON_SIZE      83 "),
-    ("settings_json_size_changed", T, H, "#define SETTINGS_JSON_SIZE      96 ", "#define SETTINGS_JSON_SIZE      97 "),
+    # The room grew from 96 to 128 bytes with the address of the Cerbo: the longest text has 109 bytes now
+    ("settings_json_size_too_small", T, H, "#define SETTINGS_JSON_SIZE      128 ", "#define SETTINGS_JSON_SIZE      109 "),
+    ("settings_json_size_changed", T, H, "#define SETTINGS_JSON_SIZE      128 ", "#define SETTINGS_JSON_SIZE      129 "),
     ("settings_tokens_fewer", T, H, "#define SETTINGS_TOKENS         32 ", "#define SETTINGS_TOKENS         31 "),
     ("settings_tokens_more", T, H, "#define SETTINGS_TOKENS         32 ", "#define SETTINGS_TOKENS         33 "),
+]
+
+# The address of the Cerbo, the sixth member
+ZEROED = "\tmemset(settings->cerbo, 0, sizeof(settings->cerbo));\n"
+DIGITS_OF = "\t\tif(digits == 0 || number > 255) return false;"
+LEADING = "\t\tif(digits > 1 && text[-digits] == '0') return false;"
+FOURTH = "\t\tif(numbers == 4) return *text == '\\0';"
+DOT = "\t\tif(*text != '.') return false;"
+IS_TEXT = "\tif(!json_text(json, token, text, sizeof(text))) return false;"
+IS_ADDRESS = "\tif(text[0] != '\\0' && !settings_is_address(text)) return false;"
+FILLED = "\tmemset(address, 0, SETTINGS_CERBO_SIZE);\n"
+COPIED = "\tstrcpy(address, text);\n"
+NAMED = "\t\tif(member == MEMBERS && json_text_is(json, value - 1, CERBO_NAME))"
+READ_IT = "\t\t\tif(read_address(json, value, changed.cerbo)) continue;"
+REFUSED = "\t\t\twrite_bad(bad, bad_size, CERBO_NAME);\n\t\t\treturn false;"
+WRITTEN = "\tif(settings_is_address(settings->cerbo))\n"
+
+MUTATIONS += [
+    # defaults
+    ("settings_default_address_not_cleared", T, F, ZEROED, ""),
+    ("settings_default_address_only_its_first_byte", T, F, ZEROED, "\tsettings->cerbo[0] = '\\0';\n"),
+    ("settings_default_address_all_but_the_last_byte", T, F, ZEROED, "\tmemset(settings->cerbo, 0, sizeof(settings->cerbo) - 1);\n"),
+
+    # what an address is
+    ("settings_address_null_read", T, F, "\tif(text == NULL) return false;\n\n\tfor(;;)", "\tfor(;;)"),
+    ("settings_address_256_taken", T, F, DIGITS_OF, DIGITS_OF.replace("number > 255", "number > 256")),
+    ("settings_address_255_refused", T, F, DIGITS_OF, DIGITS_OF.replace("number > 255", "number >= 255")),
+    ("settings_address_any_three_digits_taken", T, F, DIGITS_OF, DIGITS_OF.replace(" || number > 255", "")),
+    ("settings_address_numbers_up_to_199", T, F, DIGITS_OF, DIGITS_OF.replace("number > 255", "number > 199")),
+    ("settings_address_empty_number_taken", T, F, DIGITS_OF, DIGITS_OF.replace("digits == 0 || ", "")),
+    ("settings_address_leading_zero_taken", T, F, LEADING + "\n", ""),
+    ("settings_address_zero_itself_refused", T, F, LEADING, LEADING.replace("digits > 1", "digits > 0")),
+    ("settings_address_zero_behind_the_first_digit_refused", T, F, LEADING, LEADING.replace("text[-digits] == '0'", "text[-1] == '0'")),
+    ("settings_address_leading_zero_only_of_three_digits_refused", T, F, LEADING, LEADING.replace("digits > 1", "digits > 2")),
+    ("settings_address_text_behind_it_taken", T, F, FOURTH, "\t\tif(numbers == 4) return true;"),
+    ("settings_address_only_a_dot_behind_it_refused", T, F, FOURTH, "\t\tif(numbers == 4) return *text != '.';"),
+    ("settings_address_of_three_numbers", T, F, FOURTH, FOURTH.replace("numbers == 4", "numbers == 3")),
+    ("settings_address_of_five_numbers", T, F, FOURTH, FOURTH.replace("numbers == 4", "numbers == 5")),
+    ("settings_address_ends_after_any_number", T, F, FOURTH, "\t\tif(numbers == 4 || *text == '\\0') return *text == '\\0';"),
+    ("settings_address_comma_is_a_dot", T, F, DOT, "\t\tif(*text != '.' && *text != ',') return false;"),
+    ("settings_address_any_mark_is_a_dot", T, F, DOT, "\t\tif(*text == '\\0' || (*text >= '0' && *text <= '9')) return false;"),
+    ("settings_address_two_digits_at_most", T, F, "\t\twhile(digits < 3 && *text >= '0' && *text <= '9')", "\t\twhile(digits < 2 && *text >= '0' && *text <= '9')"),
+    ("settings_address_nine_is_no_digit", T, F, "\t\twhile(digits < 3 && *text >= '0' && *text <= '9')", "\t\twhile(digits < 3 && *text >= '0' && *text < '9')"),
+    ("settings_address_zero_is_no_digit", T, F, "\t\twhile(digits < 3 && *text >= '0' && *text <= '9')", "\t\twhile(digits < 3 && *text > '0' && *text <= '9')"),
+    ("settings_address_colon_is_a_digit", T, F, "\t\twhile(digits < 3 && *text >= '0' && *text <= '9')", "\t\twhile(digits < 3 && *text >= '0' && *text <= ':')"),
+    ("settings_address_slash_is_a_digit", T, F, "\t\twhile(digits < 3 && *text >= '0' && *text <= '9')", "\t\twhile(digits < 3 && *text >= '/' && *text <= '9')"),
+    ("settings_address_number_in_octal", T, F, "\t\t\tnumber = number * 10 + (*text - '0');", "\t\t\tnumber = number * 8 + (*text - '0');"),
+    ("settings_address_last_digit_is_the_number", T, F, "\t\t\tnumber = number * 10 + (*text - '0');", "\t\t\tnumber = *text - '0';"),
+
+    # reading the member
+    ("settings_address_unknown", T, F, NAMED, "\t\tif(false && json_text_is(json, value - 1, CERBO_NAME))"),
+    ("settings_address_under_every_unknown_name", T, F, NAMED, "\t\tif(member == MEMBERS)"),
+    ("settings_address_name_other", T, F, "#define CERBO_NAME  \"cerbo\"", "#define CERBO_NAME  \"gx\""),
+    ("settings_address_name_compared_by_its_beginning", T, F,
+     NAMED, "\t\tif(member == MEMBERS && (value - 1)->length >= 5 && memcmp(json + (value - 1)->start, CERBO_NAME, 5) == 0)"),
+    ("settings_address_name_compared_without_escapes", T, F,
+     NAMED, "\t\tif(member == MEMBERS && (value - 1)->length == 5 && memcmp(json + (value - 1)->start, CERBO_NAME, 5) == 0)"),
+    ("settings_address_taken_before_the_text_is_known_good", T, F, READ_IT, READ_IT.replace("changed.cerbo", "settings->cerbo")),
+    ("settings_address_bad_one_passed_over", T, F, REFUSED, "\t\t\tcontinue;"),
+    ("settings_address_bad_one_not_named", T, F, REFUSED, "\t\t\treturn false;"),
+    ("settings_address_bad_one_named_brightness", T, F, REFUSED, REFUSED.replace("CERBO_NAME", "names[BRIGHTNESS]")),
+    ("settings_address_bad_one_taken_as_none", T, F, REFUSED, "\t\t\tmemset(changed.cerbo, 0, sizeof(changed.cerbo));\n\t\t\tcontinue;"),
+    ("settings_address_bad_one_ends_the_reading", T, F, REFUSED, "\t\t\tbreak;"),
+    ("settings_address_of_another_type_takes_it_away", T, F, IS_TEXT, "\tif(!json_text(json, token, text, sizeof(text))) text[0] = '\\0';"),
+    ("settings_address_any_text_taken", T, F, IS_ADDRESS + "\n", ""),
+    ("settings_address_empty_text_refused", T, F, IS_ADDRESS, "\tif(!settings_is_address(text)) return false;"),
+    ("settings_address_only_the_empty_text_taken", T, F, IS_ADDRESS, "\tif(text[0] != '\\0') return false;"),
+    ("settings_address_field_not_emptied", T, F, FILLED, ""),
+    ("settings_address_field_emptied_by_its_first_byte", T, F, FILLED, "\taddress[0] = '\\0';\n"),
+    ("settings_address_not_stored", T, F, COPIED, ""),
+    ("settings_address_stored_without_its_last_number", T, F, COPIED, "\tstrcpy(address, text);\n\tif(strrchr(address, '.') != NULL) *strrchr(address, '.') = '\\0';\n"),
+    ("settings_address_read_into_15_bytes", T, F, "\tchar text[SETTINGS_CERBO_SIZE];\n\n\t// A text that does not fit",
+     "\tchar text[SETTINGS_CERBO_SIZE];\n\n\tif(token->type == JSON_STRING && token->length >= SETTINGS_CERBO_SIZE - 1) return false;\n\t// A text that does not fit"),
+
+    # writing the member
+    ("settings_text_address_never_written", T, F, WRITTEN, "\tif(false)\n"),
+    ("settings_text_address_written_when_empty", T, F, WRITTEN, "\tif(settings->cerbo[0] == '\\0' || settings_is_address(settings->cerbo))\n"),
+    ("settings_text_any_text_written_as_address", T, F, WRITTEN, "\tif(settings->cerbo[0] != '\\0' && memchr(settings->cerbo, '\\0', sizeof(settings->cerbo)) != NULL)\n"),
+    ("settings_text_address_under_another_name", T, F, "\t\tput(&writer, \",\\\"\" CERBO_NAME \"\\\":\\\"\");", "\t\tput(&writer, \",\\\"gx\\\":\\\"\");"),
+    ("settings_text_address_without_comma", T, F, "\t\tput(&writer, \",\\\"\" CERBO_NAME \"\\\":\\\"\");", "\t\tput(&writer, \"\\\"\" CERBO_NAME \"\\\":\\\"\");"),
+    ("settings_text_address_not_quoted_at_its_end", T, F, "\t\tput(&writer, settings->cerbo);\n\t\tput_char(&writer, '\"');\n", "\t\tput(&writer, settings->cerbo);\n"),
+    ("settings_text_address_empty", T, F, "\t\tput(&writer, settings->cerbo);\n", ""),
+    ("settings_text_address_before_the_standby_time", T, F,
+     "\tput_name(&writer, STANDBY_S);\n\tput_number(&writer, settings->standby_s);\n\t// Only for a display that has the address of a Cerbo: every other text is the one of the five members\n"
+     "\tif(settings_is_address(settings->cerbo))\n\t{\n\t\tput(&writer, \",\\\"\" CERBO_NAME \"\\\":\\\"\");\n\t\tput(&writer, settings->cerbo);\n\t\tput_char(&writer, '\"');\n\t}\n",
+     "\tif(settings_is_address(settings->cerbo))\n\t{\n\t\tput(&writer, \",\\\"\" CERBO_NAME \"\\\":\\\"\");\n\t\tput(&writer, settings->cerbo);\n\t\tput_char(&writer, '\"');\n\t}\n"
+     "\tput_name(&writer, STANDBY_S);\n\tput_number(&writer, settings->standby_s);\n"),
+
+    # the numbers of the header
+    ("settings_address_field_one_byte_short", T, H, "#define SETTINGS_CERBO_SIZE     16 ", "#define SETTINGS_CERBO_SIZE     15 "),
+    ("settings_address_field_one_byte_long", T, H, "#define SETTINGS_CERBO_SIZE     16 ", "#define SETTINGS_CERBO_SIZE     17 "),
 ]

@@ -84,6 +84,11 @@ RESTART_SECOND_RESET = "\t\treset = (job->events & APP_EVENT_FACTORY_RESET) != 0
 # every_second(), main_task()
 TOLD_SLOT = "\ttold.slot = platform_info.slot;\n"
 TOLD_TEMPERATURE = "\tapp_temperature(platform_app, celsius, measured);\n"
+HEAP_MALLOC = "#define HEAP_MALLOC         (MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT)\n"
+TOLD_MALLOC = "\t\t.heap_malloc = (uint32_t)heap_caps_get_free_size(HEAP_MALLOC),\n"
+TOLD_MALLOC_MIN = "\t\t.heap_malloc_min = (uint32_t)heap_caps_get_minimum_free_size(HEAP_MALLOC),\n"
+TOLD_BLOCK = "\ttold.heap_block = (uint32_t)heap_caps_get_largest_free_block(HEAP_MALLOC);\n"
+WALK_THEN_LOCK = TOLD_BLOCK + "\tplatform_lock();\n"
 ALIVE = "\t\tguard_alive(&guard_memory);\n"
 ALIVE_DUE = "if(alive_due && now_ms >= alive_at_ms)"
 NET_WATCHED = "\tif(net_watched)\n"
@@ -201,6 +206,22 @@ MUTATIONS = [
     # once a second
     ("main_slot_not_told", S, F, TOLD_SLOT, ""),
     ("main_temperature_not_told", S, F, TOLD_TEMPERATURE, "\t(void)measured;\n"),
+    # the memory malloc() hands out: not the pool that is kept back, not the external RAM, each number its own
+    ("main_heap_malloc_counts_the_reserve", S, F, TOLD_MALLOC,
+     "\t\t.heap_malloc = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),\n"),
+    ("main_heap_malloc_min_counts_the_reserve", S, F, TOLD_MALLOC_MIN,
+     "\t\t.heap_malloc_min = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),\n"),
+    ("main_heap_block_may_lie_in_the_reserve", S, F, TOLD_BLOCK,
+     "\ttold.heap_block = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);\n"),
+    ("main_heap_malloc_counts_the_external_ram", S, F, HEAP_MALLOC,
+     "#define HEAP_MALLOC         (MALLOC_CAP_DEFAULT)\n"),
+    ("main_heap_malloc_not_told", S, F, TOLD_MALLOC, ""),
+    ("main_heap_malloc_min_is_what_is_free_now", S, F, TOLD_MALLOC_MIN,
+     "\t\t.heap_malloc_min = (uint32_t)heap_caps_get_free_size(HEAP_MALLOC),\n"),
+    ("main_heap_block_is_all_that_is_free", S, F, TOLD_BLOCK,
+     "\ttold.heap_block = (uint32_t)heap_caps_get_free_size(HEAP_MALLOC);\n"),
+    ("main_heap_block_not_told", S, F, TOLD_BLOCK, ""),
+    ("main_heap_walked_under_the_lock", S, F, WALK_THEN_LOCK, "\tplatform_lock();\n" + TOLD_BLOCK),
     ("main_guard_alive_never", S, F, ALIVE, ""),
     ("main_guard_alive_at_once", S, F, ALIVE_DUE, "if(alive_due)"),
     ("main_watched_without_a_network", S, F, NET_WATCHED, "\tif(net_watched || true)\n"),

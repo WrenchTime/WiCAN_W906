@@ -30,7 +30,7 @@ SOURCES_dtc_flow    := dtc_flow.c conn.c values.c catalog.c json.c
 SOURCES_access      := access.c
 SOURCES_web_route   := web_route.c
 SOURCES_settings    := settings.c json.c
-SOURCES_web_json    := web_json.c layout.c catalog.c values.c fmt.c net_select.c json.c
+SOURCES_web_json    := web_json.c layout.c catalog.c values.c fmt.c net_select.c json.c cerbo.c mqtt_sub.c
 SOURCES_knob        := knob.c
 SOURCES_guard       := guard.c
 SOURCES_dtc_view    := dtc_view.c dtc_model.c json.c
@@ -43,9 +43,11 @@ SOURCES_scene       := scene.c nav.c layout.c catalog.c values.c fmt.c json.c co
                        dtc_view.c hold.c access.c guard.c texts.c
 APP_SOURCES         := app.c poll.c link.c scene.c nav.c knob.c hold.c access.c settings.c layout.c catalog.c \
                        values.c fmt.c json.c conn.c dtc_flow.c dtc_model.c dtc_view.c guard.c texts.c \
-                       wican_state.c net_select.c
+                       wican_state.c net_select.c cerbo.c mqtt_sub.c
 SOURCES_app         := $(APP_SOURCES)
 SOURCES_app_web     := app_web.c web_route.c web_json.c ota_check.c $(APP_SOURCES)
+SOURCES_mqtt_sub    := mqtt_sub.c
+SOURCES_cerbo       := cerbo.c mqtt_sub.c values.c json.c
 
 .PHONY: all clean
 

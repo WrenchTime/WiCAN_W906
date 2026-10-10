@@ -569,6 +569,13 @@ MUTATIONS = [
     ("app_platform_heap_min_not_taken", T, F, "\tapp->heap_min = platform->heap_min;\n", ""),
     ("app_platform_psram_not_taken", T, F, "\tapp->psram = platform->psram;\n", ""),
     ("app_platform_psram_min_not_taken", T, F, "\tapp->psram_min = platform->psram_min;\n", ""),
+    ("app_platform_heap_malloc_not_taken", T, F, "\tapp->heap_malloc = platform->heap_malloc;\n", ""),
+    ("app_platform_heap_malloc_min_not_taken", T, F, "\tapp->heap_malloc_min = platform->heap_malloc_min;\n", ""),
+    ("app_platform_heap_block_not_taken", T, F, "\tapp->heap_block = platform->heap_block;\n", ""),
+    ("app_platform_heap_malloc_is_the_heap", T, F, "\tapp->heap_malloc = platform->heap_malloc;", "\tapp->heap_malloc = platform->heap;"),
+    ("app_platform_heap_malloc_min_is_the_heap_min", T, F, "\tapp->heap_malloc_min = platform->heap_malloc_min;", "\tapp->heap_malloc_min = platform->heap_min;"),
+    ("app_platform_heap_malloc_min_is_heap_malloc", T, F, "\tapp->heap_malloc_min = platform->heap_malloc_min;", "\tapp->heap_malloc_min = platform->heap_malloc;"),
+    ("app_platform_heap_block_is_heap_malloc", T, F, "\tapp->heap_block = platform->heap_block;", "\tapp->heap_block = platform->heap_malloc;"),
     ("app_platform_reconnects_not_taken", T, F, "\tapp->reconnects = platform->reconnects;\n", ""),
 
     # the network task
@@ -822,3 +829,91 @@ MUTATIONS += clock("swipe", "app_swipe", "\tuint64_t now = advance(app, now_ms);
 MUTATIONS += clock("tick", "app_tick", "\tuint64_t now = advance(app, now_ms);\n\tnav_world_t world;\n\n\tapp_world(app, &world, now);\n\tfollow_request(app, &world, now);\n")[:1]
 MUTATIONS += clock("net", "app_net", "\tuint64_t now = advance(app, now_ms);\n\tconn_view_t view;")
 MUTATIONS += clock("do", "app_do", "\tuint64_t now = advance(app, now_ms);\n\tnav_world_t world;\n\n\tswitch(what)")
+
+# The second source, the Cerbo GX (cerbo.h): what the app does with it, and what it does not take from it
+CERBO_INIT = "\tcerbo_init(&app->cerbo, app->settings.cerbo, app->safe_mode, boot->ap_ssid, now_ms);"
+CERBO_NET = "\tif(link_in_network(&app->link) != app->cerbo.network) cerbo_network(&app->cerbo, link_in_network(&app->link), now);"
+CERBO_LINES = "\tif(cerbo_host(&app->cerbo)[0] != '\\0')\n\t{\n\t\tline = add_line(app, \"Cerbo: \");"
+CERBO_WORD = "\t\tput(&line, text_cerbo_short(cerbo_view(&app->cerbo, app->clock_ms)));"
+CERBO_COUNTS = ("\t\tput_number(&line, app->cerbo.bundles);\n\t\tput(&line, \" ok, \");\n\t\tput_number(&line, cerbo_refused(&app->cerbo));\n"
+                "\t\tput(&line, \" verworfen, \");\n\t\tput_number(&line, app->cerbo.sessions);\n\t\tput(&line, \" Verb.\");\n")
+CAN_READ = "\tworld->can_read = dtc_flow_read_block(&poll->flow, &poll->conn, &poll->values, &poll->catalog, now) == DTC_FLOW_ALLOWED;"
+CAN_CLEAR = "\tworld->can_clear = dtc_flow_clear_block(&poll->flow, &poll->conn, &poll->values, &poll->catalog, hold_is_stuck(&app->hold), now) == DTC_FLOW_ALLOWED;"
+SCENE_VALUES = "\tinput.values = &poll->values;"
+BUSY_NOW = "\treturn under_way(app) || app->nav.screen == NAV_DTC_CONFIRM || app->uploading;"
+
+MUTATIONS += [
+    # the start
+    ("app_cerbo_started_without_the_stored_address", T, F, CERBO_INIT, CERBO_INIT.replace("app->settings.cerbo", "NULL")),
+    ("app_cerbo_on_in_safe_mode", T, F, CERBO_INIT, CERBO_INIT.replace("app->safe_mode", "false")),
+    ("app_cerbo_always_as_in_safe_mode", T, F, CERBO_INIT, CERBO_INIT.replace("app->safe_mode", "true")),
+    ("app_cerbo_without_the_name_of_the_access_point", T, F, CERBO_INIT, CERBO_INIT.replace("boot->ap_ssid", "NULL")),
+    ("app_cerbo_named_by_the_version", T, F, CERBO_INIT, CERBO_INIT.replace("boot->ap_ssid", "boot->version")),
+    ("app_cerbo_not_started", T, F, CERBO_INIT + "\n", ""),
+    ("app_cerbo_started_before_the_settings_are_read", T, F,
+     "\tif(boot->settings_json != NULL)\n\t{\n\t\tsettings_from_json(&app->settings, boot->settings_json, strlen(boot->settings_json), NULL, 0, app->work, app->work_count);\n\t}\n"
+     "\t// The second source, with the address the settings hold: off without one, and off in safe mode\n" + CERBO_INIT + "\n",
+     CERBO_INIT + "\n\tif(boot->settings_json != NULL)\n\t{\n"
+     "\t\tsettings_from_json(&app->settings, boot->settings_json, strlen(boot->settings_json), NULL, 0, app->work, app->work_count);\n\t}\n"),
+
+    # the network
+    ("app_cerbo_never_told_of_the_network", T, F, CERBO_NET + "\n", ""),
+    ("app_cerbo_network_is_the_adapter", T, F, CERBO_NET, CERBO_NET.replace("link_in_network(&app->link)", "link_up(&app->link)")),
+    ("app_cerbo_told_of_the_network_with_every_call", T, F, CERBO_NET, "\tcerbo_network(&app->cerbo, link_in_network(&app->link), now);"),
+    ("app_cerbo_only_told_that_the_network_is_there", T, F, CERBO_NET, "\tif(link_in_network(&app->link) && !app->cerbo.network) cerbo_network(&app->cerbo, true, now);"),
+    ("app_cerbo_only_told_that_the_network_is_gone", T, F, CERBO_NET, "\tif(!link_in_network(&app->link) && app->cerbo.network) cerbo_network(&app->cerbo, false, now);"),
+    ("app_cerbo_network_inverted", T, F, CERBO_NET, CERBO_NET.replace("cerbo_network(&app->cerbo, link_in_network(&app->link), now)", "cerbo_network(&app->cerbo, !link_in_network(&app->link), now)")),
+    ("app_cerbo_always_in_a_network", T, F, CERBO_NET, "\tif(!app->cerbo.network) cerbo_network(&app->cerbo, true, now);"),
+
+    # the two info lines
+    ("app_info_cerbo_lines_always", T, F, CERBO_LINES, CERBO_LINES.replace("if(cerbo_host(&app->cerbo)[0] != '\\0')", "if(cerbo_host(&app->cerbo) != NULL)")),
+    ("app_info_cerbo_lines_never", T, F, CERBO_LINES, CERBO_LINES.replace("if(cerbo_host(&app->cerbo)[0] != '\\0')", "if(cerbo_host(&app->cerbo)[0] == '\\1')")),
+    ("app_info_cerbo_lines_not_in_safe_mode", T, F, CERBO_LINES, CERBO_LINES.replace("if(cerbo_host(&app->cerbo)[0] != '\\0')", "if(cerbo_on(&app->cerbo))")),
+    ("app_info_cerbo_lines_only_in_a_network", T, F, CERBO_LINES, CERBO_LINES.replace("if(cerbo_host(&app->cerbo)[0] != '\\0')", "if(cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.network)")),
+    ("app_info_cerbo_other_label", T, F, CERBO_LINES, CERBO_LINES.replace("Cerbo: ", "GX: ")),
+    ("app_info_cerbo_without_the_address", T, F, "\t\tput(&line, cerbo_host(&app->cerbo));\n", ""),
+    ("app_info_cerbo_address_of_the_adapter", T, F, "\t\tput(&line, cerbo_host(&app->cerbo));", "\t\tput(&line, app_host(app));"),
+    ("app_info_cerbo_without_what_it_does", T, F, CERBO_WORD, "\t\tput(&line, \"\");"),
+    ("app_info_cerbo_the_long_text", T, F, CERBO_WORD, "\t\tput(&line, text_cerbo(cerbo_view(&app->cerbo, app->clock_ms), app->safe_mode));"),
+    ("app_info_cerbo_the_word_of_the_browser", T, F, CERBO_WORD, "\t\tput(&line, text_cerbo_word(cerbo_view(&app->cerbo, app->clock_ms)));"),
+    ("app_info_cerbo_safe_mode_not_told", T, F,
+     CERBO_WORD, CERBO_WORD.replace("cerbo_view(&app->cerbo, app->clock_ms)", "(app->safe_mode ? CERBO_VIEW_UNREACHABLE : cerbo_view(&app->cerbo, app->clock_ms))")),
+    ("app_info_cerbo_view_of_the_start", T, F, CERBO_WORD, CERBO_WORD.replace("cerbo_view(&app->cerbo, app->clock_ms)", "(app->cerbo.sessions > 0 ? CERBO_VIEW_LIVE : cerbo_view(&app->cerbo, app->clock_ms))")),
+    ("app_info_cerbo_delivers_while_values_show", T, F, CERBO_WORD, CERBO_WORD.replace("cerbo_view(&app->cerbo, app->clock_ms)", "(cerbo_showing(&app->cerbo, app->clock_ms) ? CERBO_VIEW_LIVE : cerbo_view(&app->cerbo, app->clock_ms))")),
+    ("app_info_mqtt_line_missing", T, F, "\t\tline = add_line(app, \"MQTT: \");\n" + CERBO_COUNTS, "\t\t(void)cerbo_refused;\n"),
+    ("app_info_mqtt_other_label", T, F, "\t\tline = add_line(app, \"MQTT: \");", "\t\tline = add_line(app, \"Cerbo-MQTT: \");"),
+    ("app_info_mqtt_sessions_are_bundles", T, F, CERBO_COUNTS, CERBO_COUNTS.replace("app->cerbo.sessions", "app->cerbo.bundles")),
+    ("app_info_mqtt_bundles_are_sessions", T, F, CERBO_COUNTS, CERBO_COUNTS.replace("app->cerbo.bundles", "app->cerbo.sessions")),
+    ("app_info_mqtt_refused_only_the_invalid", T, F, CERBO_COUNTS, CERBO_COUNTS.replace("cerbo_refused(&app->cerbo)", "app->cerbo.refused_invalid")),
+    ("app_info_mqtt_refused_are_the_members", T, F, CERBO_COUNTS, CERBO_COUNTS.replace("cerbo_refused(&app->cerbo)", "app->cerbo.skipped")),
+    ("app_info_mqtt_refused_are_the_failures_of_the_adapter", T, F, CERBO_COUNTS, CERBO_COUNTS.replace("cerbo_refused(&app->cerbo)", "app->poll.http_failed")),
+    ("app_info_mqtt_boots_for_sessions", T, F, CERBO_COUNTS, CERBO_COUNTS.replace("app->cerbo.sessions", "app->cerbo.boots")),
+    ("app_info_mqtt_other_words", T, F, CERBO_COUNTS, CERBO_COUNTS.replace(" verworfen, ", " Fehler, ")),
+    ("app_info_mqtt_without_the_last_word", T, F, CERBO_COUNTS, CERBO_COUNTS.replace("\t\tput(&line, \" Verb.\");\n", "")),
+    ("app_info_cerbo_lines_behind_the_version", T, F,
+     "\tline = add_line(app, \"Version: \");\n\tput_or_dash(&line, app->version);\n\tput(&line, \" (\");\n\tput_or_dash(&line, app->slot);\n\tput(&line, \")\");\n",
+     "\tif(cerbo_host(&app->cerbo)[0] == '\\0')\n\t{\n\t\tline = add_line(app, \"Version: \");\n\t\tput_or_dash(&line, app->version);\n\t\tput(&line, \" (\");\n"
+     "\t\tput_or_dash(&line, app->slot);\n\t\tput(&line, \")\");\n\t}\n\telse\n\t{\n\t\tchar *moved = app->info[app->info_count - 2];\n\n"
+     "\t\tmemmove(app->info[app->info_count - 1], moved, APP_INFO_SIZE);\n\t\tmemset(moved, 0, APP_INFO_SIZE);\n\t\tline.text = moved;\n\t\tline.cut = false;\n"
+     "\t\tput(&line, \"Version: \");\n\t\tput_or_dash(&line, app->version);\n\t\tput(&line, \" (\");\n\t\tput_or_dash(&line, app->slot);\n\t\tput(&line, \")\");\n\t}\n"),
+
+    # what the app does not take from the source: each of these lets it in
+    ("app_standby_counts_the_cerbo", T, F, SHOWN_VIEW, SHOWN_VIEW.replace("view == CONN_VIEW_SCAN)", "view == CONN_VIEW_SCAN || cerbo_showing(&app->cerbo, now))")),
+    ("app_standby_counts_a_cerbo_that_delivers", T, F, SHOWN_VIEW, SHOWN_VIEW.replace("view == CONN_VIEW_SCAN)", "view == CONN_VIEW_SCAN || cerbo_view(&app->cerbo, now) == CERBO_VIEW_LIVE)")),
+    ("app_standby_judges_no_api_by_the_values_of_the_cerbo", T, F,
+     "\tconst values_t *values = &app->poll.values;\n\tconn_view_t view = conn_view(&app->poll.conn, now);\n\n\tif(app->nav.screen != NAV_PAGES",
+     "\tconst values_t *values = app->cerbo.values.count > 0 ? &app->cerbo.values : &app->poll.values;\n\tconn_view_t view = conn_view(&app->poll.conn, now);\n\n\tif(app->nav.screen != NAV_PAGES"),
+    ("app_standby_no_api_also_by_the_cerbo", T, F,
+     "\t\tif(values_age(&values->items[i], now) != VALUE_AGE_GONE) return true;\n\t}\n\treturn false;",
+     "\t\tif(values_age(&values->items[i], now) != VALUE_AGE_GONE) return true;\n\t}\n\treturn cerbo_shown(&app->cerbo, now) > 0;"),
+    ("app_busy_while_a_session_with_the_broker_stands", T, F, BUSY_NOW, BUSY_NOW.replace("app->uploading;", "app->uploading || app->cerbo.phase == CERBO_SESSION;")),
+    ("app_busy_while_the_broker_is_greeted", T, F, BUSY_NOW, BUSY_NOW.replace("app->uploading;", "app->uploading || (app->cerbo.phase != CERBO_IDLE && app->cerbo.phase != CERBO_SESSION);")),
+    ("app_read_judged_by_the_values_of_the_cerbo", T, F, CAN_READ, CAN_READ.replace("&poll->values", "(app->cerbo.values.count > 0 ? &app->cerbo.values : &poll->values)")),
+    ("app_clear_judged_by_the_values_of_the_cerbo", T, F, CAN_CLEAR, CAN_CLEAR.replace("&poll->values", "(app->cerbo.values.count > 0 ? &app->cerbo.values : &poll->values)")),
+    ("app_pages_show_the_values_of_the_cerbo", T, F, SCENE_VALUES, "\tinput.values = app->cerbo.values.count > 0 ? &app->cerbo.values : &poll->values;"),
+    ("app_tick_counts_a_bundle_as_an_input", T, F,
+     "\tapp_world(app, &world, now);\n\tfollow_request(app, &world, now);\n",
+     "\tapp_world(app, &world, now);\n\tif(app->cerbo.has_bundle && now - app->cerbo.bundle_ms < 1000) app->last_input_ms = now;\n\tfollow_request(app, &world, now);\n"),
+    ("app_net_stores_when_the_source_delivers", T, F, CERBO_NET, CERBO_NET + "\n\tif(app->cerbo.bundles == 1) app->events |= APP_EVENT_STORE_SETTINGS;"),
+]
+

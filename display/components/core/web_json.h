@@ -19,6 +19,7 @@
 #include "layout.h"
 #include "net_select.h"
 #include "access.h"
+#include "cerbo.h"
 
 /*
  * The bodies of the web interface of the display (display/API.md): what it answers and what it reads.
@@ -49,6 +50,8 @@ typedef struct
 	bool update_pending;        // this version still waits for "Update in Ordnung?"
 	uint32_t heap, heap_min;    // internal memory, bytes
 	uint32_t psram, psram_min;
+	uint32_t heap_malloc, heap_malloc_min;  // the internal memory malloc() hands out, bytes
+	uint32_t heap_block;        // its largest free block
 	int temp_c;                 // of the chip
 	const char *heat;           // "normal", "dim" or "off"
 	bool release_open;
@@ -67,13 +70,26 @@ typedef struct
 	uint32_t http_ok, http_failed, reconnects;
 	const char *settings;       // the settings as their JSON text (settings_to_json), embedded as it is;
 	                            // NULL or empty becomes null
+	// The second source, the Cerbo GX (cerbo.h). cerbo_host NULL or empty: the display has none, and the
+	// answer is the one of a display without it, byte for byte - the members below are not looked at.
+	const char *cerbo_host;     // the address of its MQTT broker
+	const char *cerbo_view;     // what the display shows about it: "live", "unreachable", ...
+	uint32_t cerbo_values;      // values it has to show right now
+	uint32_t cerbo_ok;          // bundles taken
+	uint32_t cerbo_refused;     // messages not taken
+	uint32_t cerbo_connects;    // sessions that stood
+	uint32_t cerbo_boots;       // runs of the flow seen
+	uint32_t cerbo_lag_ms;      // the lag of the last bundle taken
 } web_info_t;
 
 // {"project":"wican-display","version":"..","git":"..","slot":"..","reset":"..","up":N,"safe_mode":B,
-//  "rolled_back":B,"update_pending":B,"heap":N,"heap_min":N,"psram":N,"psram_min":N,"temp_c":N,"heat":"..",
+//  "rolled_back":B,"update_pending":B,"heap":N,"heap_min":N,"psram":N,"psram_min":N,"heap_malloc":N,
+//  "heap_malloc_min":N,"heap_block":N,"temp_c":N,"heat":"..",
 //  "release":{"open":B,"left_s":N},"wifi":{"ssid":"..","ip":"..","rssi":N,"ap":B,"ap_ssid":".."},
 //  "wican":{"host":"..","id":"..","fw":"..","view":".."},"layout":{"name":"..","source":".."},
 //  "http":{"ok":N,"failed":N,"reconnects":N},"settings":{...}}
+// With a cerbo_host that is not empty, behind "wican" and before "layout":
+//  "cerbo":{"host":"..","view":"..","values":N,"ok":N,"refused":N,"connects":N,"boots":N,"lag_ms":N},
 int web_info_json(const web_info_t *info, char *out, size_t size);
 
 // GET /api/values: {"view":"live","values":{"ENGINE_RPM":{"v":812.5,"age":"fresh"},
@@ -86,6 +102,24 @@ int web_info_json(const web_info_t *info, char *out, size_t size);
 // names and a view that need no escape the text has at most 4663 bytes with the zero.
 #define WEB_VALUES_SIZE     15360
 int web_values_json(const values_t *values, const char *view, uint64_t now_ms, char *out, size_t size);
+
+// GET /api/values of a display with a second source: {"view":"live","cerbo":"live","values":{
+//  "ENGINE_RPM":{"v":812.5,"age":"fresh"},"GX_BATT_SOC":{"v":99.7,"age":"old"}}} - the answer above with
+// the view of the Cerbo (`cerbo_view`) behind the one of the adapter (`wican_view`), and with the values of
+// the Cerbo (`cerbo`) behind those of the adapter (`wican`), in the same object and in their order. The same
+// values are left out and the numbers are written the same way; a value of the adapter is as old as
+// values_age() says, one of the Cerbo as cerbo_age() says - "fresh" for less than CERBO_FRESH_MS, left out
+// from CERBO_KEPT_MS on. Nothing is looked at but the stores: a name is written as it is, whatever its
+// prefix. With an empty store of the Cerbo the answer is the one of web_values_json() with the member
+// "cerbo" put in.
+// WEB_VALUES_CERBO_SIZE is the room the Cerbo needs on top of WEB_VALUES_SIZE: VALUES_MAX values with the
+// longest names cerbo.h takes, which need no escape, and a view of up to 32 bytes that needs none (4651
+// bytes). The longest text of all is then 19713 bytes, 19714 with the zero: every byte of the names and the
+// view of the adapter escaped as above, and the Cerbo that way. Names of the Cerbo that need an escape -
+// cerbo.h takes none - may not fit that room: the answer is then -1, as for every room that is too small.
+#define WEB_VALUES_CERBO_SIZE   4672
+int web_values_cerbo_json(const values_t *wican, const char *wican_view, const values_t *cerbo, const char *cerbo_view,
+                          uint64_t now_ms, char *out, size_t size);
 
 // One network seen in a scan
 typedef struct

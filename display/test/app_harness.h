@@ -7,6 +7,10 @@
  *   - the task of the network: link_next() carried out against a WiFi of the test, poll_prepare() answered by
  *     an adapter of the test (tools/w906/API.md written once more, as in test_poll.c), app_net() where app.h
  *     asks for it
+ *   - the task of the second source: cerbo_next() carried out against a broker of the test that stands for
+ *     the Cerbo GX (MQTT 3.1.1 as mqtt_harness.h writes it for a broker), as app.h says the platform does it.
+ *     A display that has no address of a Cerbo gets no order from it: the stories that set none run as if
+ *     there were no such task
  *   - after every step app_take_events() carried out against a flash of the test, so that the app can be
  *     started again with what was stored
  * What the driver would see is app_scene() as the text of scene_dump(), compared with hand-written files
@@ -27,6 +31,11 @@
 #include <inttypes.h>
 #include <stdlib.h>
 #include "test.h"
+// The packets a broker sends and what it reads. The header names a type told_t for the tests of the reader,
+// and test_app_web.c has one of that name of its own: here it goes by another name.
+#define told_t      mqtt_told_t
+#include "mqtt_harness.h"
+#undef told_t
 #include "app.h"
 
 #define COUNT(a)    ((int)(sizeof(a) / sizeof((a)[0])))
@@ -48,6 +57,16 @@
 
 #define ALL_STORES  (APP_EVENT_STORE_SETTINGS | APP_EVENT_STORE_WIFI | APP_EVENT_STORE_BOUND | APP_EVENT_STORE_LAYOUT | \
                      APP_EVENT_ERASE_LAYOUT | APP_EVENT_STORE_CATALOG | APP_EVENT_STORE_OLD)
+
+#define GX_HOST     "192.168.88.2"      // where the broker of the Cerbo listens
+#define GX_ELSE     "192.168.88.9"      // an address at which nothing listens
+#define GX_BOOT     1836452071u         // the number of the run of its flow
+#define GX_AGE_MS   86400000u           // the flow started a day before the world of the test begins
+#define GX_WIRE     8192
+// The settings of a display that was given the address of the Cerbo and nothing else
+#define GX_SETTINGS "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"" GX_HOST "\"}"
+// What the flow of the stories publishes: a few of the values of the camper, numbers and switches
+#define GX_VALUES   "\"GX_BATT_SOC\":87.5,\"GX_BATT_V\":26.41,\"GX_BATT_I\":-6.2,\"GX_SW_B2B\":\"on\",\"GX_SW_VALVE\":\"off\",\"GX_TANK_FRESH\":77"
 
 /* ---------------------------------------------------------------------------------------------------
  * The device of the test
@@ -162,8 +181,57 @@ typedef struct
 	char result[POLL_TEXT_SIZE];
 } adapter_t;
 
+// The Cerbo GX: its broker, the flow that publishes, and the socket of the task that talks to it
+typedef struct
+{
+	bool there;             // a broker listens at GX_HOST: a connection to it comes about
+	bool answers;           // it answers CONNECT, SUBSCRIBE and PINGREQ as MQTT says
+	bool flow;              // the flow runs: it publishes a bundle every `every_ms`
+	uint32_t every_ms;
+	int version;            // the version of the contract its bundles name: 1, or that of a flow that is newer
+	uint32_t boot;
+	uint64_t boot_ms;       // the time of the world at which the flow started: its `t` counts from there
+	const char *values;     // the members of `values` of its bundles
+	size_t read_max;        // bytes of one read of the task, at most CERBO_READ_MAX
+	uint64_t held_until_ms; // the radio link stands until this time of the world: nothing arrives, the bytes pile up
+	bool noisy;             // the script of the fault memory stories runs: see gx_script()
+	int script;             // where that script is
+
+	// The connection of the task
+	bool socket;            // it has a socket: connecting or connected
+	bool connecting;        // ... and the connection is not known to stand yet
+	bool reachable;         // ... and it will come about
+	bool subscribed;        // the broker took the SUBSCRIBE of this connection: the bundles go to it
+	uint64_t bundle_ms;     // the time of the world of the next bundle
+	uint8_t wire[GX_WIRE];  // the bytes on their way to the display
+	size_t wire_length;
+
+	// What the task did and saw since the counters were cleared
+	int opens, closes, sends, unreachable, lost;
+	int connects, subscribes, pings;    // packets of the display the broker read: CONNECT, SUBSCRIBE, PINGREQ
+	char client[80];        // the client id of the last CONNECT (the room of client_packet_t for it)
+	char opened[CERBO_HOST_SIZE];   // the address of the last order to open
+	int strange;            // ... and what is none of the three, or was sent without a connection: there has to be none
+	int published;          // bundles of the flow
+	int overflow;           // bytes that had no room on the wire of the test
+} gx_t;
+
+// What the second source took and refused in all starts of the display, for the stories that run with it
+typedef struct
+{
+	long taken, refused, sessions, closed;
+	long during_request;    // bundles taken while a fault memory request of the display was under way
+	long during_dialog;     // ... while the clear dialog showed
+} gx_seen_t;
+
 static flash_t flash;
 static machine_t machine;
+static gx_t gx;
+static gx_seen_t gx_seen;
+static json_token_t gx_work[CERBO_TOKENS];
+// Every story begins with a display that has the address of a Cerbo that sends bundles, rubbish and breaks off
+// (gx_script()): for the stories of the fault memory, which run a second time that way
+static bool gx_everywhere;
 static done_t done;
 static wifi_t wifi;
 static adapter_t wican;
@@ -229,6 +297,13 @@ static uint64_t stride = STEP_MS;
 // How far the times the two tasks read lie behind the time of the display: each reads it before it waits
 // for the lock
 static uint64_t net_skew, screen_skew;
+// ... and the one of the task of the second source
+static uint64_t gx_skew;
+// Around every round of that task: before its order is asked for (false), and behind its last report (true)
+static void (*watch_gx)(bool behind);
+// At the end of every step, behind watch_after. Not cleared by factory(): it watches a story from outside,
+// from its very first step on.
+static void (*watch_trace)(void);
 // The latest time the harness gave the app
 static uint64_t given_ms;
 
@@ -706,6 +781,7 @@ static void start_at(uint64_t at_ms)
 	}
 	boot.work = work;
 	boot.work_count = LAYOUT_TOKENS;
+	boot.ap_ssid = platform.ap_ssid;
 
 	// Whatever stood in the memory before
 	memset(&box, FILL, sizeof(box));
@@ -715,6 +791,11 @@ static void start_at(uint64_t at_ms)
 	wifi.joined = false;
 	wifi.ap_on = false;
 	wifi.profile = -1;
+	// The task of the second source starts anew as well: its socket is gone, and what was on its way
+	gx.socket = false;
+	gx.connecting = false;
+	gx.subscribed = false;
+	gx.wire_length = 0;
 	flying = false;
 	switch_pressed = false;
 	switch_ok = true;
@@ -872,6 +953,218 @@ static void lose_wifi(void)
 	app_net(app, given(now));
 }
 
+/* The Cerbo and the task that talks to its broker ----------------------------------------------------- */
+
+// Bytes of the broker on their way to the display
+static void gx_send(const uint8_t *bytes, size_t length)
+{
+	if(length > sizeof(gx.wire) - gx.wire_length)
+	{
+		gx.overflow++;
+		return;
+	}
+	memcpy(gx.wire + gx.wire_length, bytes, length);
+	gx.wire_length += length;
+}
+
+// A message on a topic, as a broker passes it on to its subscriber
+static void gx_publish(const char *topic, bool retained, const char *json)
+{
+	static uint8_t packet[2048];
+	size_t length = strlen(json);
+
+	// With one byte of length a packet holds 127 bytes; the bundles of the flow need two
+	size_t head = broker_publish_head(packet, retained ? 0x31 : 0x30, topic, strlen(topic), length, 1);
+
+	if(head + length > sizeof(packet))
+	{
+		gx.overflow++;
+		return;
+	}
+	memcpy(packet + head, json, length);
+	gx_send(packet, head + length);
+}
+
+// A bundle of version 1 of the contract with these members of `values`, as the flow publishes it right now
+static void gx_bundle_of(const char *values)
+{
+	static char json[CERBO_BUNDLE_MAX + 1];
+	int length = snprintf(json, sizeof(json), "{\"v\":%d,\"boot\":%" PRIu32 ",\"t\":%" PRIu64 ",\"values\":{%s}}", gx.version, gx.boot, world() - gx.boot_ms, values);
+
+	if(length < 0 || (size_t)length >= sizeof(json))
+	{
+		gx.overflow++;
+		return;
+	}
+	gx_publish(CERBO_TOPIC, false, json);
+	gx.published++;
+}
+
+/*
+ * What the Cerbo of the fault memory stories does instead of one bundle a second, in turns of twelve: bundles,
+ * and between them everything a broker can do to a subscriber. Among the bundles one that names the engine
+ * speed - under the key of the WiCAN, which no bundle may set, and under a key of its own. at: the time the
+ * task read for this round.
+ */
+static void gx_script(uint64_t at)
+{
+	static const uint8_t qos1[] = {0x32, 0x05, 0x00, 0x01, 'a', 0x00, 0x01};
+
+	switch(gx.script++ % 12)
+	{
+		case 2:  gx_bundle_of("\"ENGINE_RPM\":3000,\"GX_ENGINE_RPM\":3000,\"@BATT_V\":9.9,\"GX_BATT_SOC\":12.5"); break;
+		case 4:  gx_publish(CERBO_TOPIC, false, "kein JSON"); break;
+		case 5:  gx_publish(CERBO_TOPIC, true, "{\"v\":1,\"boot\":7,\"t\":1,\"values\":{\"GX_BATT_SOC\":1}}"); break;
+		case 6:  gx_publish("display/gx/other", false, "{\"v\":1,\"boot\":7,\"t\":1,\"values\":{\"ENGINE_RPM\":3000}}"); break;
+		case 7:  gx_publish(CERBO_TOPIC, false, "{\"v\":2,\"boot\":7,\"t\":1,\"values\":{\"ENGINE_RPM\":3000}}"); break;
+		// A packet no subscriber of QoS 0 gets: the display closes, and comes back two seconds later
+		case 9:  gx_send(qos1, sizeof(qos1)); break;
+		// The broker breaks off: gone for this round, the connection with it
+		case 11: gx.socket = false; gx.lost++; cerbo_down(&app->cerbo, at); break;
+		default: gx_bundle_of(gx.values); break;
+	}
+}
+
+// What the broker makes of a packet the display sent
+static void gx_hears(const uint8_t *bytes, size_t length)
+{
+	static uint8_t answer[8];
+	client_packet_t packet = broker_reads(bytes, length);
+
+	if(packet.type == 1)
+	{
+		gx.connects++;
+		memcpy(gx.client, packet.text, sizeof(gx.client));
+		if(gx.answers) gx_send(answer, broker_connack(answer, 0, 0));
+	}
+	else if(packet.type == 8 && packet.qos == 0 && packet.text_length == strlen(CERBO_TOPIC) && memcmp(packet.text, CERBO_TOPIC, packet.text_length) == 0)
+	{
+		gx.subscribes++;
+		if(gx.answers)
+		{
+			gx_send(answer, broker_suback(answer, (uint16_t)packet.id, 0));
+			gx.subscribed = true;
+			// The flow goes on at its own pace: the next bundle is the next one that is due
+			if(gx.bundle_ms < world()) gx.bundle_ms = world();
+		}
+	}
+	else if(packet.type == 12)
+	{
+		gx.pings++;
+		if(gx.answers) gx_send(answer, broker_pingresp(answer));
+	}
+	// Anything else - a PUBLISH above all - is what the display must never send
+	else gx.strange++;
+}
+
+// One round of the task, as app.h says the platform makes it: the order asked for and what it needs copied
+// under the lock, the order carried out without it, then what the socket has to tell, reported under the lock
+static void gx_step(void)
+{
+	cerbo_t *cerbo = &app->cerbo;
+	uint64_t at = now > gx_skew ? now - gx_skew : 0;
+	uint32_t taken = cerbo->bundles, refused = cerbo_refused(cerbo), sessions = cerbo->sessions;
+	char host[CERBO_HOST_SIZE] = "";
+	uint8_t out[MQTT_SUB_OUT_MAX] = {0};
+	size_t length = 0;
+	cerbo_do_t order;
+
+	if(watch_gx != NULL) watch_gx(false);
+	order = cerbo_next(cerbo, at);
+	if(order == CERBO_DO_OPEN) strcpy(host, cerbo_host(cerbo));
+	if(order == CERBO_DO_SEND)
+	{
+		const uint8_t *bytes = cerbo_out(cerbo, &length);
+
+		if(length > sizeof(out)) length = 0;
+		memcpy(out, bytes, length);
+	}
+
+	switch(order)
+	{
+		case CERBO_DO_OPEN:
+			gx.opens++;
+			// A second socket next to one that is open
+			if(gx.socket) gx.strange++;
+			strcpy(gx.opened, host);
+			gx.socket = true;
+			gx.connecting = true;
+			gx.reachable = gx.there && strcmp(host, GX_HOST) == 0;
+			gx.subscribed = false;
+			gx.wire_length = 0;
+			break;
+		case CERBO_DO_SEND:
+			gx.sends++;
+			if(!gx.socket || gx.connecting || length == 0) gx.strange++;
+			else if(gx.there) gx_hears(out, length);
+			break;
+		case CERBO_DO_CLOSE:
+			gx.closes++;
+			if(!gx.socket) gx.strange++;
+			gx.socket = false;
+			gx.connecting = false;
+			gx.subscribed = false;
+			gx.wire_length = 0;
+			break;
+		default:
+			break;
+	}
+
+	if(gx.socket && gx.connecting)
+	{
+		gx.connecting = false;
+		if(gx.reachable) cerbo_opened(cerbo, at);
+		else
+		{
+			gx.socket = false;
+			gx.unreachable++;
+			cerbo_down(cerbo, at);
+		}
+	}
+	else if(gx.socket && !gx.there)
+	{
+		// The broker is gone, and its end of the connection with it
+		gx.socket = false;
+		gx.subscribed = false;
+		gx.wire_length = 0;
+		gx.lost++;
+		cerbo_down(cerbo, at);
+	}
+	else if(gx.socket)
+	{
+		// The flow publishes at its own pace, whether the radio link stands or not
+		while(gx.subscribed && gx.flow && gx.every_ms > 0 && world() >= gx.bundle_ms)
+		{
+			gx.bundle_ms += gx.every_ms;
+			if(gx.noisy) gx_script(at);
+			else gx_bundle_of(gx.values);
+			if(!gx.socket) break;
+		}
+		if(gx.socket && gx.wire_length > 0 && world() >= gx.held_until_ms)
+		{
+			size_t count = gx.wire_length < gx.read_max ? gx.wire_length : gx.read_max;
+
+			cerbo_bytes(cerbo, gx.wire, count, at, gx_work, CERBO_TOKENS);
+			memmove(gx.wire, gx.wire + count, gx.wire_length - count);
+			gx.wire_length -= count;
+		}
+	}
+
+	// What became of it, for the stories that count
+	if(cerbo->bundles != taken)
+	{
+		dtc_flow_phase_t flow = app->poll.flow.phase;
+
+		gx_seen.taken += cerbo->bundles - taken;
+		if(flow == DTC_FLOW_READ_SENT || flow == DTC_FLOW_READING || flow == DTC_FLOW_CLEAR_SENT || flow == DTC_FLOW_CLEARING) gx_seen.during_request++;
+		if(app->nav.screen == NAV_DTC_CONFIRM) gx_seen.during_dialog++;
+	}
+	gx_seen.refused += cerbo_refused(cerbo) - refused;
+	gx_seen.sessions += cerbo->sessions - sessions;
+	if(order == CERBO_DO_CLOSE) gx_seen.closed++;
+	if(watch_gx != NULL) watch_gx(true);
+}
+
 /* The clock and the task of the screen ---------------------------------------------------------------- */
 
 static void step(void)
@@ -887,9 +1180,11 @@ static void step(void)
 	if(now % 1000 == 0) tell_platform();
 	link_step();
 	poll_step();
+	gx_step();
 	carry_out();
 	now += stride;
 	if(watch_after != NULL) watch_after();
+	if(watch_trace != NULL) watch_trace();
 }
 
 static void run(uint64_t ms)
@@ -1051,6 +1346,9 @@ static void factory(void)
 	platform.heap_min = 151200;
 	platform.psram = 7340032;
 	platform.psram_min = 7100416;
+	platform.heap_malloc = 149572;
+	platform.heap_malloc_min = 118432;
+	platform.heap_block = 94208;
 	platform.reconnects = 2;
 	wifi.gateway = "192.168.1.1";
 	wifi.profile = -1;
@@ -1068,15 +1366,46 @@ static void factory(void)
 	on_request = NULL;
 	on_answer = NULL;
 	watch_events = NULL;
+	watch_gx = NULL;
 	stride = STEP_MS;
 	net_skew = 0;
 	screen_skew = 0;
+	gx_skew = 0;
 	// The world is older than the display: the adapter runs since 100 s
 	epoch = 1000000;
 	now = 0;
 	adapter_init(&wican);
 	wican.read_text = result_read;
 	wican.clear_text = result_clear;
+	// The Cerbo: its flow runs since a day, and nothing listens until a story says so
+	memset(&gx, 0, sizeof(gx));
+	gx.answers = true;
+	gx.every_ms = 1000;
+	gx.version = CERBO_VERSION;
+	gx.boot = GX_BOOT;
+	gx.boot_ms = epoch - GX_AGE_MS;
+	gx.values = GX_VALUES;
+	gx.read_max = CERBO_READ_MAX;
+	if(gx_everywhere)
+	{
+		// The display was given its address, and it sends what gx_script() says, five times a second
+		gx.there = true;
+		gx.flow = true;
+		gx.noisy = true;
+		gx.every_ms = 200;
+		strcpy(flash.settings, GX_SETTINGS);
+		flash.has_settings = true;
+	}
+}
+
+// A Cerbo whose flow publishes a bundle every second, and a display that was given its address. Called
+// behind factory() or garage(), before the start.
+static void cerbo_there(void)
+{
+	gx.there = true;
+	gx.flow = true;
+	strcpy(flash.settings, GX_SETTINGS);
+	flash.has_settings = true;
 }
 
 // The network "Werkstatt" is in range and stored with the address of the adapter, the display is bound to it
@@ -1115,6 +1444,20 @@ static inline void app_harness_unused(void)
 	(void)switch_ok;
 	(void)net_skew;
 	(void)screen_skew;
+	(void)gx_skew;
+	(void)watch_gx;
+	(void)watch_trace;
+	(void)gx;
+	(void)gx_seen;
+	(void)gx_work;
+	(void)gx_everywhere;
+	(void)gx_send;
+	(void)gx_publish;
+	(void)gx_bundle_of;
+	(void)gx_script;
+	(void)gx_hears;
+	(void)gx_step;
+	(void)cerbo_there;
 	(void)work;
 	(void)flash;
 	(void)machine;

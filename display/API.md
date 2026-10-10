@@ -44,9 +44,9 @@ device only and has not run anywhere yet.
 | Request | What it does | Release | Knob |
 |---|---|---|---|
 | `GET /` | the page | | |
-| `GET /api/info` | version, memory, network, adapter, release, settings | | |
+| `GET /api/info` | version, memory, network, adapter, release, settings; the Cerbo GX if the display has its address | | |
 | `GET /api/catalog` | the values the adapter can deliver | | |
-| `GET /api/values` | the current values, from the memory of the display | | |
+| `GET /api/values` | the current values, from the memory of the display; those of the Cerbo GX as well if it has its address | | |
 | `GET /api/layout` | the views in use, as the layout text | | |
 | `PUT /api/layout?mode=check` | checks a layout, changes nothing | | |
 | `PUT /api/layout?mode=apply` | shows it on the display without storing it | yes | |
@@ -56,7 +56,7 @@ device only and has not run anywhere yet.
 | `GET /api/wifi` | stored and visible networks | | |
 | `POST /api/wifi` | store a network | yes | yes |
 | `POST /api/wifi/forget` | remove a stored network | yes | |
-| `POST /api/settings` | brightness, night mode, direction of the knob, standby | yes | |
+| `POST /api/settings` | brightness, night mode, direction of the knob, standby, address of the Cerbo GX | yes | |
 | `POST /api/reboot` | restart | yes | |
 | `POST /api/reset` | factory reset: WiFi, binding and settings; the views stay | yes | yes |
 | `POST /api/ota` | firmware upload | yes | yes, after the upload |
@@ -149,7 +149,8 @@ Numbers, texts and their order are fixed; texts are UTF-8.
 ```json
 {"project":"wican-display","version":"0.1.0","git":"display-v0.1.0-3-g1a2b3c4","slot":"ota_0",
  "reset":"poweron","up":4711,"safe_mode":false,"rolled_back":false,"update_pending":true,
- "heap":182340,"heap_min":151200,"psram":7340032,"psram_min":7100416,"temp_c":47,"heat":"normal",
+ "heap":182340,"heap_min":151200,"psram":7340032,"psram_min":7100416,
+ "heap_malloc":149572,"heap_malloc_min":118432,"heap_block":94208,"temp_c":47,"heat":"normal",
  "release":{"open":true,"left_s":540},
  "wifi":{"ssid":"Werkstatt","ip":"192.168.1.77","rssi":-61,"ap":false,"ap_ssid":"WiCAN-Display"},
  "wican":{"host":"192.168.1.50","id":"a1b2c3d4e5f6","fw":"4.21","view":"live"},
@@ -166,9 +167,47 @@ Numbers, texts and their order are fixed; texts are UTF-8.
   see the screen: a question that waits is refused, the display asks none and begins no firmware upload
   (`409 hot`).
 - `up`: seconds since the start. `temp_c`: the last reading that succeeded, 0 before the first.
+- The memory, in bytes, read about once a second, 0 before the first reading. `heap` is what is free of
+  the internal RAM and `heap_min` the lowest that was since the start, `psram` and `psram_min` the same of
+  the external RAM. `heap` counts 32 KB the firmware keeps back for memory that has to be internal
+  (`CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL`): `malloc()` gets nothing of them, so what is allocated with
+  `malloc()` - the buffers of lwIP among it - has less than `heap` says. What it has are the three numbers
+  behind `psram_min`: `heap_malloc` is what is free of the internal memory `malloc()` hands out,
+  `heap_malloc_min` the lowest that was since the start, `heap_block` its largest free block - the largest
+  piece `malloc()` could get from the internal RAM at that moment. Each lowest stand is the sum of the
+  lowest stands of the parts the memory is made of, which need not have been at their lowest together: it
+  can be lower than what was free at any one moment, never higher.
 - `release.left_s`: seconds until the release ends, rounded up, 0 if it is closed.
 - `wican.fw` is empty until the adapter has answered. The password of the own access point is not part of
   the answer; it is shown on the screen of the display (menu "Web-Zugriff").
+
+**With a second source** — `web_info_cerbo.json`. A display that was given the address of a Victron Cerbo GX
+(`cerbo` of the settings, below) reads values from its MQTT broker as well (`components/core/cerbo.h`). Its
+answer has one object more, behind `wican`, and the address in its settings:
+
+```json
+{...,"wican":{"host":"192.168.1.50","id":"a1b2c3d4e5f6","fw":"4.21","view":"live"},
+ "cerbo":{"host":"192.168.88.2","view":"live","values":41,"ok":12345,"refused":7,"connects":31,"boots":1,"lag_ms":120},
+ "layout":{...},"http":{...},
+ "settings":{"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"cerbo":"192.168.88.2"}}
+```
+
+**A display without that address answers the text further up, byte for byte**: no object `cerbo`, no member
+`cerbo` in the settings. A page has to cope with both.
+
+- `cerbo.host`: the address that is set. The port is 1883.
+- `cerbo.view`: what the display shows about the Cerbo: `off` (safe mode: the source is off whatever is
+  stored), `no_wifi` (the display is in no network), `connecting` (no session with the broker for less than
+  15 s), `unreachable` (for longer), `quiet` (a session, and no bundle for 10 s), `silent` (a session whose
+  broker answers, and no bundle for 20 s: the flow "Display" in Node-RED does not publish), `newer` (the
+  flow publishes a newer version of the contract than this firmware reads), `live`.
+- `cerbo.values`: the values of the Cerbo the display has to show right now: those of the last bundle, until
+  they are 60 s old. `cerbo.ok`: bundles taken. `cerbo.refused`: messages not taken - no bundle of the
+  contract, a newer version, a retained message, another topic, too long. `cerbo.connects`: sessions with the
+  broker that stood. `cerbo.boots`: runs of the flow the display has seen (a number that keeps running means
+  two flows publish). `cerbo.lag_ms`: by how much the last bundle arrived late. All counted since the start of
+  the display, at most 4294967295.
+- The display only ever subscribes: it cannot build the MQTT packet that publishes.
 
 ### `GET /api/catalog`
 
@@ -190,6 +229,22 @@ adapter sleeps.
 
 `v` is a number, `"on"` or `"off"`; `age` is `fresh` (under 3 s) or `old` (under 10 s). Older values are
 left out.
+
+**With a second source** — `web_values_cerbo.json`. A display that has the address of a Cerbo GX answers
+with one member more, `cerbo`, behind `view` - what it shows about the Cerbo, the words of `cerbo.view` in
+`GET /api/info` -, and with the values of the Cerbo in the same object `values`, behind those of the
+adapter:
+
+```json
+{"view":"live","cerbo":"live","values":{"ENGINE_RPM":{"v":812.5,"age":"fresh"},"DPF_REGEN_STATUS":{"v":"on","age":"old"},
+ "GX_BATT_SOC":{"v":99.7,"age":"fresh"},"GX_SW_B2B":{"v":"on","age":"fresh"},"GX_TANK_FRESH":{"v":77,"age":"old"}}}
+```
+
+Every key of the Cerbo begins with `GX_`, and no key of the adapter does. A value of the Cerbo is `fresh`
+under 5 s and `old` under 60 s: the radio link to it drops out, and a state of charge of 40 s ago still says
+something. A value the last bundle of the Cerbo did not name is left out at once: the Cerbo has none.
+Without the address the answer is the one above, byte for byte: no member `cerbo`, no key with `GX_`. With
+both stores full the answer has at most 19511 bytes.
 
 ### Layout — `GET /api/layout`, `PUT /api/layout?mode=...`
 
@@ -258,6 +313,20 @@ the order is the priority.
 Every member is optional. `brightness` and `night` 5 to 100 percent, `standby_s` 0 to 3600 (0 = never):
 after that long without input the backlight goes dark while there is nothing to show. Answer: the settings
 now in use.
+
+`cerbo` — `settings_cerbo.json` — is the address of the MQTT broker of a Victron Cerbo GX, the second source
+of values: `{"cerbo":"192.168.88.2"}`. An IPv4 address in dotted form and nothing else - four numbers from 0
+to 255 without a sign and without a leading zero - or the empty text `""`, which takes the address away and
+switches the source off. No name (it would have to be looked up), no port (it is 1883). Anything else:
+`400 {"error":"body","member":"cerbo"}`. The source follows at once: with another address the values of
+the old one are gone with the answer. It needs the release and no press of the knob: a wrong address locks
+nobody out.
+
+The answer, and the settings in `GET /api/info`, name `cerbo` **only while an address is set**, behind the
+five members. Without one they are the text above, byte for byte - a display nobody gave an address stores
+and answers what it always did. As every member, `cerbo` keeps its value when a request does not name it. A
+firmware from before this member ignores it and stores its own five: after an update that was taken back the
+address has to be entered again. The factory reset removes it.
 
 ### Tickets — `web_ticket.json`, `web_asked.json`
 

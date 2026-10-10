@@ -94,6 +94,37 @@
 #define KNOB_HELD_READINGS  5
 #define KNOB_HELD_GAP_MS    20u
 
+/*
+ * The internal memory malloc() hands out: what heap_malloc, heap_malloc_min and heap_block of GET /api/info
+ * are asked of (every_second()). MALLOC_CAP_INTERNAL alone, which `heap` and `heap_min` ask for, counts
+ * more: the 32 KB of CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL are a heap of their own (or several, if no one
+ * piece was free for them) with the capabilities DMA, INTERNAL, 8BIT and 32BIT (esp_psram.c,
+ * esp_psram_extram_reserve_dma_pool()) - without MALLOC_CAP_DEFAULT. malloc() asks for exactly the two bits
+ * below (heap_caps.c, heap_caps_malloc_default(), for everything up to CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL)
+ * and a heap counts when it has every bit that is asked for (heap_caps_match()): malloc(), and with it lwIP,
+ * gets nothing of that pool, however much of it is free. The external RAM, which has DEFAULT, is left out by
+ * INTERNAL. (A malloc() that finds no internal memory does not fail: it is served from the external RAM.)
+ *
+ * What the three calls cost (heap_caps.c, multi_heap.c and multi_heap_platform.h of ESP-IDF v5.5.2; the walk
+ * itself in tlsf.c of espressif/tlsf, read on its master):
+ * - heap_caps_get_free_size() and heap_caps_get_minimum_free_size() add up one number per heap and take no
+ *   lock. The minimum is the sum of the lowest stand of each heap; they need not have been at their lowest
+ *   at the same moment, so it can be lower than the free memory ever was.
+ * - heap_caps_get_largest_free_block() walks every block of every heap that counts, used ones and free ones,
+ *   and holds the lock of that heap for the whole walk. That lock is a critical section
+ *   (portENTER_CRITICAL_SAFE()): the interrupts of this core are off, and the other core spins if it wants
+ *   to allocate or free there. This core is the one of the panel (PANEL_CORE): its interrupts wait as long,
+ *   and one that is held up for longer than a bounce buffer lasts, 0.86 ms, is lost (board.c says what the
+ *   picture does then). Reckoned, not measured: 0.1 to 0.2 us a block, some hundred to a thousand blocks, so
+ *   0.05 to 0.2 ms once a second, the walk of the largest heap in one piece.
+ * So the walk is made once a second and no more often, by this task, and never under platform_lock(): the
+ * screen task takes that lock for every reading of the knob.
+ * CHECK: the picture stands still. A picture that jumps by a band of lines once a second is this walk: then
+ * it is made less often, or by a task on the other core.
+ * The numbers are read one after the other, not at one moment.
+ */
+#define HEAP_MALLOC         (MALLOC_CAP_INTERNAL | MALLOC_CAP_DEFAULT)
+
 // The password of the own access point: typed off the screen of the display into a phone, so without the
 // characters that look like another one (0 O, 1 l I). 31 characters, 10 of them: 49 bits.
 #define AP_PASSWORD_LENGTH  10
@@ -858,10 +889,14 @@ static void every_second(uint64_t now_ms)
 		.heap_min = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
 		.psram = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
 		.psram_min = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
+		.heap_malloc = (uint32_t)heap_caps_get_free_size(HEAP_MALLOC),
+		.heap_malloc_min = (uint32_t)heap_caps_get_minimum_free_size(HEAP_MALLOC),
 	};
 	int celsius = 0;
 	bool measured = board_temperature(&celsius);
 
+	// The walk through the heap, with interrupts off: before the lock is taken, never under it (HEAP_MALLOC)
+	told.heap_block = (uint32_t)heap_caps_get_largest_free_block(HEAP_MALLOC);
 	platform_lock();
 	// The network task writes its part under the lock: read there as well
 	told.ssid = platform_info.ssid;

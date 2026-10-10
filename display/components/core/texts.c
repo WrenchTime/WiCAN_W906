@@ -163,3 +163,52 @@ ring_t ring_state(conn_view_t view, const wican_state_t *state, int level, bool 
 	}
 	return ring;
 }
+
+const char *text_cerbo(cerbo_view_t view, bool safe_mode)
+{
+	switch(view)
+	{
+		// Two reasons, and the owner can do something about one of them alone
+		case CERBO_VIEW_OFF:        return safe_mode ? "Cerbo aus (sicherer Modus)" : "Cerbo nicht eingerichtet";
+		case CERBO_VIEW_NO_WIFI:    return "Kein WLAN – Cerbo nicht erreichbar";
+		// Without a session and with one that brings nothing yet the display knows the same: nothing
+		case CERBO_VIEW_CONNECTING:
+		case CERBO_VIEW_QUIET:      return "Warte auf Cerbo …";
+		case CERBO_VIEW_SILENT:     return "Cerbo sendet keine Werte – Flow Display aktiv?";
+		case CERBO_VIEW_NEWER:      return "Cerbo-Flow ist neuer als dieses Display";
+		case CERBO_VIEW_LIVE:       return "";
+		// CERBO_VIEW_UNREACHABLE, and what is no view: never the empty text, which would say that it delivers
+		default:                    return "Cerbo nicht erreichbar";
+	}
+}
+
+const char *text_cerbo_word(cerbo_view_t view)
+{
+	switch(view)
+	{
+		case CERBO_VIEW_OFF:        return "off";
+		case CERBO_VIEW_NO_WIFI:    return "no_wifi";
+		case CERBO_VIEW_CONNECTING: return "connecting";
+		case CERBO_VIEW_QUIET:      return "quiet";
+		case CERBO_VIEW_SILENT:     return "silent";
+		case CERBO_VIEW_NEWER:      return "newer";
+		case CERBO_VIEW_LIVE:       return "live";
+		default:                    return "unreachable";
+	}
+}
+
+const char *text_cerbo_short(cerbo_view_t view)
+{
+	switch(view)
+	{
+		// With an address, which the line this stands in has, a source is off for one reason alone
+		case CERBO_VIEW_OFF:        return "aus (sicherer Modus)";
+		case CERBO_VIEW_NO_WIFI:    return "kein WLAN";
+		case CERBO_VIEW_CONNECTING:
+		case CERBO_VIEW_QUIET:      return "wartet";
+		case CERBO_VIEW_SILENT:     return "keine Werte";
+		case CERBO_VIEW_NEWER:      return "Flow zu neu";
+		case CERBO_VIEW_LIVE:       return "liefert";
+		default:                    return "nicht erreichbar";
+	}
+}

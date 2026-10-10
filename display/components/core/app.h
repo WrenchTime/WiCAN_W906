@@ -26,6 +26,7 @@
 #include "guard.h"
 #include "scene.h"
 #include "web_json.h"
+#include "cerbo.h"
 
 /*
  * The display as a whole: every module of this directory wired together, still without hardware. The
@@ -34,7 +35,8 @@
  * against tools/w906/mock_wican.py (display/host).
  *
  * One lock: the platform holds it around every call of this module and around every direct call to
- * app->link and app->poll. Requests to the adapter are sent WITHOUT the lock.
+ * app->link, app->poll and app->cerbo. Requests to the adapter are sent WITHOUT the lock, and so is every
+ * byte to and from the broker of the Cerbo.
  *
  * Who calls what:
  *   the task that owns the screen   app_button() and app_encoder() every 20 ms, app_tap(), app_swipe(),
@@ -46,6 +48,8 @@
  *                                   while app_host() is not empty. poll_prepare() is called with every turn
  *                                   of the task, also without a network: it is what lets the time pass for a
  *                                   read of the fault memory that waits for the adapter (poll.h).
+ *   the task that talks to the      cerbo_next() and the cerbo_* reports on app->cerbo (cerbo.h), and
+ *   broker of the Cerbo GX          nothing else of the app: see "The second source" below
  *   both                            app_take_events()
  *   the web server                  app_web.h
  *
@@ -55,7 +59,7 @@
 
 #define APP_UPDATE_CONFIRM_MS   (300u * 1000u)  // an update nobody confirmed is taken back after this
 #define APP_UPLOAD_IDLE_MS      (30u * 1000u)   // a firmware upload that brings nothing for this long is over
-#define APP_INFO_LINES          14
+#define APP_INFO_LINES          16
 #define APP_INFO_SIZE           64
 #define APP_SWIPE_ROWS          3               // rows a vertical swipe moves the focus of a list
 
@@ -114,6 +118,8 @@ typedef struct
 	size_t old_length;
 	json_token_t *work;             // LAYOUT_TOKENS tokens; they stay with the app for every text it reads
 	int work_count;
+	const char *ap_ssid;            // the name of the own access point, of which the second source makes the
+	                                // name it gives the broker (cerbo_init()); NULL: it uses CERBO_CLIENT
 } app_boot_t;
 
 // What only the platform knows, for the info page. Texts are copied, as much of each as its field holds, cut
@@ -128,6 +134,10 @@ typedef struct
 	const char *slot;               // running app slot
 	const char *reset;              // reason of the last reset as a word
 	uint32_t heap, heap_min, psram, psram_min;
+	// The internal memory malloc() hands out, the lowest it was, and its largest free block. `heap` is no
+	// measure of that: it counts internal memory malloc() never gets (API.md). For GET /api/info alone: no
+	// info line shows the three.
+	uint32_t heap_malloc, heap_malloc_min, heap_block;
 	uint32_t reconnects;
 } app_platform_t;
 
@@ -144,6 +154,8 @@ typedef struct
 	settings_t settings;
 	net_profile_t profiles[NET_PROFILES_MAX];
 	int profile_count;
+
+	cerbo_t cerbo;                  // the second source: the Cerbo GX (see "The second source" below)
 
 	layout_t layout;                // the views in use
 	app_layout_source_t source;
@@ -202,17 +214,19 @@ typedef struct
 	char slot[16], reset[24];
 	int rssi;
 	uint32_t heap, heap_min, psram, psram_min, reconnects;
+	uint32_t heap_malloc, heap_malloc_min, heap_block;  // as app_platform_t has them
 	char info[APP_INFO_LINES][APP_INFO_SIZE];
 	const char *info_lines[APP_INFO_LINES];
 	int info_count;                 // lines of the info page in use
 } app_t;
 
 /*
- * The start. app_t is large (227136 bytes on a 64 bit host: the two layouts and the room for a third
- * 105360, the lines of the three fault memory lists 62376, the poll 39520, the layout text 16385; 227040
- * bytes calculated for a 32 bit target that aligns 64 bit numbers to 8 bytes, not measured on the device):
- * static storage or the external RAM, never a stack.
+ * The start. app_t is large (232768 bytes on a 64 bit host: the two layouts and the room for a third
+ * 105360, the lines of the three fault memory lists 62376, the poll 39520, the layout text 16385, the
+ * second source 5456; 232656 bytes calculated for a 32 bit target that aligns 64 bit numbers to 8 bytes,
+ * not measured on the device): static storage or the external RAM, never a stack.
  * - settings: settings_defaults(), then the stored text if settings_from_json() takes it
+ * - the second source: cerbo_init() with the address of the settings, safe_mode and ap_ssid; in no network
  * - profiles, bound id, catalogue and old list as stored (poll_init(), poll_stored()); link_init() with the
  *   profiles and safe_mode; knob with settings.reverse; hold, access and nav in their start states
  * - the built-in layout is parsed (has_builtin false if that fails or there is none: then the views are
@@ -236,6 +250,40 @@ void app_init(app_t *app, const app_boot_t *boot, uint64_t now_ms);
 
 // The choice above, made now, whatever the source is (app_web.h: the stored layout was forgotten)
 void app_choose_layout(app_t *app);
+
+/*
+ * The second source: the Cerbo GX (cerbo.h), whose broker a task of the platform talks to. It is switched
+ * on by the setting `cerbo` (settings.h: the address of the broker) and is off in safe mode whatever is
+ * stored; cerbo_on(&app->cerbo) tells. A display without that address is the display it was before there
+ * was a second source: no order ever comes from cerbo_next(), and nothing the app shows, answers or stores
+ * differs by a byte.
+ *
+ * What the platform does with it, each call under the lock and with a time read before the lock:
+ * - cerbo_next(&app->cerbo, now) in every round of its task, and what it orders carried out WITHOUT the
+ *   lock: for CERBO_DO_OPEN the address (cerbo_host()), for CERBO_DO_SEND the bytes (cerbo_out()) are copied
+ *   before the lock is given back
+ * - the reports cerbo_opened(), cerbo_bytes() - with a room of CERBO_TOKENS tokens of its own, not the one
+ *   of the app - and cerbo_down()
+ * - no app_net() behind any of it, and no app_take_events(): the source raises no event and stores nothing
+ *
+ * What the app does with it:
+ * - app_init(): see there. app_net(): cerbo_network() when link_in_network() changed - the source needs the
+ *   network, not the adapter, which may sleep while the display stays in the network of the router
+ * - app_web.h, POST /api/settings: cerbo_set_host() when the address the settings hold became another one
+ *   So cerbo_host(&app->cerbo) is settings.cerbo at every moment, and app->cerbo.network link_in_network()
+ *   behind every app_net().
+ * - the two info lines below, GET /api/info and GET /api/values (app_web.h) - while an address is set
+ *
+ * What the app does NOT take from it - the values of the Cerbo lie in a store of their own (cerbo.values),
+ * and no function of the fault memory is ever handed that store:
+ * - the fault memory: what may be read and cleared (dtc_flow_read_block(), dtc_flow_clear_block()), the
+ *   flow, the hold and the clear dialog see the adapter and its values (app->poll) alone
+ * - the poll and the link: no request to the adapter depends on the Cerbo, and no scan or join
+ * - the standby rule: values of the Cerbo are no reason to keep the light on - they are always there, and a
+ *   display on permanent power would never go dark. "showing" (app_backlight()) asks the adapter alone
+ * - app_busy(), the release of the web interface (access.h), nav and the idle times: a bundle is no input
+ * - the screens: no page shows a value of the Cerbo yet
+ */
 
 /*
  * A dark screen. Nobody acts on a screen he cannot see: an input - a press, a detent, a tap, a swipe - that
@@ -334,6 +382,11 @@ void app_tick(app_t *app, uint64_t now_ms);
  *   "WiCAN: 192.168.1.50"                       app_host()
  *   "WiCAN-ID: a1b2c3d4e5f6"                    poll.bound_id
  *   "WiCAN-Firmware: 4.21"                      fw of the last state of the adapter (conn_state())
+ *   "Cerbo: 192.168.88.2 (liefert)"             only while an address of the Cerbo is set (cerbo_host() is
+ *                                               not empty), and then also in safe mode: the address and
+ *                                               text_cerbo_short() of cerbo_view()
+ *   "MQTT: 12345 ok, 7 verworfen, 31 Verb."     only with the line before: cerbo.bundles, cerbo_refused(),
+ *                                               cerbo.sessions
  *   "Version: 0.1.0 (ota_0)"                    version and slot
  *   "Ansichten: W906 OM651 Standard (eingebaut)"    name and source of the layout in use: "gespeichert",
  *                                               "eingebaut", "erzeugt", "Vorschau"
@@ -367,6 +420,7 @@ void app_platform(app_t *app, const app_platform_t *platform);
 /*
  * Called by the network task after every report to app->link, after every poll_prepare() that handed out a
  * request and after every poll_apply():
+ * - cerbo_network() follows link_in_network(): called when that changed, and not otherwise
  * - poll_wifi() follows link_up(): up when the link is up, down when it is not
  * - link_answering() with the view of the connection
  * - the events of the poll become events of the app (BOUND, CATALOG, OLD); on POLL_EVENT_LISTS the lines
@@ -438,12 +492,15 @@ void app_scene(const app_t *app, scene_t *scene, uint64_t now_ms);
 // "showing" for the standby rule: the view of the connection is LIVE or SCAN, or it is NO_API and at least
 // one value is not gone (a firmware without the API tells nothing about the ignition; its values are the sign
 // of a vehicle that runs), or a screen other than the value pages is shown, or an overlay lies over it.
+// The second source is not asked: whatever the Cerbo delivers, the standby rule is the one of a display
+// without it.
 int app_backlight(const app_t *app, uint64_t now_ms);
 
 // true while the web interface must not restart the display or replace its firmware: a fault memory request
 // of the display is under way (the flow is READ_SENT, READING, CLEAR_SENT or CLEARING), the clear dialog
 // shows, or a firmware upload runs. A read that waits for an adapter that is out of reach (dtc_flow.h) is
 // under way like every other: the adapter scans on, and a restart would lose its list.
+// A session with the broker of the Cerbo is nothing a restart must wait for.
 bool app_busy(const app_t *app);
 
 // The events raised since the last call; they are cleared by it

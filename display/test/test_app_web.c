@@ -327,6 +327,7 @@ static bool only_room(void)
 #define MAY_NETWORKS    0x10u   // the stored networks, the link, and what the poll and the lines make of a network that is left
 #define MAY_SETTINGS    0x20u   // the settings and the direction of the knob
 #define MAY_UPLOAD      0x40u   // the upload: running, percent, time, version, and the version to go back to
+#define MAY_SOURCE      0x80u   // the second source: its address, and with another address everything it held
 
 // Since remember() nothing changed but the parts named, the time of the app is `time` if it may change, and
 // the release is byte for byte `release`: what one call of access.h made of it, or what it was
@@ -373,6 +374,7 @@ static bool nothing_but(unsigned may, const access_t *release, uint64_t time)
 		memcpy(&before.settings, &app->settings, sizeof(before.settings));
 		before.knob.reverse = app->knob.reverse;
 	}
+	if(may & MAY_SOURCE) memcpy(&before.cerbo, &app->cerbo, sizeof(before.cerbo));
 	if(may & MAY_UPLOAD)
 	{
 		before.uploading = app->uploading;
@@ -700,23 +702,23 @@ static void test_info_long(void)
 	app_platform(app, &platform);
 	get("/api/info");
 	// The names of app_web_info.json have 9 and 13 bytes; a quote is written with two
-	check(code == 200 && sound() && reply_length == strlen(fixture("info")) - 9 - 13 + 64 + 64 && reply_length == 788, "the info with two network names of 32 quotes each has 788 bytes: 200");
+	check(code == 200 && sound() && reply_length == strlen(fixture("info")) - 9 - 13 + 64 + 64 && reply_length == 853, "the info with two network names of 32 quotes each has 853 bytes: 200");
 	snprintf(written, sizeof(written), "\"wifi\":{\"ssid\":\"%s%s\",\"ip\":", "\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"", "\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"");
 	check(strstr(reply, written) != NULL, "the name of the network is written with a backslash before each of its 32 quotes");
 
-	// The version texts are the platform's and have no limit: with app_web_info.json, 682 bytes with a git
-	// text of 25, a git text of 19822 bytes fills the room to its last byte
+	// The version texts are the platform's and have no limit: with app_web_info.json, 747 bytes with a git
+	// text of 25, a git text of 19757 bytes fills the room to its last byte
 	released();
 	app_temperature(app, 47, true);
 	app->poll.http_ok = 12345;
 	app->poll.http_failed = 7;
-	memset(expected, 'g', 19823);
-	expected[19822] = '\0';
+	memset(expected, 'g', 19758);
+	expected[19757] = '\0';
 	app->git = expected;
 	get("/api/info");
 	check(code == 200 && sound() && reply_length == 20479, "an info of 20479 bytes fills the room to its last byte: 200");
-	expected[19822] = 'g';
-	expected[19823] = '\0';
+	expected[19757] = 'g';
+	expected[19758] = '\0';
 	get("/api/info");
 	check(code == 500 && sound() && strcmp(reply, "{\"error\":\"too_large\"}") == 0, "an info of 20480 bytes has no room for its zero: 500 too_large");
 	app->git = GIT;
@@ -3233,6 +3235,327 @@ static void test_stories(void)
 	      "the story of the first network: the info names the network and the adapter");
 }
 
+/* The second source: the Cerbo GX ------------------------------------------------------------------------ */
+
+// drive() on a display that has the address of a Cerbo that publishes, and the release given at 2100: three
+// bundles were taken by then, at 40, 1040 and 2040
+static void released_with_cerbo(void)
+{
+	garage();
+	cerbo_there();
+	start();
+	run(2100);
+	memset(&done, 0, sizeof(done));
+	memset(sent, 0, sizeof(sent));
+	app_do(app, NAV_DO_RELEASE_ON, now);
+}
+
+// How the answer with both stores full begins and ends
+#define BOTH_HEAD   "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"\\u001f\\u001f"
+#define BOTH_TAIL   ",\"GX_KEY_OF_32_BYTES_63_ABCDEFGHIJ\":{\"v\":-1.23456789e-308,\"age\":\"fresh\"}}}"
+
+static void test_cerbo(void)
+{
+	access_t release;
+	value_t *value;
+	char name[VALUE_NAME_SIZE];
+
+	// GET /api/info
+	released_with_cerbo();
+	app_temperature(app, 47, true);
+	app->poll.http_ok = 12345;
+	app->poll.http_failed = 7;
+	remember();
+	get("/api/info");
+	check(answered(200, "info_cerbo"), "app_web_info_cerbo.json: GET /api/info of a display with a Cerbo two seconds after the start: the object cerbo behind wican, the address in the settings");
+	check(untouched(), "GET /api/info of a display with a Cerbo changes nothing of the app, the second source included");
+	check(strlen(fixture("info_cerbo")) == strlen(fixture("info")) + 133, "but for that object and that member the answer is the one of a display without a Cerbo: app_web_info.json and 133 bytes");
+	get_at("/api/info", 12039);
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":6,"), "the info 9999 ms after the last bundle: the view of the Cerbo is the one at the time of the request, live");
+	get_at("/api/info", 12040);
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"quiet\",\"values\":6,"), "the info 10000 ms after the last bundle: quiet, and the six values still count");
+	get_at("/api/info", 62039);
+	check(answered_with(200, "\"view\":\"quiet\",\"values\":6,\"ok\":3,"), "the info 59999 ms after the last bundle: six values to show");
+	get_at("/api/info", 62040);
+	check(answered_with(200, "\"view\":\"quiet\",\"values\":0,\"ok\":3,"), "the info 60000 ms after the last bundle: none - what is counted is what the source has to show, not what its store holds");
+
+	// The counters, each under its name
+	released_with_cerbo();
+	app->cerbo.bundles = 11;
+	app->cerbo.refused_invalid = 1;
+	app->cerbo.refused_version = 20;
+	app->cerbo.refused_retained = 300;
+	app->cerbo.refused_topic = 4000;
+	app->cerbo.refused_long = 50000;
+	app->cerbo.sessions = 7;
+	app->cerbo.boots = 9;
+	app->cerbo.lag_ms = 1700;
+	app->cerbo.skipped = 123456;
+	app->cerbo.distrusted = 654321;
+	get("/api/info");
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":6,\"ok\":11,\"refused\":54321,\"connects\":7,\"boots\":9,\"lag_ms\":1700},\"layout\""),
+	      "the info of the Cerbo: bundles taken as ok, the messages refused for the five reasons together, sessions as connects, the runs of the flow, the lag of the last bundle");
+	app->cerbo.refused_invalid = UINT32_MAX;
+	get("/api/info");
+	check(answered_with(200, "\"refused\":4294967295,\"connects\":7,"), "the info of the Cerbo: more refused messages than 32 bit hold are the largest number");
+
+	// What the display shows of the source, as the word of texts.h
+	released_with_cerbo();
+	gx.flow = false;
+	run_to(31000);
+	get("/api/info");
+	check(answered_with(200, "\"view\":\"silent\",\"values\":6,\"ok\":3,\"refused\":0,\"connects\":1,"), "the info of a Cerbo whose broker answers and whose flow is silent: silent");
+	gx.there = false;
+	run(100);
+	get("/api/info");
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"connecting\","), "the info of a Cerbo whose broker went a moment ago: connecting");
+	run(15000);
+	get("/api/info");
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"unreachable\","), "the info of a Cerbo that is out of reach for fifteen seconds: unreachable");
+	wifi.in_range_count = 0;
+	lose_wifi();
+	get("/api/info");
+	check(answered_with(200, "\"wican\":{\"host\":\"\",\"id\":\"a1b2c3d4e5f6\",\"fw\":\"\",\"view\":\"no_wifi\"},\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"no_wifi\","),
+	      "the info without a network: no_wifi for the adapter and for the Cerbo");
+
+	// Safe mode: the address is stored, the source is off, and the info says both
+	factory();
+	strcpy(flash.settings, GX_SETTINGS);
+	flash.has_settings = true;
+	machine.safe_mode = true;
+	machine.rolled_back = true;
+	machine.update_pending = true;
+	start();
+	run(100);
+	app_temperature(app, 90, true);
+	app_temperature(app, 20, false);
+	get("/api/info");
+	check(answered(200, "info_cerbo_safe"), "app_web_info_cerbo_safe.json: the info of a display in safe mode that has the address of a Cerbo stored: the object with the view off");
+
+	// A display without the address answers what it answered before there was a second source
+	released();
+	app_temperature(app, 47, true);
+	app->poll.http_ok = 12345;
+	app->poll.http_failed = 7;
+	gx.there = true;
+	gx.flow = true;
+	// Whatever its source holds
+	app->cerbo.bundles = 11;
+	app->cerbo.sessions = 7;
+	app->cerbo.refused_topic = 3;
+	get("/api/info");
+	check(answered(200, "info") && strstr(reply, "cerbo") == NULL, "without the address of a Cerbo GET /api/info is app_web_info.json, byte for byte: no object cerbo, no member in the settings");
+
+	// GET /api/values
+	garage();
+	cerbo_there();
+	wican.config = other_config;
+	wican.values = other_values;
+	start();
+	run(2100);
+	remember();
+	get("/api/values");
+	check(answered(200, "values_cerbo"), "app_web_values_cerbo.json: GET /api/values of the other vehicle with a Cerbo at 2100: the view of the Cerbo, and its six values behind those of the adapter");
+	check(untouched(), "GET /api/values of a display with a Cerbo changes nothing of the app");
+	get_at("/api/values", 4999);
+	check(answered(200, "values_cerbo"), "the values of the adapter 2999 ms after they were seen, those of the Cerbo 2959 ms: all fresh");
+	get_at("/api/values", 5000);
+	check(answered(200, "values_cerbo_fresh"), "app_web_values_cerbo_fresh.json: 3000 ms after the values of the adapter were seen they are old; those of the Cerbo, 2960 ms old, are fresh");
+	get_at("/api/values", 7039);
+	check(answered(200, "values_cerbo_fresh"), "the values of the Cerbo 4999 ms after they were seen: still fresh");
+	get_at("/api/values", 7040);
+	check(answered_with(200, "\"INTAKE_TEMP\":{\"v\":19,\"age\":\"old\"},\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"old\"},") && reply_length == strlen(fixture("values_cerbo")) - 24,
+	      "the values of the Cerbo 5000 ms after they were seen: old, by the limits of their source - all twelve values are old now, two bytes less each");
+	get_at("/api/values", 12039);
+	check(answered_with(200, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"old\"},"),
+	      "10039 ms after the values of the adapter were seen they are left out, and the first value of the Cerbo has no comma in front; the Cerbo still counts as delivering");
+	get_at("/api/values", 12040);
+	check(answered(200, "values_cerbo_alone"), "app_web_values_cerbo_alone.json: 10000 ms after the last bundle the view of the Cerbo is quiet, its values old");
+	get_at("/api/values", 62039);
+	check(answered(200, "values_cerbo_alone"), "the values of the Cerbo 59999 ms after they were seen: still there");
+	get_at("/api/values", 62040);
+	check(answered_text(200, "{\"view\":\"live\",\"cerbo\":\"quiet\",\"values\":{}}"), "the values of the Cerbo 60000 ms after they were seen: left out, and the member cerbo stays");
+
+	// Without the address: the answer of before, whatever a broker would send
+	other_vehicle();
+	gx.there = true;
+	gx.flow = true;
+	run(3000);
+	get_at("/api/values", 2100);
+	check(strstr(reply, "cerbo") == NULL && strstr(reply, "GX_") == NULL && app->cerbo.values.count == 0, "without the address of a Cerbo GET /api/values names no view of it and none of its values");
+	other_vehicle();
+	// ... and whatever the store of its source holds
+	app->cerbo.values.count = 1;
+	strcpy(app->cerbo.values.items[0].name, "GX_BATT_SOC");
+	app->cerbo.values.items[0].seen_ms = 2000;
+	get("/api/values");
+	check(answered(200, "values"), "without the address of a Cerbo GET /api/values is app_web_values.json, byte for byte");
+
+	// Safe mode with the address: the member says off, and there are no values
+	garage();
+	cerbo_there();
+	machine.safe_mode = true;
+	wican.config = other_config;
+	wican.values = other_values;
+	start();
+	run(2100);
+	get("/api/values");
+	check(answered_with(200, "{\"view\":\"live\",\"cerbo\":\"off\",\"values\":{\"@BATT_V\":{\"v\":12.4,\"age\":\"fresh\"},") && reply_length == strlen(fixture("values")) + 14 && strstr(reply, "GX_") == NULL,
+	      "in safe mode with the address stored GET /api/values says that the Cerbo is off, and has the values of the adapter alone");
+
+	// Both stores filled to the edge: the answer has room
+	released_with_cerbo();
+	app->poll.values.count = VALUES_MAX;
+	app->cerbo.values.count = VALUES_MAX;
+	for(int i = 0; i < VALUES_MAX; i++)
+	{
+		value = &app->poll.values.items[i];
+		memset(value->name, 0x1F, VALUE_NAME_SIZE - 1);
+		value->name[VALUE_NAME_SIZE - 1] = '\0';
+		value->kind = VALUE_NUMBER;
+		value->number = -1.23456789e-308;
+		value->seen_ms = now;
+
+		value = &app->cerbo.values.items[i];
+		snprintf(name, sizeof(name), "GX_KEY_OF_32_BYTES_%02d_ABCDEFGHIJ", i);
+		strcpy(value->name, name);
+		value->kind = VALUE_NUMBER;
+		value->number = -1.23456789e-308;
+		value->seen_ms = now;
+	}
+	get("/api/values");
+	// {"view":"live","cerbo":"live","values":{ 64 of the adapter with names of 192 bytes, 64 of the Cerbo with keys of 32, 127 commas }}
+	check(code == 200 && sound() && reply_length == 40 + 64 * (2 + 192 + 37) + 64 * (2 + 32 + 37) + 127 + 2 && reply_length == 19497 && reply_length < APP_WEB_OUT_SIZE &&
+	      strncmp(reply, BOTH_HEAD, strlen(BOTH_HEAD)) == 0 && strcmp(reply + reply_length - strlen(BOTH_TAIL), BOTH_TAIL) == 0,
+	      "the values of both sources with every store full, every name of the adapter of control characters and every key of the Cerbo of 32 bytes: 19497 bytes, 200");
+	check(strlen(text_view_word(CONN_VIEW_AUTOPID_OFF)) == 11 && strlen(text_cerbo_word(CERBO_VIEW_UNREACHABLE)) == 11 && 19497 - 4 - 4 + 11 + 11 == 19511 && 19511 < APP_WEB_OUT_SIZE &&
+	      APP_WEB_OUT_SIZE == 20480,
+	      "with the longest words for the two views, eleven bytes each, the answer has the 19511 bytes app_web.h names: it has room in the 20480 bytes of an answer");
+
+	// POST /api/settings: the address
+	drive();
+	remember();
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(by_route && answered(403, "locked") && untouched(), "without the release web_route() refuses to set the address of the Cerbo");
+	released();
+	gx.there = true;
+	gx.flow = true;
+	run_to(10000);
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(answered(200, "settings_cerbo") && done.settings == 1 && strcmp(flash.settings, fixture("settings_cerbo")) == 0,
+	      "app_web_settings_cerbo.json: the address of the Cerbo is taken: the answer names it behind the five members, and the settings are stored that way");
+	check(strcmp(app->settings.cerbo, GX_HOST) == 0 && strcmp(cerbo_host(&app->cerbo), GX_HOST) == 0 && cerbo_on(&app->cerbo), "the second source has the address at once, and is on");
+	check(nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, 10000), "the address changes the settings, the second source, the time and the release, and nothing else");
+	check(gx.opens == 0, "the task of the source has not had its turn yet");
+	run(60);
+	check(gx.opens == 1 && strcmp(gx.opened, GX_HOST) == 0 && cerbo_view(&app->cerbo, now) == CERBO_VIEW_LIVE && app->cerbo.bundles == 1,
+	      "with the next rounds of its task the address is opened, without a wait, and the first bundle is taken");
+	get("/api/info");
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":6,\"ok\":1,\"refused\":0,\"connects\":1,\"boots\":1,\"lag_ms\":0},") &&
+	      answered_with(200, ",\"standby_s\":60,\"cerbo\":\"192.168.88.2\"}}"), "the info names the Cerbo and its address from then on");
+
+	// The same address again, and settings that do not name it
+	run_to(20000);
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(answered(200, "settings_cerbo") && nothing_but(MAY_CLOCK | MAY_SETTINGS, &release, 20000) && done.settings == 2 && app->cerbo.values.count == 6,
+	      "the address the source has, sent again: stored again as every accepted text, and not a byte of the source changes");
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"night\":30}");
+	check(answered_with(200, "{\"brightness\":80,\"night\":30,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"192.168.88.2\"}") &&
+	      nothing_but(MAY_CLOCK | MAY_SETTINGS, &release, 20000) && strcmp(app->settings.cerbo, GX_HOST) == 0,
+	      "settings that do not name the address keep it, and leave every byte of the source as it is");
+
+	// An address that is none
+	remember();
+	post("/api/settings", "{\"cerbo\":\"einstein\"}");
+	check(answered(400, "member_cerbo") && only_time() && done.settings == 3, "app_web_member_cerbo.json: a name as the address of the Cerbo: 400 with the name of the member, nothing changes");
+	remember();
+	post("/api/settings", "{\"cerbo\":\"192.168.88\"}");
+	check(answered(400, "member_cerbo") && only_time(), "three numbers as the address: 400, nothing changes");
+	remember();
+	post("/api/settings", "{\"cerbo\":3232258050}");
+	check(answered(400, "member_cerbo") && only_time(), "a number as the address: 400, nothing changes");
+	remember();
+	post("/api/settings", "{\"brightness\":50,\"cerbo\":\"192.168.88.256\",\"night\":4}");
+	check(answered(400, "member_cerbo") && only_time() && app->settings.brightness == 80, "a bad address between a good member and a bad one: 400 with cerbo, the first bad member of the text, and nothing of the text is taken");
+	remember();
+	post("/api/settings", "{\"night\":4,\"cerbo\":\"einstein\"}");
+	check(answered(400, "member_night") && only_time(), "a bad member before a bad address: 400 with that member");
+	check(strcmp(cerbo_host(&app->cerbo), GX_HOST) == 0 && cerbo_view(&app->cerbo, now) == CERBO_VIEW_LIVE && gx.opens == 1 && gx.closes == 0,
+	      "the session with the Cerbo went on through all of it");
+
+	// Another address: what the source held of the old one is gone at once
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"" GX_ELSE "\"}");
+	check(code == 200 && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, 20000) && strcmp(cerbo_host(&app->cerbo), GX_ELSE) == 0 && app->cerbo.values.count == 0,
+	      "another address changes the settings and the second source and nothing else: the source has it at once, and holds no value of the old one");
+	get("/api/values");
+	check(strstr(reply, "GX_") == NULL && answered_with(200, "\"cerbo\":\"quiet\",") , "the values of the old address are in no answer any more, from that request on");
+	run(40);
+	check(gx.closes == 1 && gx.opens == 2 && strcmp(gx.opened, GX_ELSE) == 0 && gx.unreachable == 1, "the task closes the connection to the old address and opens the new one, at which nothing listens");
+	get("/api/info");
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.9\",\"view\":\"connecting\",\"values\":0,\"ok\":10,\"refused\":0,\"connects\":1,"),
+	      "the info names the new address, and counts on: the ten bundles and the session of before are still counted");
+
+	// No address: the display is the one without a second source again
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"\",\"night\":25}");
+	check(answered(200, "settings_defaults") && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, 20040) && !cerbo_on(&app->cerbo) && cerbo_host(&app->cerbo)[0] == '\0' &&
+	      strcmp(flash.settings, fixture("settings_defaults")) == 0,
+	      "an empty address takes the Cerbo away: the answer and the stored settings are app_web_settings_defaults.json, byte for byte, and the source is off");
+	get("/api/info");
+	check(strstr(reply, "cerbo") == NULL && answered_with(200, "\"wican\":{\"host\":\"192.168.1.50\",\"id\":\"a1b2c3d4e5f6\",\"fw\":\"4.21\",\"view\":\"live\"},\"layout\":{"),
+	      "the info has no object cerbo and no member cerbo any more");
+	get("/api/values");
+	check(strstr(reply, "cerbo") == NULL && strstr(reply, "GX_") == NULL, "the values name no Cerbo any more");
+	run(30000);
+	check(gx.opens == 2 && app->cerbo.phase == CERBO_IDLE, "and its task gets no order any more");
+
+	// The release is needed, the knob is not; the display is not busy by its source
+	released_with_cerbo();
+	run_to(10000);
+	check(!app_busy(app) && app->cerbo.phase == CERBO_SESSION, "the scene of a session with the Cerbo: the display is not busy");
+	post("/api/reboot", "");
+	check(answered(200, "ok") && done.reboot == 1, "a session with the Cerbo keeps no restart away: POST /api/reboot is carried out");
+	released_with_cerbo();
+	gx.there = false;
+	run_to(10000);
+	post("/api/reset", "");
+	check(code == 202 && access_asking(&app->access, now) == ACCESS_ASK_RESET, "a Cerbo that is out of reach keeps no question away: POST /api/reset is asked");
+
+	// The release is not renewed by what the source does: it ends ten minutes after it was given
+	released_with_cerbo();
+	gx.noisy = true;
+	stride = 200;
+	run_to(601900);
+	stride = STEP_MS;
+	check(now == 601900 && app->cerbo.sessions > 50 && cerbo_refused(&app->cerbo) > 50, "the scene of ten minutes of bundles, rubbish and sessions that broke off behind a release given at 2100");
+	run_to(602080);
+	post("/api/settings", "{\"brightness\":40}");
+	check(!by_route && code == 200, "in its last 20 ms the release is still open");
+	released_with_cerbo();
+	gx.noisy = true;
+	stride = 200;
+	run_to(601900);
+	stride = STEP_MS;
+	run_to(602100);
+	remember();
+	post("/api/settings", "{\"brightness\":40}");
+	check(by_route && answered(403, "locked") && untouched(), "... and closed ten minutes after it was given: nothing the source took, refused or lost renewed it");
+}
+
 /* ---------------------------------------------------------------------------------------------------
  * Random sequences of requests and of inputs at the device
  *
@@ -3276,10 +3599,13 @@ enum
 	PROMISE_HELD,       // networks, settings and views in use and stored are what was sent and confirmed
 	PROMISE_MEMORY,     // no byte outside of the app is written
 	PROMISE_FRAME,      // a request that is accepted changes what app_web.h names for it, and nothing else
+	PROMISE_SOURCE,     // the second source is in the answers exactly while the display has its address, as the source is
+	PROMISE_APART,      // a round of the task of the second source touched the release, the fault memory, the poll or an event
 	PROMISES,
 };
 
-static const char *const PROMISE_NAMES[PROMISES] = {"answer", "closed", "refused", "reading", "asked", "knob", "events", "password", "dtc", "sound", "held", "memory", "frame"};
+static const char *const PROMISE_NAMES[PROMISES] = {"answer", "closed", "refused", "reading", "asked", "knob", "events", "password", "dtc", "sound", "held", "memory", "frame",
+                                                    "source", "apart"};
 
 typedef enum
 {
@@ -3320,6 +3646,16 @@ typedef struct
 	long pages_first[2];        // layouts taken that started at their first page: no page was shown before, none at the position
 	long passwords;             // answers searched for passwords
 	long leftovers;             // questions asked over what an earlier one left behind
+	// The second source
+	long infos[2];              // answers to GET /api/info without the object cerbo, and with it
+	long info_views[CERBO_VIEW_LIVE + 1];   // ... by the view it named
+	long values[2];             // answers to GET /api/values without the member cerbo, and with it
+	long gx_values;             // values of the Cerbo in those answers
+	long gx_given, gx_moved, gx_taken_away, gx_same;    // settings that were accepted and gave the address, another one, none, or the same again
+	long gx_bad;                // settings refused that named an address that is none
+	long gx_rounds;             // rounds of the task of the source that were watched
+	long gx_bundles, gx_refused, gx_sessions, gx_closed;    // what the source did (gx_seen)
+	long gx_restarts;           // restarts and factory resets the browser asked for while a session with the Cerbo stood
 } walk_result_t;
 
 // The layouts the browser of the walk sends
@@ -3378,6 +3714,10 @@ static const walk_settings_t WALK_SETTINGS[] = {
 };
 #define WALK_SETTINGS_GOOD  6
 
+// What a request for the settings does about the address of the Cerbo, drawn by a die of its own: nothing, the
+// address at which the broker listens, another one, none - or, in a text that is refused anyway, one that is none
+static const char *const WALK_ADDRESSES[] = {NULL, NULL, NULL, GX_HOST, GX_HOST, GX_ELSE, ""};
+
 // What can be seen of the display before a request, at the time the request counts for
 typedef struct
 {
@@ -3419,6 +3759,8 @@ static walk_result_t *tally;
 static uint32_t run_number, deed_number;
 static const char *doing = "";
 static uint32_t dice;
+// The Cerbo of a run has a die of its own: the browser and the driver roll the same numbers with it and without it
+static uint32_t gx_dice;
 static uint32_t gathered;       // the events carried out during the deed that is going on
 
 static void broke(int promise, const char *why)
@@ -3462,6 +3804,137 @@ static void swipe_anywhere(void)
 static void gather(uint32_t events)
 {
 	gathered |= events;
+}
+
+static int gx_pick(int count)
+{
+	gx_dice = gx_dice * 1103515245u + 12345u;
+	return (int)((gx_dice >> 8) % (uint32_t)count);
+}
+
+// Around every round of the task of the second source: the release, the fault memory, the requests to the
+// adapter and the events are not its business
+static void walk_gx(bool round_over)
+{
+	static access_t release;
+	static dtc_flow_phase_t flow;
+	static dtc_flow_send_t to_send;
+	static uint32_t events;
+	static int asked[POLL_DTC_CLEAR + 1];
+	static uint64_t input, clock;
+	static bool busy;
+
+	if(!round_over)
+	{
+		release = app->access;
+		flow = app->poll.flow.phase;
+		to_send = app->poll.flow.to_send;
+		events = app->events;
+		memcpy(asked, sent, sizeof(asked));
+		input = app->last_input_ms;
+		clock = app->clock_ms;
+		busy = app_busy(app);
+		tally->gx_rounds++;
+		return;
+	}
+	if(memcmp(&release, &app->access, sizeof(release)) != 0) broke(PROMISE_APART, "a round of the task of the second source changed the release");
+	if(flow != app->poll.flow.phase || to_send != app->poll.flow.to_send || memcmp(asked, sent, sizeof(asked)) != 0) broke(PROMISE_APART, "a round of the task of the second source moved the fault memory flow or sent a request to the adapter");
+	if(events != app->events || input != app->last_input_ms || clock != app->clock_ms || busy != app_busy(app)) broke(PROMISE_APART, "a round of the task of the second source raised an event, counted as an input, moved the time of the app or made it busy");
+	if(gx.strange != 0)
+	{
+		broke(PROMISE_SOURCE, "the second source sent what is no CONNECT, SUBSCRIBE or PINGREQ, sent without a connection, or opened a second one");
+		gx.strange = 0;
+	}
+}
+
+// The Cerbo of a run: now and then it goes, comes back, falls silent, sends rubbish, or all is well with it again
+static void walk_cerbo(void)
+{
+	switch(gx_pick(120))
+	{
+		case 0: gx.there = !gx.there; break;
+		// The flow falls silent, more often than anything else: a session that brings nothing is what takes longest to tell
+		case 1:
+		case 8:
+		case 9:
+		case 10: gx.flow = false; break;
+		case 2: gx.noisy = !gx.noisy; break;
+		case 3: gx.version = gx.version == CERBO_VERSION ? CERBO_VERSION + 1 : CERBO_VERSION; break;
+		case 4: gx.every_ms = gx.every_ms == 1000 ? 200 : 1000; break;
+		case 5:
+		case 6:
+		case 7:
+			gx.there = true;
+			gx.flow = true;
+			gx.noisy = false;
+			gx.version = CERBO_VERSION;
+			gx.every_ms = 1000;
+			break;
+		default: break;
+	}
+}
+
+// The second source in an answer to GET /api/info or GET /api/values that was read by sound() just now
+static void source_in_answer(kind_t kind, uint64_t time)
+{
+	const cerbo_t *cerbo = &app->cerbo;
+	bool has = told.settings.cerbo[0] != '\0';
+	int object = json_member(reply, answer_tokens, 0, "cerbo");
+	char text[40];
+	int64_t number;
+	int member;
+
+	if((object >= 0) != has) broke(PROMISE_SOURCE, "an answer names the Cerbo on a display without its address, or does not name it on one that has it");
+	if(kind == K_INFO)
+	{
+		uint64_t refused = (uint64_t)cerbo->refused_invalid + cerbo->refused_version + cerbo->refused_retained + cerbo->refused_topic + cerbo->refused_long;
+		int settings = json_member(reply, answer_tokens, 0, "settings");
+		cerbo_view_t shown = cerbo_view(cerbo, time);
+		const struct
+		{
+			const char *name;
+			uint64_t number;
+		} numbers[] = {{"values", (uint64_t)cerbo_shown(cerbo, time)}, {"ok", cerbo->bundles}, {"refused", refused > UINT32_MAX ? UINT32_MAX : refused}, {"connects", cerbo->sessions},
+		               {"boots", cerbo->boots}, {"lag_ms", cerbo->lag_ms}};
+
+		tally->infos[object >= 0]++;
+		if((settings >= 0 && json_member(reply, answer_tokens, settings, "cerbo") >= 0) != has) broke(PROMISE_SOURCE, "the settings in the info name an address of the Cerbo that is not set, or not the one that is");
+		if(object < 0) return;
+
+		tally->info_views[shown]++;
+		member = json_member(reply, answer_tokens, object, "host");
+		if(member < 0 || !json_text(reply, &answer_tokens[member], text, sizeof(text)) || strcmp(text, told.settings.cerbo) != 0) broke(PROMISE_SOURCE, "the info does not name the address of the Cerbo that was set");
+		member = json_member(reply, answer_tokens, object, "view");
+		if(member < 0 || !json_text_is(reply, &answer_tokens[member], text_cerbo_word(shown))) broke(PROMISE_SOURCE, "the info does not say what the display shows of the Cerbo at the time of the request");
+		if((shown == CERBO_VIEW_OFF) != machine.safe_mode) broke(PROMISE_SOURCE, "a display with the address of the Cerbo says off outside the safe mode, or something else in it");
+		for(int i = 0; i < COUNT(numbers); i++)
+		{
+			member = json_member(reply, answer_tokens, object, numbers[i].name);
+			if(member < 0 || !json_integer(reply, &answer_tokens[member], &number) || (uint64_t)number != numbers[i].number) broke(PROMISE_SOURCE, "a number of the Cerbo in the info is not the one of the source");
+		}
+		return;
+	}
+
+	// GET /api/values: the values of the Cerbo behind those of the adapter, as many as the source has to show
+	tally->values[object >= 0]++;
+	if(object >= 0 && !json_text_is(reply, &answer_tokens[object], text_cerbo_word(cerbo_view(cerbo, time)))) broke(PROMISE_SOURCE, "the values do not say what the display shows of the Cerbo at the time of the request");
+	member = json_member(reply, answer_tokens, 0, "values");
+	if(member >= 0)
+	{
+		int key = member + 1;
+		int of_cerbo = 0;
+
+		for(int i = 0; i < answer_tokens[member].size; i++)
+		{
+			bool with_prefix = json_text(reply, &answer_tokens[key], text, sizeof(text)) && cerbo_key(text);
+
+			if(with_prefix) of_cerbo++;
+			else if(of_cerbo > 0) broke(PROMISE_SOURCE, "a value of the adapter stands behind one of the Cerbo");
+			key += 1 + answer_tokens[key + 1].skip;
+		}
+		if(of_cerbo != (has ? cerbo_shown(cerbo, time) : 0)) broke(PROMISE_SOURCE, "the values of the Cerbo in the answer are not those the source has to show, or there are some without its address");
+		tally->gx_values += of_cerbo;
+	}
 }
 
 static seen_t look(uint64_t at_ms)
@@ -3574,6 +4047,12 @@ static void held(void)
 	   app->settings.reverse != told.settings.reverse || app->settings.standby_s != told.settings.standby_s) broke(PROMISE_HELD, "the settings in use are not those that were sent");
 	settings_to_json(&told.settings, text, sizeof(text));
 	if(flash.has_settings && strcmp(flash.settings, text) != 0) broke(PROMISE_HELD, "the settings in the flash are not those in use");
+	// The address of the Cerbo is the one that was sent last, and the second source has it and no other
+	if(memcmp(app->settings.cerbo, told.settings.cerbo, sizeof(told.settings.cerbo)) != 0) broke(PROMISE_HELD, "the address of the Cerbo in use is not the one that was sent");
+	if(strcmp(cerbo_host(&app->cerbo), told.settings.cerbo) != 0 || cerbo_on(&app->cerbo) != (told.settings.cerbo[0] != '\0' && !machine.safe_mode))
+	{
+		broke(PROMISE_SOURCE, "the second source does not have the address that was sent, or is on without one or in safe mode");
+	}
 	if(app->knob.reverse != told.settings.reverse) broke(PROMISE_HELD, "the knob does not turn the way the settings say");
 
 	if(flash.has_layout != (flash_text != NULL) || (flash_text != NULL && strcmp(flash.layout, flash_text) != 0)) broke(PROMISE_HELD, "the layout in the flash is not the one that was saved last");
@@ -3821,6 +4300,8 @@ static void request_deed(void)
 	uint32_t by_web = 0;
 	uint32_t ticket = 1 + (uint32_t)pick(4);
 	char ticket_target[40], version[40] = "", forgotten[NET_SSID_SIZE] = "";
+	char settings_body[160];
+	const char *address = NULL;
 	const char *forget_name;
 	earlier_t was = earlier();
 	bool forgot = false;
@@ -3886,6 +4367,17 @@ static void request_deed(void)
 			good = variant < WALK_SETTINGS_GOOD;
 			target = "/api/settings";
 			route = WEB_ROUTE_SETTINGS;
+			// The address of the Cerbo, as one member more of a text that is an object. A text that is taken gets an
+			// address that is one, or none; the text that is refused for its brightness gets one that is none behind it.
+			address = WALK_ADDRESSES[gx_pick(COUNT(WALK_ADDRESSES))];
+			if(!good) address = variant == WALK_SETTINGS_GOOD ? "192.168.88" : NULL;
+			if(address != NULL)
+			{
+				size_t length = strlen(body);
+
+				snprintf(settings_body, sizeof(settings_body), "%.*s%s\"cerbo\":\"%s\"}", (int)(length - 1), body, length > 2 ? "," : "", address);
+				body = settings_body;
+			}
 			break;
 		case K_REBOOT:      target = "/api/reboot"; route = WEB_ROUTE_REBOOT; break;
 		case K_RESET:       target = "/api/reset"; route = WEB_ROUTE_RESET; break;
@@ -3989,6 +4481,9 @@ static void request_deed(void)
 		if(code != 0 && strstr(reply, WALK_PASSWORDS[i]) != NULL) broke(PROMISE_PASSWORD, "an answer holds a password");
 	}
 	if(!discreet()) broke(PROMISE_PASSWORD, "an answer holds a password that is stored or asked for");
+	if((kind == K_INFO || kind == K_VALUES) && code == 200 && sound()) source_in_answer(kind, seen.time);
+	if(kind == K_SETTINGS && code == 400 && address != NULL && address[0] != '\0' && !settings_is_address(address)) tally->gx_bad++;
+	if((kind == K_REBOOT || kind == K_RESET) && code < 400 && app->cerbo.phase == CERBO_SESSION) tally->gx_restarts++;
 	if((app->poll.flow.phase != seen.phase && (app->poll.flow.phase == DTC_FLOW_READ_SENT || app->poll.flow.phase == DTC_FLOW_CLEAR_SENT)) ||
 	   (app->poll.flow.to_send != seen.to_send && app->poll.flow.to_send != DTC_FLOW_SEND_NOTHING) || sent[POLL_DTC_READ] != seen.reads || sent[POLL_DTC_CLEAR] != seen.clears)
 	{
@@ -4095,7 +4590,8 @@ static void request_deed(void)
 		case K_RESET:
 		case K_END:          may |= MAY_ASKED; break;
 		case K_FORGET:       may |= MAY_NETWORKS; break;
-		case K_SETTINGS:     may |= MAY_SETTINGS; break;
+		// With another address, or none, the second source changes with the settings
+		case K_SETTINGS:     may |= address != NULL && strcmp(address, told.settings.cerbo) != 0 ? MAY_SETTINGS | MAY_SOURCE : MAY_SETTINGS; break;
 		case K_BEGIN:        may |= MAY_UPLOAD; break;
 		default:             break;
 	}
@@ -4165,6 +4661,20 @@ static void request_deed(void)
 			if(WALK_SETTINGS[variant].night_mode >= 0) told.settings.night_mode = WALK_SETTINGS[variant].night_mode == 1;
 			if(WALK_SETTINGS[variant].reverse >= 0) told.settings.reverse = WALK_SETTINGS[variant].reverse == 1;
 			if(WALK_SETTINGS[variant].standby_s >= 0) told.settings.standby_s = (uint16_t)WALK_SETTINGS[variant].standby_s;
+			if(address != NULL)
+			{
+				if(strcmp(address, told.settings.cerbo) == 0) tally->gx_same++;
+				else
+				{
+					if(address[0] == '\0') tally->gx_taken_away++;
+					else if(told.settings.cerbo[0] == '\0') tally->gx_given++;
+					else tally->gx_moved++;
+					// Nothing of the old address is left to show
+					if(app->cerbo.values.count != 0 || cerbo_view(&app->cerbo, seen.time) == CERBO_VIEW_LIVE) broke(PROMISE_SOURCE, "the address changed and the source still holds values of the old one, or counts as delivering");
+				}
+				memset(told.settings.cerbo, 0, sizeof(told.settings.cerbo));
+				strcpy(told.settings.cerbo, address);
+			}
 			by_web = APP_EVENT_STORE_SETTINGS;
 			tally->settings++;
 			break;
@@ -4380,10 +4890,20 @@ static void walk_run(uint32_t number)
 	run_number = number;
 	deed_number = 0;
 	dice = number * 2654435761u + 40503u;
+	gx_dice = number * 2246822519u + 977u;
 	doing = "start";
 
 	if(chance(12)) factory();
 	else garage();
+	// The Cerbo is there and publishes; every second display was given its address before the run begins
+	gx.there = true;
+	gx.flow = true;
+	if(gx_pick(2) == 0)
+	{
+		strcpy(flash.settings, GX_SETTINGS);
+		flash.has_settings = true;
+	}
+	watch_gx = walk_gx;
 	if(chance(40))
 	{
 		strcpy(flash.profiles[flash.profile_count].ssid, "Camping");
@@ -4412,6 +4932,8 @@ static void walk_run(uint32_t number)
 	start();
 	tally->starts++;
 	told_begin();
+	// The settings of the flash are the ones the test holds
+	if(flash.has_settings) settings_from_json(&told.settings, flash.settings, strlen(flash.settings), NULL, 0, work, SETTINGS_TOKENS);
 	run(2100);
 	held();
 
@@ -4423,6 +4945,7 @@ static void walk_run(uint32_t number)
 	if(upload_next) app_do(app, NAV_DO_RELEASE_ON, given(now));
 	for(deed_number = 1; deed_number <= RUN_DEEDS; deed_number++)
 	{
+		walk_cerbo();
 		if(ask_next || upload_next || (!press_next && !tap_next && chance(62))) request_deed();
 		else device_deed();
 		held();
@@ -4455,6 +4978,11 @@ static void test_random_walk(void)
 		"in every random run networks, settings and views in use and in the flash are those that were sent and confirmed, also after a restart",
 		"in every random run no byte outside of the app is written",
 		"in every random run a request that is accepted changes exactly the parts of the app that app_web.h names for it, and leaves the release as one change or one question at its time does",
+		"in every random run GET /api/info and GET /api/values name the Cerbo exactly on a display that has its address - with the address, the view at the time of the request, the "
+		"numbers of the source and the values it has to show, behind those of the adapter -, the source has the address that was sent last and is on with one outside the safe mode, "
+		"and it sends nothing but CONNECT, SUBSCRIBE and PINGREQ",
+		"in every random run no round of the task of the second source changes the release, moves the fault memory flow, sends a request to the adapter, raises an event, counts as an "
+		"input, moves the time of the app or makes it busy",
 	};
 	// What the runs have to reach, by kind and answer: at least this many times
 	static const struct
@@ -4500,7 +5028,12 @@ static void test_random_walk(void)
 		close(ends[0]);
 		alarm(180);
 		tally = &result;
+		memset(&gx_seen, 0, sizeof(gx_seen));
 		for(uint32_t number = 1; number <= RUNS; number++) walk_run(number);
+		result.gx_bundles = gx_seen.taken;
+		result.gx_refused = gx_seen.refused;
+		result.gx_sessions = gx_seen.sessions;
+		result.gx_closed = gx_seen.closed;
 		fflush(stdout);
 		_exit(write(ends[1], &result, sizeof(result)) == (ssize_t)sizeof(result) ? 0 : 1);
 	}
@@ -4562,6 +5095,22 @@ static void test_random_walk(void)
 	      "or because they show none at that position");
 	check(complete && result.hot >= 200 && result.heat_refused >= 5 && result.taps_on_questions >= 10 && result.taps_on_updates >= 5,
 	      "the random runs send requests while the heat keeps the screen dark, let it switch the light off under questions that wait, and tap on questions the knob could have confirmed and on the update question");
+
+	printf("  random runs, the second source: GET /api/info without the Cerbo %ld times and with it %ld times, by its view:", result.infos[0], result.infos[1]);
+	for(int i = 0; i <= CERBO_VIEW_LIVE; i++) printf(" %ld", result.info_views[i]);
+	printf("; GET /api/values without it %ld times and with it %ld times, %ld values of the Cerbo in them\n", result.values[0], result.values[1], result.gx_values);
+	printf("  random runs, the second source: settings accepted that gave the address %ld times, another one %ld times, none %ld times, the same again %ld times; %ld refused with an address "
+	       "that is none; %ld rounds of its task watched; %ld bundles taken, %ld messages refused, %ld sessions, %ld orders to close; %ld restarts and resets asked for during a session\n",
+	       result.gx_given, result.gx_moved, result.gx_taken_away, result.gx_same, result.gx_bad, result.gx_rounds, result.gx_bundles, result.gx_refused, result.gx_sessions, result.gx_closed,
+	       result.gx_restarts);
+	// No display of these runs is in safe mode: the view OFF of a display with the address is not among them
+	reached = result.info_views[CERBO_VIEW_OFF] == 0;
+	for(int i = CERBO_VIEW_NO_WIFI; i <= CERBO_VIEW_LIVE; i++) reached = reached && result.info_views[i] >= 3;
+	check(complete && reached && result.infos[0] >= 100 && result.infos[1] >= 100 && result.values[0] >= 100 && result.values[1] >= 100 && result.gx_values >= 200,
+	      "the random runs ask for the info and the values of displays with and without the address of the Cerbo, in every view of it outside the safe mode, and get values of the Cerbo");
+	check(complete && result.gx_given >= 10 && result.gx_moved >= 5 && result.gx_taken_away >= 10 && result.gx_same >= 5 && result.gx_bad >= 5 && result.gx_rounds >= 100000 &&
+	      result.gx_bundles >= 2000 && result.gx_refused >= 100 && result.gx_sessions >= 100 && result.gx_closed >= 20 && result.gx_restarts >= 5,
+	      "the random runs give the address of the Cerbo, change it, take it away and send one that is none, while the Cerbo delivers, refuses, goes and comes back - and restart the display during its sessions");
 }
 
 int main(void)
@@ -4604,6 +5153,7 @@ int main(void)
 	test_last_millisecond();
 	test_time();
 	test_stories();
+	test_cerbo();
 	test_random_walk();
 
 	return test_end();

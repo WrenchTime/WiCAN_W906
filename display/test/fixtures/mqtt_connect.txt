@@ -1,0 +1,7 @@
+# CONNECT of the display "WiCAN-Display-C9A8" with a keep alive time of 30 s (MQTT 3.1.1, 3.1)
+10 1c                       # CONNECT; Remaining Length 28 = 10 + 2 + 16
+00 04 'MQTT'                # the protocol name
+04                          # the protocol level: MQTT 3.1.1
+02                          # the connect flags: clean session, and nothing else
+00 1e                       # keep alive 30 s
+00 10 'WiCANDisplayC9A8'    # the client id, 16 bytes

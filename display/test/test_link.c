@@ -1525,6 +1525,68 @@ static void scene_leaving(void)
 	next(7000);
 }
 
+// link.h: the display is in a network in LINK_JOINED and in LINK_UP, and nowhere else. What needs the network
+// and not the adapter asks this - the second source of values, whose broker is there while the adapter sleeps.
+static void test_in_network(void)
+{
+	static const struct
+	{
+		void (*scene)(void);
+		link_phase_t phase;
+		bool in_network;
+		const char *what;
+	} cases[] = {
+		{scene_idle, LINK_IDLE, false, "in a network: not without a stored profile (LINK_IDLE)"},
+		{scene_waiting, LINK_WAITING, false, "in a network: not while waiting for the next scan (LINK_WAITING)"},
+		{scene_scanning, LINK_SCANNING, false, "in a network: not while scanning (LINK_SCANNING)"},
+		{scene_joining, LINK_JOINING, false, "in a network: not while a join is under way (LINK_JOINING): it may fail"},
+		{scene_finding, LINK_JOINED, true, "in a network: joined, while the adapter is being looked for (LINK_JOINED)"},
+		{scene_asking_again, LINK_JOINED, true, "in a network: joined, while the adapter was not found and the display waits to ask again"},
+		{scene_up, LINK_UP, true, "in a network: up, with an adapter that was found by a query (LINK_UP)"},
+		{scene_up_given, LINK_UP, true, "in a network: up, with the adapter of the profile"},
+		{scene_up_finding, LINK_UP, true, "in a network: up, while a silent adapter is being looked for again"},
+		{scene_leave_due, LINK_JOINED, true, "in a network: still, when the profiles changed and the order to leave was not handed out yet"},
+		{scene_leaving, LINK_LEAVING, false, "in a network: not any more from the order to leave on (LINK_LEAVING)"},
+	};
+	link_t copy;
+	size_t i;
+
+	for(i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+	{
+		cases[i].scene();
+		copy = wifi;
+		check(wifi.phase == cases[i].phase && link_in_network(&wifi) == cases[i].in_network && memcmp(&copy, &wifi, sizeof(wifi)) == 0, cases[i].what);
+	}
+
+	// The adapter does not count: a display whose adapter sleeps is in the network of the router all the same
+	finding();
+	check(link_in_network(&wifi) && !link_up(&wifi) && link_host(&wifi)[0] == '\0', "in a network without an adapter: in the network, and not up");
+	link_not_found(&wifi, 6000);
+	next(16000);
+	link_not_found(&wifi, 17000);
+	check(link_in_network(&wifi) && !link_up(&wifi), "in a network in which the adapter is never found: in the network for as long as it lasts");
+	up_by_query();
+	link_answering(&wifi, false, 7000);
+	check(link_in_network(&wifi) && link_up(&wifi), "an adapter that does not answer takes nothing from the network the display is in");
+
+	// It ends with the network
+	up_by_query();
+	link_lost(&wifi, 7000);
+	check(!link_in_network(&wifi) && !link_up(&wifi), "in no network any more when the network is lost");
+	finding();
+	link_lost(&wifi, 7000);
+	check(!link_in_network(&wifi), "in no network any more when it is lost while the adapter is being looked for");
+	scene_leaving();
+	link_left(&wifi, 7100);
+	check(!link_in_network(&wifi), "in no network when the network was left");
+	joining(HOME, 1);
+	link_join_failed(&wifi, 4000);
+	check(!link_in_network(&wifi), "in no network when the join failed");
+	joining(HOME, 1);
+	link_joined(&wifi, GATEWAY, 4000);
+	check(link_in_network(&wifi), "in the network with the report that the join succeeded, before anything else is done");
+}
+
 static void report_scanned(uint64_t now_ms)
 {
 	link_scanned(&wifi, EVERYTHING, 5, now_ms);
@@ -2116,6 +2178,8 @@ typedef struct
 	long kept[2];               // calls behind which the access point is not kept, and is
 	long off_refused;           // requests to switch a kept access point off
 	long host_not_up;           // a host although not up, or up without one
+	long network_untold;        // link_in_network() is not: the model is in a network and no order to leave went out
+	long network[2];            // calls behind which the display is in no network, and in one
 	long scan_early;            // a scan sooner after a failure than the wait of the header
 	long stuck;                 // an honest driver did not get it up, or idle, in time
 	long handed[LINK_DO_AP_OFF + 1];
@@ -2604,6 +2668,11 @@ static void walk(uint32_t seed, walk_result_t *result)
 		result->phases[model_phase(&model)]++;
 		if(op >= OP_SCANNED && op <= OP_NOT_FOUND && op != OP_LOST && open_before == watch.open && phase_before == walked.phase) result->ignored++;
 		if((link_host(&walked)[0] != '\0') != link_up(&walked)) result->host_not_up++;
+		// By the model, written without the phases of the module: joined, and not on the way out
+		if(link_in_network(&walked) != (model.in_network && model.running != ACT_LEAVE)) result->network_untold++;
+		// ... and up is never without a network
+		if(link_up(&walked) && !link_in_network(&walked)) result->network_untold++;
+		result->network[link_in_network(&walked)]++;
 		// By the calls that were made alone: the safe mode of the start, the count of the list in use
 		if(link_ap_kept(&walked) != (watch.safe || watch.stored == 0)) result->kept_untold++;
 		result->kept[link_ap_kept(&walked)]++;
@@ -2703,6 +2772,9 @@ static void test_walk(void)
 	check(complete && result.kept_untold == 0, "in the walks link_ap_kept is true behind every call exactly in safe mode or without a profile in the list in use");
 	check(complete && result.kept_closed == 0, "in the walks no request to switch the access point off makes one unwanted that link_ap_kept told to be kept");
 	check(complete && result.host_not_up == 0, "in the walks link_host is empty exactly when link_up is false");
+	printf("  walk: in a network behind %ld calls, in none behind %ld\n", result.network[1], result.network[0]);
+	check(complete && result.network_untold == 0 && result.network[0] > 100000 && result.network[1] > 100000,
+	      "in the walks link_in_network is true behind every call exactly while the display has joined a network and was not ordered to leave it, with and without an adapter");
 	check(complete && result.scan_early == 0, "in the walks a scan never follows a scan without success or a failed join sooner than the wait of the header");
 	check(complete && result.stuck == 0, "in the walks an honest driver gets the link up from every state while a nameable profile is stored, and to rest without one");
 }
@@ -2733,6 +2805,7 @@ int main(void)
 	test_ap_kept_open();
 	test_ap_kept();
 	test_reports_that_do_not_match();
+	test_in_network();
 	test_clock();
 	test_clock_limits();
 	return test_end();

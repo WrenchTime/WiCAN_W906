@@ -236,3 +236,100 @@ MUTATIONS += [
     ("texts_ring_all_well_is_yellow", T, F, WELL, WELL.replace("RING_NONE", "RING_YELLOW")),
     ("texts_ring_live_falls_to_default", T, F, WELL + "\n\t\t\tbreak;\n", WELL + "\n\t\t\tring.kind = RING_RED;\n\t\t\tbreak;\n"),
 ]
+
+# The second source, the Cerbo GX: the lines of its three switches as they stand in the source
+CERBO_TEXTS = [
+    ("NO_WIFI", '"Kein WLAN – Cerbo nicht erreichbar"'),
+    ("SILENT", '"Cerbo sendet keine Werte – Flow Display aktiv?"'),
+    ("NEWER", '"Cerbo-Flow ist neuer als dieses Display"'),
+    ("LIVE", '""'),
+]
+CERBO_WORDS = [
+    ("OFF", '"off"'), ("NO_WIFI", '"no_wifi"'), ("CONNECTING", '"connecting"'), ("QUIET", '"quiet"'), ("SILENT", '"silent"'), ("NEWER", '"newer"'),
+    ("LIVE", '"live"'),
+]
+CERBO_BRIEFS = [
+    ("NO_WIFI", '"kein WLAN"'), ("SILENT", '"keine Werte"'), ("NEWER", '"Flow zu neu"'), ("LIVE", '"liefert"'),
+]
+
+
+def cerbo_line(name, returned):
+    return "\t\t" + ("case CERBO_VIEW_%s:" % name).ljust(28) + "return %s;\n" % returned
+
+
+for index, (name, returned) in enumerate(CERBO_TEXTS):
+    MUTATIONS.append(("texts_cerbo_%s_forgotten" % name.lower(), T, F, cerbo_line(name, returned), ""))
+    MUTATIONS.append(("texts_cerbo_%s_other_text" % name.lower(), T, F, cerbo_line(name, returned), cerbo_line(name, other(CERBO_TEXTS, index))))
+for index, (name, returned) in enumerate(CERBO_WORDS):
+    MUTATIONS.append(("texts_cerbo_word_%s_forgotten" % name.lower(), T, F, cerbo_line(name, returned), ""))
+    MUTATIONS.append(("texts_cerbo_word_%s_other_word" % name.lower(), T, F, cerbo_line(name, returned), cerbo_line(name, other(CERBO_WORDS, index))))
+for index, (name, returned) in enumerate(CERBO_BRIEFS):
+    MUTATIONS.append(("texts_cerbo_short_%s_forgotten" % name.lower(), T, F, cerbo_line(name, returned), ""))
+    MUTATIONS.append(("texts_cerbo_short_%s_other_word" % name.lower(), T, F, cerbo_line(name, returned), cerbo_line(name, other(CERBO_BRIEFS, index))))
+
+CERBO_OFF = '\t\tcase CERBO_VIEW_OFF:        return safe_mode ? "Cerbo aus (sicherer Modus)" : "Cerbo nicht eingerichtet";'
+CERBO_WAIT = '\t\tcase CERBO_VIEW_CONNECTING:\n\t\tcase CERBO_VIEW_QUIET:      return "Warte auf Cerbo …";\n'
+CERBO_DEFAULT = '\t\tdefault:                    return "Cerbo nicht erreichbar";'
+CERBO_WORD_DEFAULT = '\t\tdefault:                    return "unreachable";'
+BRIEF_OFF = '\t\tcase CERBO_VIEW_OFF:        return "aus (sicherer Modus)";'
+BRIEF_WAIT = '\t\tcase CERBO_VIEW_CONNECTING:\n\t\tcase CERBO_VIEW_QUIET:      return "wartet";\n'
+BRIEF_DEFAULT = '\t\tdefault:                    return "nicht erreichbar";'
+
+MUTATIONS += [
+    # a source that is off: two reasons, two texts
+    ("texts_cerbo_off_safe_mode_not_told", T, F, CERBO_OFF, CERBO_OFF.replace('"Cerbo aus (sicherer Modus)"', '"Cerbo nicht eingerichtet"')),
+    ("texts_cerbo_off_always_safe_mode", T, F, CERBO_OFF, CERBO_OFF.replace(' : "Cerbo nicht eingerichtet"', ' : "Cerbo aus (sicherer Modus)"')),
+    ("texts_cerbo_off_texts_swapped", T, F,
+     CERBO_OFF, CERBO_OFF.replace('safe_mode ? "Cerbo aus (sicherer Modus)" : "Cerbo nicht eingerichtet"', 'safe_mode ? "Cerbo nicht eingerichtet" : "Cerbo aus (sicherer Modus)"')),
+    ("texts_cerbo_off_forgotten", T, F,
+     CERBO_OFF, CERBO_OFF.replace('safe_mode ? "Cerbo aus (sicherer Modus)" : "Cerbo nicht eingerichtet"', 'safe_mode ? "Cerbo nicht erreichbar" : "Cerbo nicht erreichbar"')),
+    ("texts_cerbo_off_is_silent", T, F, CERBO_OFF, CERBO_OFF.replace(' : "Cerbo nicht eingerichtet"', ' : ""')),
+    ("texts_cerbo_off_other_words", T, F, CERBO_OFF, CERBO_OFF.replace("nicht eingerichtet", "nicht eingestellt")),
+    ("texts_cerbo_safe_mode_other_words", T, F, CERBO_OFF, CERBO_OFF.replace("(sicherer Modus)", "(Notbetrieb)")),
+    ("texts_cerbo_safe_mode_in_another_view", T, F,
+     cerbo_line("NO_WIFI", '"Kein WLAN – Cerbo nicht erreichbar"'),
+     cerbo_line("NO_WIFI", 'safe_mode ? "Cerbo aus (sicherer Modus)" : "Kein WLAN – Cerbo nicht erreichbar"')),
+
+    # waiting: without a session, and with one that brings nothing yet
+    ("texts_cerbo_connecting_forgotten", T, F, CERBO_WAIT, CERBO_WAIT.replace("\t\tcase CERBO_VIEW_CONNECTING:\n", "")),
+    ("texts_cerbo_quiet_forgotten", T, F, CERBO_WAIT, CERBO_WAIT.replace('\t\tcase CERBO_VIEW_QUIET:      return "Warte auf Cerbo …";\n', '\t\t                            return "Warte auf Cerbo …";\n')),
+    ("texts_cerbo_quiet_blames_the_flow", T, F,
+     CERBO_WAIT, '\t\tcase CERBO_VIEW_CONNECTING: return "Warte auf Cerbo …";\n\t\tcase CERBO_VIEW_QUIET:      return "Cerbo sendet keine Werte – Flow Display aktiv?";\n'),
+    ("texts_cerbo_connecting_is_unreachable", T, F,
+     CERBO_WAIT, '\t\tcase CERBO_VIEW_CONNECTING: return "Cerbo nicht erreichbar";\n\t\tcase CERBO_VIEW_QUIET:      return "Warte auf Cerbo …";\n'),
+    ("texts_cerbo_waiting_three_dots", T, F, CERBO_WAIT, CERBO_WAIT.replace("…", "...")),
+    ("texts_cerbo_waiting_other_words", T, F, CERBO_WAIT, CERBO_WAIT.replace("Warte auf Cerbo", "Verbinde mit Cerbo")),
+
+    # what is no view, and the view that has no line of its own
+    ("texts_cerbo_unknown_is_silent", T, F, CERBO_DEFAULT, CERBO_DEFAULT.replace('"Cerbo nicht erreichbar"', '""')),
+    ("texts_cerbo_unknown_is_off", T, F, CERBO_DEFAULT, CERBO_DEFAULT.replace('"Cerbo nicht erreichbar"', '"Cerbo nicht eingerichtet"')),
+    ("texts_cerbo_unreachable_other_words", T, F, CERBO_DEFAULT, CERBO_DEFAULT.replace("nicht erreichbar", "antwortet nicht")),
+    ("texts_cerbo_word_unknown_is_live", T, F, CERBO_WORD_DEFAULT, CERBO_WORD_DEFAULT.replace('"unreachable"', '"live"')),
+    ("texts_cerbo_word_unknown_is_off", T, F, CERBO_WORD_DEFAULT, CERBO_WORD_DEFAULT.replace('"unreachable"', '"off"')),
+    ("texts_cerbo_word_unreachable_other_word", T, F, CERBO_WORD_DEFAULT, CERBO_WORD_DEFAULT.replace('"unreachable"', '"not_reachable"')),
+    ("texts_cerbo_word_with_a_capital", T, F, cerbo_line("SILENT", '"silent"'), cerbo_line("SILENT", '"Silent"')),
+
+    # the bytes of the characters
+    ("texts_cerbo_hyphen_for_the_dash", T, F,
+     cerbo_line("NO_WIFI", '"Kein WLAN – Cerbo nicht erreichbar"'), cerbo_line("NO_WIFI", '"Kein WLAN - Cerbo nicht erreichbar"')),
+    ("texts_cerbo_text_too_long", T, F,
+     cerbo_line("SILENT", '"Cerbo sendet keine Werte – Flow Display aktiv?"'),
+     cerbo_line("SILENT", '"Der Cerbo sendet keine Werte – ist der Flow Display in Node-RED noch aktiv?"')),
+    ("texts_cerbo_middle_dot_in_a_text", T, F,
+     cerbo_line("SILENT", '"Cerbo sendet keine Werte – Flow Display aktiv?"'), cerbo_line("SILENT", '"Cerbo sendet keine Werte · Flow Display aktiv?"')),
+
+    # the words of the info line
+    ("texts_cerbo_short_off_safe_mode_not_told", T, F, BRIEF_OFF, BRIEF_OFF.replace('"aus (sicherer Modus)"', '"nicht eingerichtet"')),
+    ("texts_cerbo_short_off_forgotten", T, F, BRIEF_OFF + "\n", ""),
+    ("texts_cerbo_short_safe_mode_other_words", T, F, BRIEF_OFF, BRIEF_OFF.replace('"aus (sicherer Modus)"', '"aus"')),
+    ("texts_cerbo_short_connecting_forgotten", T, F, BRIEF_WAIT, BRIEF_WAIT.replace("\t\tcase CERBO_VIEW_CONNECTING:\n", "")),
+    ("texts_cerbo_short_quiet_forgotten", T, F, BRIEF_WAIT, BRIEF_WAIT.replace('\t\tcase CERBO_VIEW_QUIET:      return "wartet";\n', '\t\t                            return "wartet";\n')),
+    ("texts_cerbo_short_quiet_delivers", T, F, BRIEF_WAIT, '\t\tcase CERBO_VIEW_CONNECTING: return "wartet";\n\t\tcase CERBO_VIEW_QUIET:      return "liefert";\n'),
+    ("texts_cerbo_short_waiting_other_word", T, F, BRIEF_WAIT, BRIEF_WAIT.replace('"wartet"', '"verbindet"')),
+    ("texts_cerbo_short_unknown_delivers", T, F, BRIEF_DEFAULT, BRIEF_DEFAULT.replace('"nicht erreichbar"', '"liefert"')),
+    ("texts_cerbo_short_unknown_is_empty", T, F, BRIEF_DEFAULT, BRIEF_DEFAULT.replace('"nicht erreichbar"', '""')),
+    ("texts_cerbo_short_unreachable_other_words", T, F, BRIEF_DEFAULT, BRIEF_DEFAULT.replace('"nicht erreichbar"', '"nicht da"')),
+    ("texts_cerbo_short_word_too_long", T, F,
+     cerbo_line("SILENT", '"keine Werte"'), cerbo_line("SILENT", '"keine Werte, obwohl die Sitzung steht"')),
+]
+

@@ -71,6 +71,9 @@
 // Room for every answer but one: the layout text has at most 16384 bytes, the values 15062, a report 15001,
 // the two fault memory lists 10447, the catalogue 18433 while its texts need no \u00xx. A catalogue whose
 // names, units and classes are control characters would need 43777: it is answered 500 "too_large".
+// The values of a display with a second source have at most 19511 bytes: those of the adapter as above,
+// VALUES_MAX of the Cerbo with the longest keys and numbers there are (web_json.h; cerbo.h takes no key that
+// needs an escape), and the longest words for the two views.
 #define APP_WEB_OUT_SIZE    20480
 #define APP_WEB_UPLOAD_LEFT_S 300   // a firmware upload only begins while the release lasts at least this long
 
@@ -87,8 +90,16 @@ void app_web_request(const app_t *app, web_request_t *request, uint64_t now_ms);
  *                       text_view_word(), the source "stored", "builtin", "generated" or "preview" (empty for
  *                       a value that is none of app_layout_source_t), settings settings_to_json(). The
  *                       password of the own access point is not part of it.
+ *                       While an address of the Cerbo is set (cerbo_host() is not empty; also in safe mode)
+ *                       the object "cerbo": the address, text_cerbo_word() of cerbo_view(), cerbo_shown(),
+ *                       the counters cerbo.bundles, cerbo_refused(), cerbo.sessions and cerbo.boots, and
+ *                       cerbo.lag_ms. Without an address the answer is the one of a display without a
+ *                       second source, byte for byte.
  *   WEB_ROUTE_CATALOG   catalog_to_json()
- *   WEB_ROUTE_VALUES    web_values_json() with text_view_word() of the connection
+ *   WEB_ROUTE_VALUES    web_values_json() with text_view_word() of the connection. While an address of the
+ *                       Cerbo is set: web_values_cerbo_json() with the values of the Cerbo (cerbo.values)
+ *                       and text_cerbo_word() of cerbo_view() as well. The answer has room in every case:
+ *                       see APP_WEB_OUT_SIZE.
  *   WEB_ROUTE_LAYOUT    the text of the layout in use (app->layout_text) as it is. An empty one (app.h: a
  *                       text that could not be written) is no answer: 500 "too_large"
  *   WEB_ROUTE_DTC_LAST  web_dtc_last_json(): the list of the own read if there is one (poll.has_list; its
@@ -157,8 +168,11 @@ int app_web_wifi(app_t *app, web_route_t route, const char *body, size_t body_le
 
 // POST /api/settings: 403 "locked"; settings_from_json(); 400 {"error":"body","member":"<name>"} if it
 // refuses (the name is empty if the text as a whole is refused); else the settings are in use at once
-// (knob_set_reverse()), APP_EVENT_STORE_SETTINGS - also when the text changed nothing -, 200 with
-// settings_to_json().
+// (knob_set_reverse(), and cerbo_set_host() at the time of the request if the address they hold then is
+// another one than the second source has, or none: it forgets the values of the old address, cerbo.h; with
+// the same address nothing of the source changes), APP_EVENT_STORE_SETTINGS - also when the text changed nothing -, 200 with
+// settings_to_json(). The address of the Cerbo is set and taken away here alone, with the release and
+// without the knob: a wrong one locks nobody out.
 int app_web_settings(app_t *app, const char *body, size_t body_length, char *out, size_t *length,
                      uint64_t now_ms);
 
