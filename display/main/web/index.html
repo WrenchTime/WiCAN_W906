@@ -145,6 +145,8 @@ progress{width:100%}
 	<label class="c"><input type="checkbox" id="night_mode" class="chg"> Nachtmodus</label>
 	<label class="c"><input type="checkbox" id="reverse" class="chg"> Drehrichtung des Knopfs umkehren</label>
 	<label class="f">Bildschirm aus nach Sekunden ohne Eingabe, wenn es nichts zu zeigen gibt (0 = nie, höchstens 3600) <input type="number" id="standby_s" min="0" max="3600" step="1" class="chg"></label>
+	<label class="f">Cerbo (IP-Adresse des MQTT-Brokers, leer = aus) <input id="cerbo" maxlength="15" autocomplete="off" autocapitalize="none" spellcheck="false" class="chg"></label>
+	<p id="cerbonow" class="dim" hidden></p>
 	<p class="why dim"></p>
 	<p id="smsg" class="msg" hidden></p>
 	<h2>Neustart</h2>
@@ -189,6 +191,11 @@ const VIEWS = {
 	scan: "Live-Werte angehalten (Fehlerspeicher-Scan)", ecu_offline: "Zündung aus – Motorsteuergerät offline"
 };
 const SOURCES = {stored: "gespeichert", builtin: "eingebaut", generated: "aus dem Katalog erzeugt", preview: "Vorschau"};
+// What the display says about its second source, the Cerbo GX: cerbo.view of GET /api/info
+const CERBO = {
+	off: "aus (sicherer Modus)", no_wifi: "kein WLAN", connecting: "wartet", unreachable: "nicht erreichbar", quiet: "wartet",
+	silent: "keine Werte – läuft der Flow „Display“?", newer: "der Flow ist neuer als dieses Display", live: "liefert"
+};
 // The refusals of display/API.md
 const REFUSALS = {
 	locked: "Der Web-Zugriff ist nicht frei. Am Display: Menü > Web-Zugriff freigeben.",
@@ -228,7 +235,7 @@ const PROBLEMS = {
 	"arc or bar without min and max, shown as number": "Bogen und Balken brauchen Min und Max, sonst wird eine Zahl gezeigt",
 	"state without map, shown as number": "Text je Wert braucht Texte, sonst wird eine Zahl gezeigt"
 };
-const SETTINGS = ["brightness", "night", "night_mode", "reverse", "standby_s"];
+const SETTINGS = ["brightness", "night", "night_mode", "reverse", "standby_s", "cerbo"];
 
 const S = {
 	info: null, // the last answer of GET /api/info
@@ -1349,6 +1356,7 @@ function device()
 	const wifi = part(info, "wifi");
 	const wican = part(info, "wican");
 	const http = part(info, "http");
+	const cerbo = info.cerbo;
 	const up = Number(info.up);
 	const kb = count => Math.round(Number(count) / 1024) + " KB";
 	const rows = [
@@ -1371,6 +1379,9 @@ function device()
 		box.appendChild(el("dd", {}, [row[1]]));
 	});
 
+	// Only a display that was given the address of a Cerbo names one: without it there is no line
+	$("cerbonow").hidden = !isObject(cerbo);
+	if(isObject(cerbo)) $("cerbonow").textContent = "Cerbo " + text(cerbo.host) + ": " + word(CERBO, cerbo.view) + " · Werte: " + text(cerbo.values) + " · Bündel: " + text(cerbo.ok) + " gelesen, " + text(cerbo.refused) + " verworfen · Verbindungen: " + text(cerbo.connects) + " · Verzug: " + text(cerbo.lag_ms) + " ms";
 	// The form follows the display when the settings changed there, not while somebody is setting them here
 	if(isObject(info.settings) && JSON.stringify(info.settings) !== S.settings) fillSettings(info.settings);
 	uploadGate();
@@ -1394,10 +1405,10 @@ async function setting(name)
 	const request = {};
 	let r = null;
 
-	request[name] = input.type === "checkbox" ? input.checked : Number(input.value);
-	// An emptied field is no 0
-	if(input.value !== "") r = await api("POST", "/api/settings", JSON.stringify(request));
-	if(r && r.status !== 200) refused("smsg", r, true, "Helligkeit 5 bis 100, Bildschirm aus 0 bis 3600 Sekunden, ganze Zahlen.");
+	request[name] = input.type === "checkbox" ? input.checked : input.type === "text" ? input.value.trim() : Number(input.value);
+	// An emptied field is no 0 - but an emptied address is one: it switches the Cerbo off
+	if(input.value !== "" || input.type === "text") r = await api("POST", "/api/settings", JSON.stringify(request));
+	if(r && r.status !== 200) refused("smsg", r, true, "Helligkeit 5 bis 100, Bildschirm aus 0 bis 3600 Sekunden, ganze Zahlen; Cerbo als IP-Adresse wie 192.168.88.2.");
 	else tell("smsg");
 	fillSettings(r && r.status === 200 ? r.body : JSON.parse(S.settings || "{}"));
 }

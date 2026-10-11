@@ -96,7 +96,11 @@ NET_TURNED = "\t\tif(turns != net_seen)\n"
 NET_STALLED = "\t\telse if(now_ms - net_seen_ms >= NET_STALL_MS)\n"
 CARRY_OUT = "\t\t\tcarry_out(job, platform_now_ms());\n\t\t\tif(job->events & RESTART_EVENTS)\n"
 
+# start(): what the app is told
+CERBO_NAME = "\tboot.ap_ssid = ap_ssid;\n"
+
 MUTATIONS = [
+    ("main_second_source_named_like_every_display", S, F, CERBO_NAME, ""),
     # what an event names, copied when it is taken
     ("main_wifi_list_not_copied", S, F, COPY_WIFI, ""),
     ("main_wifi_count_not_copied", S, F, COPY_WIFI_COUNT, ""),

@@ -2,7 +2,7 @@
 # and runs it against the real core, with stand-ins for ESP-IDF (idf/, and what the simulation itself says
 # of the driver, the server, the flash, the boot loader and FreeRTOS).
 #
-#   make                    build and run the four simulations; the output of each is build/<name>.log
+#   make                    build and run the five simulations; the output of each is build/<name>.log
 #   make build/net_sim      build one
 #   make clean
 #
@@ -28,9 +28,10 @@ EXTRA   ?=
 MAIN    := ../../main
 CORE    := ../../components/core
 BUILD   := build
-SIMS    := main_sim net_sim web_sim screen_sim
+SIMS    := main_sim net_sim web_sim screen_sim gx_sim
 
-# idf/ first: its headers stand for those of ESP-IDF and of LVGL, and its sys/socket.h for that of lwIP.
+# idf/ first: its headers stand for those of ESP-IDF and of LVGL, and its sys/socket.h for that of lwIP
+# (gx_sim.c asks it to step aside: it plays the socket calls of gx.c itself, with the types of the PC).
 # board.h, store.h and ui.h are the real ones: main.c and screen.c are run against what they promise.
 INCLUDES := -Iidf -I$(MAIN) -I$(CORE) -I../../components/board -I../../components/store -I../../components/ui
 

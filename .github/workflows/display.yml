@@ -37,7 +37,7 @@ jobs:
       - name: Red proof counter-check (a change without effect is reported)
         run: python redproof.py --selftest
         working-directory: display/test
-      - name: Platform simulations (main.c, screen.c, net.c and web.c against the core, with stand-ins for ESP-IDF)
+      - name: Platform simulations (main.c, screen.c, net.c, web.c and gx.c against the core, with stand-ins for ESP-IDF)
         # Twice: as a PC has char, and as the ESP32 has it. The mutations of the platform files
         # (display/host/platform/redproof.py) are not run here.
         run: |
@@ -45,6 +45,9 @@ jobs:
           make clean
           make EXTRA=-funsigned-char
         working-directory: display/host/platform
+      - name: gx_live builds (main/gx.c against the sockets of a PC; not run, there is no broker here)
+        run: make
+        working-directory: display/host/gx_live
 
   # Every removed rule has to make a test fail. Thousands of builds: eight parts side by side.
   red-proof:
@@ -110,6 +113,12 @@ jobs:
       - name: LVGL is compiled with the assertion handler of components/ui (abort, not a loop)
         run: python3 display/tools/check_build.py --commands display/build/compile_commands.json
 
+      # The display reads the broker of a Cerbo GX with a reader of its own that cannot publish
+      # (components/core/mqtt_sub.h). That no source calls the MQTT client of ESP-IDF, which can, is not
+      # seen at a build that succeeds: the map of the linker names every object that was taken
+      - name: No MQTT client is linked into the firmware
+        run: python3 display/tools/check_build.py --map display/build/wican-display.map
+
       # The page is embedded twice, plain and compressed; the compressed one is made by the build. That the
       # build went through does not show that what it embedded unpacks to the page
       - name: The compressed page of the build unpacks to the page
@@ -138,8 +147,31 @@ jobs:
             display/build/ota_data_initial.bin
             display/build/flash_args
 
-      # Counter-check of the step above with the real build system, behind the upload: nothing is built
-      # from here on. Without the line of components/ui/CMakeLists.txt the check has to fail.
+      # Counter-check of the check of the map with the real build system, behind the upload: what is built
+      # from here on is thrown away. A source of main/ that calls the MQTT client of ESP-IDF - by a
+      # declaration of its own, so no CMakeLists.txt has to name the component - has to make the check fail.
+      - name: Counter-check, a source calls the MQTT client
+        run: |
+          printf '\nextern void *esp_mqtt_client_init(const void *config);\n\nvoid *gx_counter_check(void)\n{\n\treturn esp_mqtt_client_init(0);\n}\n' >> display/main/gx.c
+          tail -n 7 display/main/gx.c
+
+      - name: Counter-check, built again with that source
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.2
+          target: esp32s3
+          path: display
+          command: idf.py build
+
+      - name: Counter-check, the client is reported
+        run: |
+          if python3 display/tools/check_build.py --map display/build/wican-display.map; then
+            echo "the check did not notice the MQTT client in the firmware"
+            exit 1
+          fi
+
+      # Counter-check of the check of the definition, the same way: nothing is built from here on.
+      # Without the line of components/ui/CMakeLists.txt the check has to fail.
       - name: Counter-check, the definition is taken away
         run: |
           grep -c "LV_ASSERT_HANDLER=if" display/components/ui/CMakeLists.txt

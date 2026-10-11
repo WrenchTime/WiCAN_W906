@@ -30,6 +30,8 @@
  *                   the adapter are sent WITHOUT the lock).
  *   the poll        poll_prepare() and poll_apply() are the real ones, called through a wrapper that looks
  *                   at what net.c hands over
+ *   the second      gx_start() of gx.c is a stand-in that counts: the task of that source has a simulation
+ *   source          of its own (gx_sim.c), and what is net.c's is when it asks for the task
  *
  * What this cannot see, in short: nothing of ESP-IDF runs, so every "the driver does" above is the model.
  * The event loop is the same thread as the task, so an event never arrives in the middle of a function.
@@ -48,11 +50,18 @@ static bool sim_poll_prepare(poll_t *poll, uint64_t now_ms, poll_request_t *requ
 static void sim_poll_apply(poll_t *poll, const poll_request_t *request, int status, const char *body, size_t length,
                            const char *seq_header, uint64_t now_ms, json_token_t *work, int work_count);
 
+// ... and this one of the second source, which the wrapper looks at as well: whether the lock is held
+#include "cerbo.h"
+
+static bool sim_cerbo_on(const cerbo_t *cerbo);
+
 #define poll_prepare sim_poll_prepare
 #define poll_apply sim_poll_apply
+#define cerbo_on sim_cerbo_on
 #include "net.c"
 #undef poll_prepare
 #undef poll_apply
+#undef cerbo_on
 
 #define FIXTURES    "../../../tools/w906/fixtures"
 
@@ -117,6 +126,36 @@ void *heap_caps_malloc(size_t size, uint32_t caps)
 	// The room of net.c is too large for the internal RAM
 	CHECK(caps == MALLOC_CAP_SPIRAM);
 	return sim_alloc(size);
+}
+
+/* The task of the second source (gx.c): whether net.c asks for it, and when ---------------------------- */
+
+static int gx_calls;            // of gx_start()
+static int gx_tasks;            // ... that created the task
+static esp_err_t gx_result = ESP_OK;
+static bool gx_on_seen;         // what net.c was last told about the source
+
+esp_err_t gx_start(void)
+{
+	// It allocates and creates a task: not under the lock
+	CHECK(locked == 0);
+	// Only while the source is on - an address of the Cerbo is set, and it is not the safe mode -, and there
+	// is never a second task
+	CHECK(gx_on_seen && gx_tasks == 0);
+	gx_calls++;
+	if(gx_result == ESP_OK)
+	{
+		gx_tasks++;
+	}
+	return gx_result;
+}
+
+static bool sim_cerbo_on(const cerbo_t *cerbo)
+{
+	// The address lies in the app and changes with it
+	CHECK(locked == 1 && cerbo == &platform_app->cerbo);
+	gx_on_seen = cerbo_on(cerbo);
+	return gx_on_seen;
 }
 
 /* The world: WiFi -------------------------------------------------------------------------------------- */
@@ -1064,6 +1103,10 @@ static void run(uint64_t ms)
 	CHECK(locked == 0);
 }
 
+// What the next start() finds stored besides the networks, and whether it is a start in safe mode
+static const char *start_settings;
+static bool start_safe_mode;
+
 // A start of the app with these networks stored. reuse: the same display, started again - the app is new,
 // net.c and the driver are as they were, but for the access point, which is closed after net_start().
 static void start(const net_profile_t *profiles, int count, bool reuse)
@@ -1085,6 +1128,8 @@ static void start(const net_profile_t *profiles, int count, bool reuse)
 	boot.git = "sim";
 	boot.profiles = profiles;
 	boot.profile_count = count;
+	boot.settings_json = start_settings;
+	boot.safe_mode = start_safe_mode;
 	boot.work = work;
 	boot.work_count = LAYOUT_TOKENS;
 	app_init(platform_app, &boot, sim_ms);
@@ -1465,6 +1510,57 @@ static void test_reason(void)
 	CHECK(drv.refused == 0 && events_missed == 0);
 }
 
+// The task of the second source is created when that source is on for the first time, and only then
+static void test_gx(void)
+{
+	static net_profile_t right[1] = { { "Werkstatt", "geheim1234", "192.168.1.50" } };
+	int calls;
+
+	// Through everything up to here the display had no address of a Cerbo: nobody asked for the task
+	CHECK(gx_calls == 0);
+
+	// An address is stored, and the display starts in safe mode: the source is off, and there is no task
+	start_settings = "{\"cerbo\":\"192.168.88.2\"}";
+	start_safe_mode = true;
+	start(right, 1, true);
+	run(5000);
+	CHECK(strcmp(platform_app->cerbo.host, "192.168.88.2") == 0 && gx_calls == 0);
+
+	// A start without an address; it comes later, from the web interface (app_web.h). The task cannot be
+	// created at first: that is said once, and every round tries again
+	start_settings = NULL;
+	start_safe_mode = false;
+	start(right, 1, true);
+	run(5000);
+	CHECK(gx_calls == 0);
+	gx_result = ESP_ERR_NO_MEM;
+	sim_log_wanted = "the task of the Cerbo source cannot be created";
+	sim_log_found = 0;
+	platform_lock();
+	cerbo_set_host(&platform_app->cerbo, "192.168.88.2", sim_ms);
+	platform_unlock();
+	run(2000);
+	CHECK(gx_calls >= 5 && gx_tasks == 0 && sim_log_found == 1);
+	sim_log_wanted = NULL;
+	gx_result = ESP_OK;
+	run(1000);
+	CHECK(gx_tasks == 1);
+
+	// Once it exists nobody asks again: not later, and not when the address goes and comes back
+	calls = gx_calls;
+	run(5000);
+	platform_lock();
+	cerbo_set_host(&platform_app->cerbo, "", sim_ms);
+	platform_unlock();
+	run(2000);
+	platform_lock();
+	cerbo_set_host(&platform_app->cerbo, "192.168.88.2", sim_ms);
+	platform_unlock();
+	run(3000);
+	CHECK(gx_calls == calls && gx_tasks == 1);
+	CHECK(drv.refused == 0 && events_missed == 0);
+}
+
 int main(void)
 {
 	air[0] = (air_t){ "Werkstatt", "geheim1234", { 192, 168, 1, 77 }, { 192, 168, 1, 1 } };
@@ -1482,6 +1578,7 @@ int main(void)
 	test_watch_and_store();
 	test_access_point_refused();
 	test_reason();
+	test_gx();
 
 	printf("%d turns of the task in %llu s\n", turns, (unsigned long long)(sim_ms / 1000));
 	return sim_end();

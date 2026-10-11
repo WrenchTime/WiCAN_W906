@@ -69,12 +69,28 @@ AP_GIVEN = "\tESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_config), T
 START_STA = "\tESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, \"WiFi mode\");\n"
 MDNS_NAME = "\t\terr = mdns_hostname_set(WEB_HOST_NAME);\n"
 
+# The task of the second source
+GX_ASKED = "\tplatform_lock();\n\ton = cerbo_on(&platform_app->cerbo);\n\tplatform_unlock();\n"
+GX_OFF = "\tif(!on)\n\t{\n\t\treturn;\n\t}\n\n\tif(gx_start() == ESP_OK)"
+GX_STARTED = "\tif(gx_start() == ESP_OK)\n"
+GX_ONCE = "\t\tgx_made = true;\n"
+GX_SAID = "\t\tgx_owed = true;\n"
+
 MUTATIONS = [
     # what the info page shows
     ("net_access_point_address_not_shown", S, F, INFO_IP, "has_ip ? sta_ip : \"\""),
     ("net_no_app_net_after_a_report", S, F, REPORT_END,
      "\tplatform_events();\n\tinfo_fill();\n\tplatform_unlock();\n}\n\nstatic void signal_read"),
     ("net_signal_and_count_not_shown", S, F, SIGNAL_SHOWN, "\tsignal_read();\n}"),
+
+    # the task of the second source
+    ("net_task_of_the_cerbo_without_an_address", S, F, GX_OFF, "\t(void)on;\n\n\tif(gx_start() == ESP_OK)"),
+    ("net_source_asked_without_the_lock", S, F, GX_ASKED, "\ton = cerbo_on(&platform_app->cerbo);\n"),
+    ("net_task_of_the_cerbo_made_under_the_lock", S, F, GX_ASKED + "\tif(!on)\n\t{\n\t\treturn;\n\t}\n",
+     "\tplatform_lock();\n\ton = cerbo_on(&platform_app->cerbo);\n\tif(!on)\n\t{\n\t\tplatform_unlock();\n\t\treturn;\n\t}\n"),
+    ("net_task_of_the_cerbo_made_again", S, F, GX_ONCE, ""),
+    ("net_task_of_the_cerbo_not_tried_again", S, F, GX_STARTED, "\tif(gx_start() != ESP_FAIL)\n"),
+    ("net_failed_task_of_the_cerbo_said_with_every_round", S, F, GX_SAID, ""),
 
     # the conversation with the adapter
     ("net_every_connection_is_a_reconnect", S, F, COUNT_RECONNECT, "\t\t\treconnects++;"),

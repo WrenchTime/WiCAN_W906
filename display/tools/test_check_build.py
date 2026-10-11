@@ -22,6 +22,32 @@ def command(source, *options):
             "command": " ".join(("xtensa-esp32s3-elf-gcc", "-DESP_PLATFORM") + options + ("-c", source))}
 
 
+def linker_map(count=300, taken=(), discarded=(), own=True):
+    """The map of a build as GNU ld writes it, in the parts check_build.py reads: `count` objects of the
+    archives of ESP-IDF and of the display, those of `taken` among them, and those of `discarded` with
+    sections that were thrown away. Every archive of the build is loaded, the MQTT client of ESP-IDF too."""
+    placed = ["esp-idf/core/libcore.a(mqtt_sub.c.obj)", "esp-idf/core/libcore.a(cerbo.c.obj)", "esp-idf/main/libmain.a(gx.c.obj)"]
+    placed += ["esp-idf/lwip/liblwip.a(file_%d.c.obj)" % number for number in range(count - len(placed) - (1 if own else 0))]
+    if own:
+        placed.append("esp-idf/main/libmain.a(main.c.obj)")
+    placed += list(taken)
+    asked = "esp-idf/main/libmain.a(main.c.obj)" if own else "esp-idf/lwip/liblwip.a(file_0.c.obj)"
+    lines = ["Archive member included to satisfy reference by file (symbol)", ""]
+    for member in placed:
+        lines += [member, "                              %s (some_symbol)" % asked]
+    lines += ["", "Discarded input sections", ""]
+    lines += [" .text          0x00000000        0x0 %s" % member for member in list(discarded) + placed[:3]]
+    lines += ["", "Memory Configuration", "", "Linker script and memory map", "",
+              "LOAD CMakeFiles/wican-display.elf.dir/project_elf_src_esp32s3.c.obj",
+              "LOAD esp-idf/main/libmain.a", "LOAD esp-idf/core/libcore.a", "LOAD esp-idf/mqtt/libmqtt.a", "LOAD esp-idf/lwip/liblwip.a", ""]
+    for number, member in enumerate(placed):
+        lines += [" .text.function_%d" % number, "                0x%08x       0x10 %s" % (0x42000000 + 16 * number, member)]
+    return "\n".join(lines) + "\n"
+
+
+CLIENT = "esp-idf/mqtt/libmqtt.a(mqtt_client.c.obj)"
+
+
 def build(count=120, options=(QUOTED[0],)):
     """The commands of a build: `count` sources of LVGL, and two of other components without the definition."""
     entries = [command("%score/lv_file_%d.c" % (LVGL, number), *options) for number in range(count)]
@@ -104,6 +130,82 @@ class CheckBuild(unittest.TestCase):
                 with contextlib.redirect_stdout(output):
                     self.assertEqual(check_build.main(argv), status)
                 self.assertTrue(output.getvalue().startswith(word), output.getvalue())
+
+
+class CheckMap(unittest.TestCase):
+    def test_a_firmware_without_a_client_is_fine(self):
+        # The archive of the client is loaded in every build, and the display has its own reader of MQTT:
+        # neither is an object of a client
+        text = linker_map()
+        self.assertIn("LOAD esp-idf/mqtt/libmqtt.a\n", text)
+        self.assertIn("libcore.a(mqtt_sub.c.obj)", text)
+        self.assertEqual(check_build.map_problems(text), [])
+        self.assertEqual(len(check_build.map_objects(text)), 300)
+
+    def test_an_object_of_the_client_is_reported_by_name(self):
+        found = check_build.map_problems(linker_map(taken=(CLIENT,)))
+        self.assertEqual(len(found), 1)
+        self.assertIn("1 objects of an MQTT client", found[0])
+        self.assertIn("libmqtt.a(mqtt_client.c.obj)", found[0])
+        # What the client pulls in with it counts as well, each object once however often the map names it
+        more = ("esp-idf/mqtt/libmqtt.a(mqtt_msg.c.obj)", "esp-idf/mqtt/libmqtt.a(mqtt_outbox.c.obj)")
+        found = check_build.map_problems(linker_map(taken=(CLIENT,) + more, discarded=(CLIENT,)))
+        self.assertEqual(len(found), 1)
+        self.assertIn("3 objects of an MQTT client", found[0])
+
+    def test_an_object_whose_sections_were_all_thrown_away_was_taken_all_the_same(self):
+        # Somebody asked for it, or the linker had not looked into the archive
+        found = check_build.map_problems(linker_map(discarded=(CLIENT,)))
+        self.assertEqual(len(found), 1)
+        self.assertIn("libmqtt.a(mqtt_client.c.obj)", found[0])
+
+    def test_the_client_under_another_roof_is_one_as_well(self):
+        # As a managed component, with a path of Windows, in capitals
+        for member in ("esp-idf/espressif__mqtt/libespressif__mqtt.a(mqtt_client.c.obj)",
+                       "esp-idf\\mqtt\\libmqtt.a(mqtt_client.c.obj)", "esp-idf/mqtt/libMQTT.a(mqtt_client.c.obj)",
+                       "/opt/esp/idf/components/esp-mqtt/libmqtt5.a(mqtt5_client.c.obj)"):
+            found = check_build.map_problems(linker_map(taken=(member,)))
+            self.assertEqual(len(found), 1, member)
+            self.assertIn("1 objects of an MQTT client", found[0])
+
+    def test_only_the_archive_tells_whose_object_it_is(self):
+        # A source of the display may bear the word in its name, and a directory may: no client
+        for member in ("esp-idf/main/libmain.a(mqtt_notes.c.obj)", "esp-idf/mqtt/libother.a(file.c.obj)",
+                       "esp-idf/core/libcore.a(mqtt_sub.c.obj)"):
+            self.assertEqual(check_build.map_problems(linker_map(taken=(member,))), [], member)
+
+    def test_what_is_no_map_of_a_whole_build_is_none(self):
+        # An empty file, a map cut short, the map of something else: none of them shows that there is no client
+        for text in ("", "LOAD esp-idf/main/libmain.a\n", linker_map(count=199), linker_map(own=False)):
+            found = check_build.map_problems(text)
+            self.assertEqual(len(found), 1)
+            self.assertIn("not the map of a whole build", found[0])
+        self.assertEqual(check_build.map_problems(linker_map(count=200)), [])
+        # ... also when it names the client: that is said of a map that can be believed
+        self.assertIn("not the map", check_build.map_problems(linker_map(count=50, taken=(CLIENT,)))[0])
+
+    def test_command_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "wican-display.map")
+            commands = os.path.join(directory, "compile_commands.json")
+            with open(commands, "w", encoding="utf-8") as handle:
+                json.dump(build(), handle)
+            for text, both, status, word in ((linker_map(), False, 0, "OK: no object of an MQTT client among the 300"),
+                                             (linker_map(taken=(CLIENT,)), False, 1, "PROBLEM"),
+                                             (linker_map(), True, 0, "OK: every source of LVGL"),
+                                             (linker_map(taken=(CLIENT,)), True, 1, "PROBLEM")):
+                # Bytes that are no text, as a path of the build may have them
+                with open(path, "wb") as handle:
+                    handle.write(text.encode("utf-8") + b"\xff\xfe\n")
+                argv = ["--map", path] + (["--commands", commands] if both else [])
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(check_build.main(argv), status)
+                self.assertTrue(output.getvalue().startswith(word), output.getvalue())
+            # Asked to check nothing, it does not say that all is well
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                check_build.main([])
+            self.assertEqual(stopped.exception.code, 2)
 
 
 if __name__ == "__main__":

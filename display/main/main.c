@@ -668,6 +668,9 @@ static void start(void)
 	// as long as the project has no version.txt. It is the version and the git text of the app.
 	boot.version = description->version;
 	boot.git = description->version;
+	// The second source makes the name it gives the broker of this one (cerbo.h): a broker ends the
+	// connection of another client with the same name, so two displays must not share it
+	boot.ap_ssid = ap_ssid;
 	boot.builtin_layout = builtin_start;
 	boot.builtin_length = (size_t)(builtin_end - builtin_start);
 	boot.work = tokens;

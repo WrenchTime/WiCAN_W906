@@ -24,7 +24,7 @@
  * the board (display/host/platform): that shows what its files do with what was read of those, and nothing
  * of what the board does - nothing here was tested on it.
  *
- * Four tasks and the HTTP server of ESP-IDF:
+ * Five tasks and the HTTP server of ESP-IDF:
  *   screen   (screen.c)  reads knob, switch and touch every 20 ms, ticks the app five times a second,
  *                        hands the scene to LVGL, sets the backlight
  *   lvgl     (screen.c)  draws. It and the screen task are the two that touch LVGL, under a lock of their
@@ -32,6 +32,8 @@
  *   network  (net.c)     drives the WiFi by app->link and talks to the adapter by app->poll
  *   httpd    (web.c)     the web interface of the display: web_route() and app_web.h, the page, the upload
  *   main     (main.c)    starts everything, and carries out the events of the app
+ *   gx       (gx.c)      talks to the broker of the Cerbo GX by app->cerbo, over its one socket. Only on a
+ *                        display that was given the address of a Cerbo, and never in safe mode (gx_start())
  *
  * One lock (app.h): platform_lock() around every call into the app and every read of it. Nothing that
  * blocks happens under the lock - no HTTP request, no scan, no write to the flash, no drawing.
@@ -94,6 +96,24 @@ esp_err_t net_start(const char *ap_ssid, const char *ap_password);
 // when other tasks keep their promises; the main task looks at this number once a second and restarts the
 // display when it has stood still for too long (main.c).
 uint32_t net_turns(void);
+
+/*
+ * gx.c: allocates the room of the task that talks to the broker of the Cerbo GX, and creates the task.
+ * Called by the network task, without the lock, in the first of its rounds that finds the second source
+ * switched on (cerbo_on(), read under the lock): a display without the address of a Cerbo never has the
+ * task, and neither has one in safe mode, whatever is stored - the safe mode is there to get out of what a
+ * stored setting does, and with this one would come a task, a socket and a reader of what others send.
+ * Once created the task stays, also when the address is taken away again: the core gives it no order then.
+ * Returns ESP_ERR_NO_MEM if room or task cannot be had: nothing is logged here, and the next call tries
+ * again. ESP_ERR_INVALID_STATE once the task exists: there is never a second one.
+ *
+ * What the task may do: it calls into the core under platform_lock() only - cerbo_next(), cerbo_host(),
+ * cerbo_out() and the reports cerbo_opened(), cerbo_bytes(), cerbo_down() on platform_app->cerbo, each
+ * report with a time read before the lock was waited for - and makes no call of its socket under the lock.
+ * It never waits for platform_stored() and does not call platform_events(): the second source raises no
+ * event and stores nothing.
+ */
+esp_err_t gx_start(void);
 
 // web.c: starts the HTTP server of the display
 esp_err_t web_start(void);

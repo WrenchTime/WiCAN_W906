@@ -29,6 +29,9 @@
  * hands out. It decides nothing. Written without the board and without a build: every call was read in the
  * sources of ESP-IDF v5.5.2 and of espressif/mdns 1.13.1. What only the board can decide is marked CHECK.
  *
+ * It also creates the task of the second source, the Cerbo GX (gx.c), in the first round that finds that
+ * source switched on: gx_step().
+ *
  * One task does both, so nothing here needs a lock of its own. What the task waits on, wherever it waits:
  *   net_task()       an event of the driver, at most NET_STEP_MS; the link and the poll have times of their
  *                    own and are asked again then
@@ -127,6 +130,9 @@ static uint64_t ap_tried_ms;
 static char ap_ip[NET_ADDRESS_SIZE];
 
 static atomic_uint task_turns;   // of net_task(), for the main task (net_turns())
+
+static bool gx_made;        // the task of the second source exists (gx_start())
+static bool gx_owed;        // it could not be created, and that was said
 
 // The conversation with the adapter
 static esp_http_client_handle_t client;
@@ -871,6 +877,45 @@ static void link_step(void)
 	}
 }
 
+/*
+ * The task of the second source (gx.c) is created when that source is on for the first time: an address of
+ * the Cerbo is set and it is not the safe mode (cerbo_on(), read under the lock; the address may come at any
+ * time, from the web interface). A display without a Cerbo never has the task, and in safe mode there is
+ * none whatever is stored. Once it exists it stays. If it cannot be created - no memory for its room or its
+ * stack - that is logged once, and every round tries again.
+ * CHECK: the log line below never shows. If it does, the display is short of internal RAM at that moment
+ * (heap_malloc and heap_block of GET /api/info), and it shows no values of the Cerbo until the line
+ * "the task of the Cerbo source runs" follows.
+ */
+static void gx_step(void)
+{
+	bool on;
+
+	if(gx_made)
+	{
+		return;
+	}
+	platform_lock();
+	on = cerbo_on(&platform_app->cerbo);
+	platform_unlock();
+	if(!on)
+	{
+		return;
+	}
+
+	if(gx_start() == ESP_OK)
+	{
+		gx_made = true;
+		ESP_LOGI(TAG, "the task of the Cerbo source runs");
+	}
+	else if(!gx_owed)
+	{
+		// Said once, not with every round
+		gx_owed = true;
+		ESP_LOGE(TAG, "the task of the Cerbo source cannot be created: tried again with every round");
+	}
+}
+
 static void net_task(void *arg)
 {
 	EventBits_t bits = 0;
@@ -884,6 +929,7 @@ static void net_task(void *arg)
 		scan_watch();
 		ap_step();
 		link_step();
+		gx_step();
 		answered = poll_step();
 		signal_step();
 

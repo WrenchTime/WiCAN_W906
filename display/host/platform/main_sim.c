@@ -940,6 +940,8 @@ static void test_first_start(void)
 	CHECK(running_slot == 0 && state_of(0) == ESP_OTA_IMG_VALID && state_of(1) == NO_RECORD);
 	CHECK(screens == 1 && nets == 1 && webs == 1);
 	CHECK(strcmp(net_ssid, "WiCAN-Display-EE0F") == 0);
+	// The second source names itself to the broker by the name of this display, not by one all displays share
+	CHECK(strcmp(platform_app->cerbo.name, "WiCAN-Display-EE0F") == 0);
 	CHECK(strlen(net_password) == 10 && strspn(net_password, "abcdefghjkmnpqrstuvwxyz23456789") == 10);
 	CHECK(random_on == 1 && random_off == 1 && randoms == 10 && randoms_while_on == 10);
 	CHECK(stored_is(STORE_CFG, STORE_KEY_AP_PASSWORD, net_password));

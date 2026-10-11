@@ -242,8 +242,8 @@ Slot noch ein zurückgenommenes Update, steht es danach wieder unter „Vorherig
 
 ## Erster Tag am Board
 
-Im Quelltext sind 55 Stellen mit `CHECK:` markiert (21 in `components/board/board.c`, 10 in `main/main.c`,
-5 in `main/screen.c`, 12 in `main/net.c`, 3 in `main/web.c`, 2 in `main/web/index.html`, 2 in
+Im Quelltext sind 63 Stellen mit `CHECK:` markiert (21 in `components/board/board.c`, 10 in `main/main.c`,
+5 in `main/screen.c`, 13 in `main/net.c`, 7 in `main/gx.c`, 3 in `main/web.c`, 2 in `main/web/index.html`, 2 in
 `sdkconfig.defaults`). Jede sagt, was zu beobachten ist und was zu ändern ist, wenn es anders kommt:
 
 ```bash

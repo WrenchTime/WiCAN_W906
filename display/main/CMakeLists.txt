@@ -1,6 +1,9 @@
 # The platform of the display: tasks, WiFi, HTTP, flash and screen around the logic in components/core.
 # Managed components (LVGL, mDNS) are named in idf_component.yml next to this file.
-idf_component_register(SRCS "main.c" "screen.c" "net.c" "web.c"
+# NOT among the requirements, and never to be: mqtt. gx.c talks to the broker of the Cerbo GX over a socket
+# with the packets components/core builds, and that can build none that publishes. tools/check_build.py
+# looks at the map of the build for an object of the MQTT client of ESP-IDF (the CI runs it).
+idf_component_register(SRCS "main.c" "screen.c" "net.c" "web.c" "gx.c"
                        INCLUDE_DIRS "."
                        REQUIRES core board store ui app_update esp_timer esp_wifi esp_netif esp_event
                                 esp_http_client esp_http_server nvs_flash esp_lcd esp_partition

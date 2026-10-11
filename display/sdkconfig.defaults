@@ -98,7 +98,7 @@ CONFIG_LWIP_TCP_SND_BUF_DEFAULT=11520
 # The rule of that guide ("How to Improve Wi-Fi Performance"): the window in KB "should be configured to the
 # value of WIFI_DYNAMIC_RX_BUFFER_NUM", and "in case of multiple streams, this value needs to be reduced
 # proportionally" (the same for the send buffer and the TX buffers). 32 buffers are 16 KB each for two
-# streams, the browser and the adapter, and 10.7 KB each for three, once there is MQTT. 11520 bytes are
+# streams, the browser and the adapter, and 10.7 KB each for three, with the Cerbo (gx.c). 11520 bytes are
 # 11.25 KB: within the rule for two, 5 % above it for three - and three full windows are 24 frames of 32.
 CONFIG_LWIP_TCP_WND_DEFAULT=11520
 # The mail box of a socket holds the segments that wait to be read. Kconfig of lwIP: "The recommended value
@@ -122,7 +122,7 @@ CONFIG_LWIP_TCP_SACK_OUT=y
 # and the Kconfig of lwIP recommends "0 <= TCP_OOSEQ_MAX_PBUFS <=
 # CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM/(MAX_TCP_NUMBER + 1)", "to ensure that the MAC layer has enough RX
 # buffer to receive packets". The display has up to six connections - four of the web server (WEB_SOCKETS
-# in main/web.c), the adapter, later MQTT -, and 32 / 7 is 4. Seven would take 49 buffers, up to 27 KB more
+# in main/web.c), the adapter, the Cerbo (gx.c) -, and 32 / 7 is 4. Seven would take 49 buffers, up to 27 KB more
 # of the internal RAM, or a web server that keeps a single connection.
 CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=4
 # The time before a segment is sent again without three duplicates, see above: the default while

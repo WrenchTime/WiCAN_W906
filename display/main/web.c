@@ -54,8 +54,8 @@
 // CHECK: uxTaskGetStackHighWaterMark() of the task "httpd" after a firmware upload: esp_ota_end() checks
 // the whole image on this stack. The functions of the core need less than 1 KB of it (compiled on a PC).
 #define WEB_STACK_BYTES     8192
-// The server takes three more for itself, and lwIP has 10 (CONFIG_LWIP_MAX_SOCKETS); one is the
-// connection to the adapter
+// The server takes three more for itself, and lwIP has 10 (CONFIG_LWIP_MAX_SOCKETS): 4 + 3 here, one
+// is the connection to the adapter (net.c), one the connection to the broker of the Cerbo GX (gx.c)
 #define WEB_SOCKETS         4
 // All headers of one request. The default of 1024 is close to what a browser sends once a cookie of
 // another device at the same address is added; a request above the limit gets no answer at all.

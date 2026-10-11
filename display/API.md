@@ -246,6 +246,16 @@ answer has one object more, behind `wican`, and the address in its settings:
   the display, at most 4294967295.
 - The display only ever subscribes: it cannot build the MQTT packet that publishes.
 
+What the display does at that address (`main/gx.c`, `components/core/cerbo.h`): one TCP connection to port
+1883, MQTT 3.1.1. A CONNECT with a clean session and a keep-alive of 30 s, without a will, a user name or a
+password; the client id is made of the letters and digits of the name of its own access point
+(`WiCAN-Display-C9A8` names itself `WiCANDisplayC9A8`). One SUBSCRIBE to `display/gx/values` with QoS 0. A
+PINGREQ every 10 s. Nothing else is ever sent. A connection without a session after 15 s, or without the
+answer to a PINGREQ after 20 s, is closed; the next attempt follows after 2, 5, 10 and then every 30 s, and
+at once when the display joins a network or is given another address. In safe mode nothing is opened. What
+a broker sends is read at 51 KB a second at most. `tools/mock_flow.py` plays the broker and the flow of a
+Cerbo on a PC, with every fault they can have.
+
 ### `GET /api/catalog`
 
 ```json
