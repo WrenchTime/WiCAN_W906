@@ -150,10 +150,15 @@ jobs:
       # Counter-check of the check of the map with the real build system, behind the upload: what is built
       # from here on is thrown away. A source of main/ that calls the MQTT client of ESP-IDF - by a
       # declaration of its own, so no CMakeLists.txt has to name the component - has to make the check fail.
+      # The call stands in gx_start(), which the network task calls. In a function of its own that nobody
+      # calls it proved nothing: the linker threw that function away and the client with it, and the check
+      # was right to find none (the run of 2026-10-12).
       - name: Counter-check, a source calls the MQTT client
         run: |
-          printf '\nextern void *esp_mqtt_client_init(const void *config);\n\nvoid *gx_counter_check(void)\n{\n\treturn esp_mqtt_client_init(0);\n}\n' >> display/main/gx.c
-          tail -n 7 display/main/gx.c
+          sed -i 's/^esp_err_t gx_start(void)$/extern void *esp_mqtt_client_init(const void *config);\nesp_err_t gx_start(void)/' display/main/gx.c
+          sed -i '/^esp_err_t gx_start(void)$/,/^}/ s/^\tif(running)$/\tif(esp_mqtt_client_init(0) == NULL \&\& running)/' display/main/gx.c
+          grep -n "esp_mqtt_client_init" display/main/gx.c
+          test "$(grep -c "esp_mqtt_client_init" display/main/gx.c)" = 2
 
       - name: Counter-check, built again with that source
         uses: espressif/esp-idf-ci-action@v1
