@@ -126,6 +126,9 @@ typedef enum
 esp_err_t esp_wifi_init(const wifi_init_config_t *config);
 esp_err_t esp_wifi_set_storage(wifi_storage_t storage);
 esp_err_t esp_wifi_set_ps(wifi_ps_type_t type);
+// EXPERIMENT: the simulation has no transmitter
+static inline esp_err_t esp_wifi_set_max_tx_power(int8_t power) { (void)power; return ESP_OK; }
+static inline esp_err_t esp_wifi_get_max_tx_power(int8_t *power) { *power = 0; return ESP_OK; }
 
 // esp_wifi_types_generic.h: what an interface speaks, as bits
 #define WIFI_PROTOCOL_11B   0x1

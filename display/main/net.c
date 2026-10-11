@@ -870,6 +870,26 @@ static void link_step(void)
 	}
 }
 
+// EXPERIMENT (not for display-api): the transmit power changes every two minutes of uptime, so that a PC
+// that pings the display can tell whether a weaker transmitter is heard better. Seen on 2026-10-11: at
+// -65 dBm 1 of 20 pings arrived while the driver reported no disconnect - the display hears the access
+// point, so the way back is the suspect. Quarter dBm: 20, 13, 8.5 and 2 dBm.
+static void experiment_step(void)
+{
+	static const int8_t LEVELS[] = {80, 52, 34, 8};
+	static int phase = -1;
+	int now = (int)((platform_now_ms() / 120000) % 4);
+	int8_t set = 0;
+	esp_err_t err;
+
+	if(now == phase) return;
+	err = esp_wifi_set_max_tx_power(LEVELS[now]);
+	if(err != ESP_OK) return;
+	phase = now;
+	esp_wifi_get_max_tx_power(&set);
+	ESP_LOGW(TAG, "EXPERIMENT phase %d: transmit power asked %d, set %d (quarter dBm)", now, (int)LEVELS[now], (int)set);
+}
+
 static void net_task(void *arg)
 {
 	EventBits_t bits = 0;
@@ -878,6 +898,7 @@ static void net_task(void *arg)
 	{
 		bool answered;
 
+		experiment_step();
 		atomic_fetch_add(&task_turns, 1);
 		driver_events(bits);
 		scan_watch();
