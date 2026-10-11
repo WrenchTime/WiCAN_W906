@@ -1124,6 +1124,49 @@ static void test_json(void)
 	check(same, "refused: every beginning of an answer that is not the whole answer");
 }
 
+/* Every byte of the state is given by the answer -------------------------------------------------------- */
+
+// The bytes of a text field behind the end of its text are zero
+static bool zero_behind(const char *field, size_t size)
+{
+	for(size_t i = strlen(field); i < size; i++)
+	{
+		if(field[i] != '\0') return false;
+	}
+	return true;
+}
+
+// The display holds the state it read last, and two displays that got the same answers have to hold the same
+// bytes: test_app.c tells every story twice and compares them. A state read into a copy on the stack that is
+// not written completely keeps what lay there - behind the end of each text and between the members.
+static void test_bytes(void)
+{
+	// What lies on the stack when the answer is read, and (the other way round) what the state held before
+	static const unsigned char DIRT[] = {0x5a, 0xa5, 0xff};
+	static wican_state_t states[COUNT(DIRT)];
+	size_t length = strlen(DISTINCT);
+	bool read = true, same = true, zero = true;
+
+	for(int i = 0; i < COUNT(DIRT); i++)
+	{
+		memset(&states[i], DIRT[COUNT(DIRT) - 1 - i], sizeof(states[i]));
+		// Nothing between the two calls: what is called in between would write over the fill
+		dirty_stack(DIRT[i]);
+		if(!wican_state_parse(DISTINCT, length, &states[i], work, COUNT(work))) read = false;
+	}
+	for(int i = 0; i < COUNT(DIRT); i++)
+	{
+		const wican_state_t *state = &states[i];
+
+		if(memcmp(&states[0], state, sizeof(*state)) != 0) same = false;
+		if(!zero_behind(state->id, sizeof(state->id)) || !zero_behind(state->fw, sizeof(state->fw)) ||
+		   !zero_behind(state->git, sizeof(state->git)) || !zero_behind(state->dtc.name, sizeof(state->dtc.name)) ||
+		   !zero_behind(state->dtc.reason, sizeof(state->dtc.reason))) zero = false;
+	}
+	check(read && same, "one answer read three times, over other bytes on the stack and into states that held other bytes, is the same state byte for byte");
+	check(read && zero, "behind the end of a text its field is zero: id, fw, git, and the name and the reason of the scan state");
+}
+
 int main(void)
 {
 	test_fixtures();
@@ -1134,6 +1177,7 @@ int main(void)
 	test_texts();
 	test_random();
 	test_json();
+	test_bytes();
 	check(stray_writes == 0, "no call wrote before or behind the state or behind the room for tokens");
 	return test_end();
 }

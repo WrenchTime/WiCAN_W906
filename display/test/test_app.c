@@ -5525,15 +5525,20 @@ static bool told_twice(void (*story)(void))
 	trace_cerbo.count = 0;
 	watch_trace = trace_step;
 
+	// Each telling over another byte on the stack (stack_dirt): a byte the display keeps without having
+	// written it is then not the same in the two
 	gx_everywhere = false;
 	tracing = &trace_plain;
+	stack_dirt = 0x5a;
 	story();
 
 	memset(&gx_seen, 0, sizeof(gx_seen));
 	gx_everywhere = true;
 	tracing = &trace_cerbo;
+	stack_dirt = 0xa5;
 	story();
 
+	stack_dirt = 0;
 	gx_everywhere = false;
 	tracing = NULL;
 	watch_trace = NULL;
@@ -8079,7 +8084,10 @@ static void test_random_runs(void)
 			// numbers rolled, no address ever, no broker - and has to be the same run, step for step.
 			trace_cerbo.count = 0;
 			tracing = twin ? &trace_cerbo : NULL;
+			// The two tellings over two different bytes on the stack, see stack_dirt
+			stack_dirt = twin ? 0xa5 : 0;
 			random_run(number, &result, true);
+			stack_dirt = 0;
 			result.gx_opens += gx.opens;
 			result.gx_lost += gx.lost;
 			result.gx_unreachable += gx.unreachable;
@@ -8091,7 +8099,9 @@ static void test_random_runs(void)
 			memset(&apart, 0, sizeof(apart));
 			trace_plain.count = 0;
 			tracing = &trace_plain;
+			stack_dirt = 0x5a;
 			random_run(number, &apart, false);
+			stack_dirt = 0;
 			tracing = NULL;
 			tally = &result;
 			doing = "the same run without a Cerbo";

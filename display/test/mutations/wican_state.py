@@ -237,4 +237,8 @@ MUTATIONS = [
     ("state_git_is_id", T, F, "\"git\", read.git, sizeof(read.git))", "\"id\", read.git, sizeof(read.git))"),
     ("state_name_is_reason", T, F, "\"name\", dtc->name, sizeof(dtc->name))", "\"reason\", dtc->name, sizeof(dtc->name))"),
     ("state_reason_is_name", T, F, "\"reason\", dtc->reason, sizeof(dtc->reason))", "\"name\", dtc->reason, sizeof(dtc->reason))"),
+
+    # every byte of the state is given by the answer
+    ("state_bytes_left_as_they_lay_on_the_stack", T, F, "\tmemset(&read, 0, sizeof(read));\n", ""),
+    ("state_only_the_id_from_zeros", T, F, "\tmemset(&read, 0, sizeof(read));", "\tmemset(&read, 0, sizeof(read.id));"),
 ]

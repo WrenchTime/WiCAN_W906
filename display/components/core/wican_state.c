@@ -208,6 +208,10 @@ bool wican_state_parse(const char *json, size_t length, wican_state_t *state, js
 	int64_t api;
 	int autopid, ecu, mqtt;
 
+	// From zeros: every byte of the state is then given by the text, also behind the end of a text and
+	// between the members. Left as it lay on the stack, two displays that got the same answers held
+	// different bytes (seen with gcc in the CI on 2026-10-11)
+	memset(&read, 0, sizeof(read));
 	if(json_parse(json, length, work, work_count) < 0) return false;
 
 	if(!read_integer(json, work, 0, "api", 1, 1, &api)) return false;

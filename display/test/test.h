@@ -7,6 +7,7 @@
 #define __TEST_H__
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 
@@ -52,8 +53,28 @@ static bool read_fixture(const char *path, char *text, size_t size)
 	return true;
 }
 
+// Fills the room on the stack below the caller with one byte. A function called next finds that byte in
+// every local it does not write completely - behind the end of a text, in the gaps between members - and
+// carries it wherever it copies the local to. Two calls over two different bytes then give two different
+// results where a module leaves such bytes as they lay: without this they differ only where a compiler
+// happens to leave other rubbish for the two (gcc did in the CI on 2026-10-11, clang on the Mac never did).
+// The sanitizer must not see this function: it would put guard zones around the array, and the locals of the
+// function called next would lie in a zone the fill never reaches (seen with clang: no byte arrived).
+#define STACK_DIRT_SIZE 16384
+
+__attribute__((no_sanitize_address, noinline)) static void dirty_stack(unsigned char with)
+{
+	unsigned char dirt[STACK_DIRT_SIZE];
+	volatile size_t at = with;
+
+	memset(dirt, with, sizeof(dirt));
+	// Read once, so that the array is not there for nothing
+	if(dirt[at] != with) abort();
+}
+
 static inline void test_unused(void)
 {
+	(void)dirty_stack;
 	(void)read_fixture;
 	(void)test_end;
 	(void)check;

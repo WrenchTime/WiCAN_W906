@@ -38,6 +38,36 @@
 #undef told_t
 #include "app.h"
 
+// Other than 0: before every call into the display the stack below is filled with this byte (dirty_stack()
+// in test.h). Two tellings of one story over two different bytes part where the display keeps a byte that
+// only lay on the stack.
+static unsigned char stack_dirt;
+
+static void dirt(void)
+{
+	if(stack_dirt != 0) dirty_stack(stack_dirt);
+}
+
+// Every call of the display from a test goes through here. The harness lays the fill itself before the
+// calls it makes into the parts of the display (step()).
+#define app_init(...)           (dirt(), app_init(__VA_ARGS__))
+#define app_platform(...)       (dirt(), app_platform(__VA_ARGS__))
+#define app_temperature(...)    (dirt(), app_temperature(__VA_ARGS__))
+#define app_net(...)            (dirt(), app_net(__VA_ARGS__))
+#define app_host(...)           (dirt(), app_host(__VA_ARGS__))
+#define app_encoder(...)        (dirt(), app_encoder(__VA_ARGS__))
+#define app_button(...)         (dirt(), app_button(__VA_ARGS__))
+#define app_tap(...)            (dirt(), app_tap(__VA_ARGS__))
+#define app_swipe(...)          (dirt(), app_swipe(__VA_ARGS__))
+#define app_tick(...)           (dirt(), app_tick(__VA_ARGS__))
+#define app_do(...)             (dirt(), app_do(__VA_ARGS__))
+#define app_choose_layout(...)  (dirt(), app_choose_layout(__VA_ARGS__))
+#define app_take_events(...)    (dirt(), app_take_events(__VA_ARGS__))
+#define app_world(...)          (dirt(), app_world(__VA_ARGS__))
+#define app_scene(...)          (dirt(), app_scene(__VA_ARGS__))
+#define app_backlight(...)      (dirt(), app_backlight(__VA_ARGS__))
+#define app_busy(...)           (dirt(), app_busy(__VA_ARGS__))
+
 #define COUNT(a)    ((int)(sizeof(a) / sizeof((a)[0])))
 #define STEP_MS     20u
 #define FILL        0xAA
@@ -1177,10 +1207,15 @@ static void step(void)
 		app_tick(app, given(screen_time()));
 		if(watch_tick != NULL) watch_tick();
 	}
+	dirt();
 	if(now % 1000 == 0) tell_platform();
+	dirt();
 	link_step();
+	dirt();
 	poll_step();
+	dirt();
 	gx_step();
+	dirt();
 	carry_out();
 	now += stride;
 	if(watch_after != NULL) watch_after();
@@ -1447,6 +1482,7 @@ static inline void app_harness_unused(void)
 	(void)gx_skew;
 	(void)watch_gx;
 	(void)watch_trace;
+	(void)stack_dirt;
 	(void)gx;
 	(void)gx_seen;
 	(void)gx_work;

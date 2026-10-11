@@ -368,4 +368,9 @@ MUTATIONS = [
     ("dtc_clear_unconfirmed_of_the_result_before", T, F, "\t\tif(after->ecus[i].cleared == 0) summary->unconfirmed++;", "\t\tif(before->ecus[i].cleared == 0) summary->unconfirmed++;"),
     ("dtc_clear_unconfirmed_one_control_unit_too_many", T, F, "\tfor(int i = 0; i < after->ecu_count; i++)", "\tfor(int i = 0; i <= after->ecu_count; i++)"),
     ("dtc_clear_unconfirmed_last_control_unit_left_out", T, F, "\tfor(int i = 0; i < after->ecu_count; i++)", "\tfor(int i = 0; i + 1 < after->ecu_count; i++)"),
+
+    # every byte of what is read is given by the result
+    ("result_unit_bytes_left_as_they_lay_on_the_stack", T, F, "\t\tmemset(&ecu, 0, sizeof(ecu));\n", ""),
+    ("result_only_the_name_of_a_unit_from_zeros", T, F, "\t\tmemset(&ecu, 0, sizeof(ecu));", "\t\tmemset(&ecu, 0, sizeof(ecu.name));"),
+    ("result_code_bytes_left_as_they_lay_on_the_stack", T, F, "\t\t\tmemset(&code, 0, sizeof(code));\n", ""),
 ]

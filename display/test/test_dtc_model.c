@@ -1719,6 +1719,71 @@ static void test_json(void)
 	check(same, "refused: every beginning of a result that is not the whole result");
 }
 
+/* Every byte of what is read is given by the result ----------------------------------------------------- */
+
+// The bytes of a text field behind the end of its text are zero
+static bool zero_behind(const char *field, size_t size)
+{
+	for(size_t i = strlen(field); i < size; i++)
+	{
+		if(field[i] != '\0') return false;
+	}
+	return true;
+}
+
+// The display keeps the lists it read, and two displays that read the same results have to hold the same
+// bytes: test_app.c tells every story twice and compares them. A control unit or a code read into a local
+// that is not written completely keeps what lay on the stack - behind the end of each text and between the
+// members.
+static void test_bytes(void)
+{
+	// Two control units, the first with two codes: short texts, so that most of each field lies behind them
+	static const char TEXT[] =
+		"{\"state\":\"done\",\"action\":\"read\",\"duration_ms\":7,\"dtc_count\":2,\"ecus\":["
+		"{\"name\":\"N1 Erstes (EINS)\",\"id\":\"7E0\",\"protocol\":\"UDS\",\"status\":\"ok\",\"dtcs\":["
+		"{\"code\":\"P0001\",\"status\":\"08\",\"active\":true},{\"code\":\"C1\",\"status\":\"2\",\"active\":false}]},"
+		"{\"name\":\"Z\",\"id\":\"4\",\"protocol\":\"KWP\",\"status\":\"nrc_22\",\"dtcs\":[]}]}";
+	// What lies on the stack when the result is read. The room it is read into holds zeros each time: the
+	// control units and codes a result does not have are left as they were
+	static const unsigned char DIRT[] = {0x5a, 0xa5, 0xff};
+	static dtc_result_t results[COUNT(DIRT)];
+	size_t length = strlen(TEXT);
+	bool read = true, same = true, zero = true;
+
+	for(int i = 0; i < COUNT(DIRT); i++)
+	{
+		memset(&results[i], 0, sizeof(results[i]));
+		// Nothing between the two calls: what is called in between would write over the fill
+		dirty_stack(DIRT[i]);
+		if(!dtc_result_parse(TEXT, length, &results[i], work, WORK_TOKENS)) read = false;
+	}
+	for(int i = 0; i < COUNT(DIRT); i++)
+	{
+		const dtc_result_t *result = &results[i];
+
+		if(result->ecu_count != 2 || result->code_count != 2)
+		{
+			read = false;
+			continue;
+		}
+		if(memcmp(results[0].ecus, result->ecus, 2 * sizeof(result->ecus[0])) != 0 ||
+		   memcmp(results[0].codes, result->codes, 2 * sizeof(result->codes[0])) != 0) same = false;
+		for(int k = 0; k < 2; k++)
+		{
+			const dtc_ecu_t *ecu = &result->ecus[k];
+			const dtc_code_t *code = &result->codes[k];
+
+			if(!zero_behind(ecu->name, sizeof(ecu->name)) || !zero_behind(ecu->short_name, sizeof(ecu->short_name)) ||
+			   !zero_behind(ecu->id, sizeof(ecu->id)) || !zero_behind(code->code, sizeof(code->code)) ||
+			   !zero_behind(code->status, sizeof(code->status))) zero = false;
+		}
+	}
+	check(read && strcmp(results[0].ecus[0].short_name, "EINS") == 0 && strcmp(results[0].codes[1].code, "C1") == 0,
+	      "a result with two control units and two codes is read, over three different bytes on the stack");
+	check(read && same, "its control units and its codes are the same byte for byte each time");
+	check(read && zero, "behind the end of a text its field is zero: name, short name and id of a control unit, code and status of a code");
+}
+
 int main(void)
 {
 	test_short_name();
@@ -1730,6 +1795,7 @@ int main(void)
 	test_limits();
 	test_summaries();
 	test_json();
+	test_bytes();
 	check(stray_writes == 0, "no call wrote before or behind the result or behind the room for tokens");
 	return test_end();
 }

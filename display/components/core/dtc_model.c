@@ -189,6 +189,9 @@ static bool read_result(const char *json, const json_token_t *tokens, dtc_result
 		dtc_ecu_t ecu;
 		int dtcs, dtc;
 
+		// From zeros, like every code below: every byte of the result is then given by the text, also
+		// behind the end of a name and between the members (wican_state.c says what was seen without)
+		memset(&ecu, 0, sizeof(ecu));
 		if(!read_ecu(json, tokens, element, &ecu, &dtcs)) return false;
 		ecu.first_code = (uint16_t)code_count;
 		ecu.code_count = 0;
@@ -199,6 +202,7 @@ static bool read_result(const char *json, const json_token_t *tokens, dtc_result
 		{
 			dtc_code_t code;
 
+			memset(&code, 0, sizeof(code));
 			if(!read_code(json, tokens, dtc, &code)) return false;
 			if(room && code_count < DTC_CODES_MAX)
 			{
