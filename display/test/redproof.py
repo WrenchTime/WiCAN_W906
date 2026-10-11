@@ -39,7 +39,11 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 DISPLAY = HERE.parent
 REPO = DISPLAY.parent
-TIMEOUT = 300
+# A test that has not ended by then is stopped. What it printed until then counts (run_test()): a mutation can
+# make a test both fail its checks and take very long - app_events_not_cleared_when_taken restarts the display
+# of test_app step after step, 175 s on a laptop on 2026-10-11 and more than the 300 in the CI, where it then
+# counted as a run without a failed check although 121 had failed.
+TIMEOUT = int(os.environ.get("REDPROOF_TIMEOUT", "300"))
 
 # What a test may read, at the same relative paths as in the repository
 COPIED = [
@@ -76,12 +80,16 @@ def tests():
 
 
 def shell(command, cwd):
-    """Returns (exit status or None after a timeout, stdout, stderr)."""
+    """Returns (exit status or None after a timeout, stdout, stderr). After a timeout stdout is what was
+    printed until the command was stopped: test.h writes every check out at once."""
     try:
         run = subprocess.run(command, shell=True, cwd=cwd, capture_output=True,
                              encoding="utf-8", errors="replace", timeout=TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return None, "", "no end within %d s" % TIMEOUT
+    except subprocess.TimeoutExpired as expired:
+        printed = expired.stdout or ""
+        if isinstance(printed, bytes):
+            printed = printed.decode("utf-8", "replace")
+        return None, printed, "no end within %d s" % TIMEOUT
     return run.returncode, run.stdout, run.stderr
 
 
@@ -111,7 +119,7 @@ def run_test(tree, test):
             return "broken", "the test printed FAIL but exited with 0"
         return "green", ""
     if failed:
-        return "red", "%d checks failed, first: %s" % (len(failed), failed[0])
+        return "red", "%d checks failed%s, first: %s" % (len(failed), " before it was stopped" if status is None else "", failed[0])
     last = (stderr.strip().splitlines() or stdout.strip().splitlines() or ["no output"])[-1]
     return "aborted", "%s without a failed check: %s" % ("timeout" if status is None else "exit %d" % status, last)
 
