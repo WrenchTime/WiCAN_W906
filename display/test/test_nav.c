@@ -21,7 +21,7 @@
 
 #define PHASES      9                           // members of dtc_flow_phase_t
 #define SCREENS     14                          // members of nav_screen_t
-#define ACTIONS     19                          // members of nav_do_t
+#define ACTIONS     20                          // members of nav_do_t
 #define NO_PHASE    ((dtc_flow_phase_t)100)     // no member of the enum
 #define NO_EVENT    ((hold_event_t)77)          // no member of the enum
 #define LINES_MOST  (INT_MAX - 3)               // the most lines a list is taken to have
@@ -356,7 +356,8 @@ static void open_ask(int row)
 	press();
 }
 
-// A screen with a world in which it stays. last: the focus on its last row instead of one before it.
+// A screen with a world in which it stays. last: the focus on its last row instead of one before it (of the
+// web access: on Zurück instead of Freigabe).
 static void reach(nav_screen_t screen, bool last)
 {
 	switch(screen)
@@ -377,7 +378,7 @@ static void reach(nav_screen_t screen, bool last)
 		case NAV_DTC_FAILED:    open_failed(DTC_FLOW_FAILED); break;
 		case NAV_DTC_OLD:       open_old(2, last ? 2 : 1); break;
 		case NAV_BRIGHTNESS:    open_brightness(60); break;
-		case NAV_WEB:           open_web(last ? 1 : 0); break;
+		case NAV_WEB:           open_web(last ? 2 : 1); break;
 		case NAV_INFO:          open_info(4, last ? 3 : 1); break;
 		case NAV_SETTINGS:      open_settings(last ? 5 : 3); break;
 		case NAV_CONFIRM:
@@ -399,14 +400,14 @@ static void test_fixtures(void)
 	// The focus reach() leaves, by screen
 	static const int rows[2][SCREENS] =
 	{
-		{0, 2, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 3, 0},
-		{0, 6, 3, 0, 5, 1, 2, 0, 2, 0, 1, 3, 5, 1},
+		{0, 2, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 3, 0},
+		{0, 6, 3, 0, 5, 1, 2, 0, 2, 0, 2, 3, 5, 1},
 	};
 	int wrong = 0;
 
 	check(NAV_IDLE_MS == 120000 && NAV_BRIGHTNESS_STEP == 5, "two minutes of idle time, 5 percent of brightness per detent");
-	check(NAV_MENU_ROWS == 7 && NAV_DTC_ROWS == 4 && NAV_WEB_ROWS == 2 && NAV_SETTINGS_ROWS == 6,
-	      "7 rows in the menu, 4 in the fault memory, 2 for the web access, 6 in the settings");
+	check(NAV_MENU_ROWS == 7 && NAV_DTC_ROWS == 4 && NAV_WEB_ROWS == 3 && NAV_SETTINGS_ROWS == 6,
+	      "7 rows in the menu, 4 in the fault memory, 3 for the web access, 6 in the settings");
 	check(SETTINGS_BRIGHTNESS_MIN == 5 && SETTINGS_BRIGHTNESS_MAX == 100 && LAYOUT_PAGES_MAX == 12,
 	      "the limits this test is written for: brightness 5 to 100, up to 12 pages");
 
@@ -579,7 +580,9 @@ static void test_rows(void)
 	world.info_lines = 4;
 	check(nav_rows(&nav, &world) == 0, "the brightness has no rows");
 	open_web(0);
-	check(nav_rows(&nav, &world) == 2, "the web access has 2 rows");
+	check(nav_rows(&nav, &world) == 3, "the web access has 3 rows");
+	world.release_open = world.release_lasting = true;
+	check(nav_rows(&nav, &world) == 3, "the web access has its 3 rows while the release lasts as well");
 
 	open_info(9, 0);
 	check(nav_rows(&nav, &world) == 9, "an info of 9 lines has 9 rows");
@@ -830,7 +833,10 @@ static void test_menu(void)
 	before = nav;
 	check(press() == NAV_DO_NIGHT_TOGGLE && stays(&before), "menu, short press on Nachtmodus: the night mode is toggled, the menu stays");
 	open_menu(3);
-	check(press() == NAV_DO_NOTHING && at(NAV_WEB, 0), "menu, short press on Web-Zugriff: the web access with the focus on the release");
+	check(press() == NAV_DO_NOTHING && at(NAV_WEB, 0), "menu, short press on Web-Zugriff: the web access with the focus on its first row, Dauerhaft frei");
+	open_menu(3);
+	world.release_open = world.release_lasting = true;
+	check(press() == NAV_DO_NOTHING && at(NAV_WEB, 0), "menu, short press on Web-Zugriff while the release lasts: the web access, nothing is switched by the way there");
 	open_menu(4);
 	world.info_lines = 3;
 	check(press() == NAV_DO_NOTHING && at(NAV_INFO, 0), "menu, short press on Info: the info with the focus on its first line");
@@ -1372,26 +1378,93 @@ static void test_web(void)
 {
 	nav_t before;
 
-	open_web(0);
+	open_web(1);
 	before = nav;
 	check(press() == NAV_DO_RELEASE_ON && stays(&before), "web access, short press on the release while it is closed: it is to be opened, the screen stays");
 	world.release_open = true;
 	check(press() == NAV_DO_RELEASE_OFF && stays(&before), "web access, short press on the release while it is open: it is to be closed, the screen stays");
-	check(turn(1) == NAV_DO_NOTHING && at(NAV_WEB, 1) && turn(1) == NAV_DO_NOTHING && at(NAV_WEB, 1) && turn(-2) == NAV_DO_NOTHING && at(NAV_WEB, 0),
-	      "web access: turning moves the focus over its two rows, hard ends");
-	open_web(1);
+	open_web(0);
+	check(turn(1) == NAV_DO_NOTHING && at(NAV_WEB, 1) && turn(1) == NAV_DO_NOTHING && at(NAV_WEB, 2) && turn(1) == NAV_DO_NOTHING && at(NAV_WEB, 2) &&
+	      turn(-3) == NAV_DO_NOTHING && at(NAV_WEB, 0), "web access: turning moves the focus over its three rows, hard ends");
+	open_web(2);
 	world.release_open = true;
 	check(press() == NAV_DO_NOTHING && at(NAV_MENU, 3) && nav.page == 2, "web access, short press on Zurück: the menu with the focus on Web-Zugriff");
-	open_web(0);
-	check(long_press() == NAV_DO_NOTHING && at(NAV_MENU, 3), "web access, long press: the menu with the focus on Web-Zugriff, the release is not touched");
 	open_web(1);
+	check(long_press() == NAV_DO_NOTHING && at(NAV_MENU, 3), "web access, long press: the menu with the focus on Web-Zugriff, the release is not touched");
+	open_web(2);
+	before = nav;
+	before.row = 1;
+	check(tap(1) == NAV_DO_RELEASE_ON && stays(&before), "web access, a tap on the release: the focus goes there, it is to be opened");
+	before.row = 1;
+	check(tap(3) == NAV_DO_NOTHING && stays(&before) && tap(-1) == NAV_DO_NOTHING && stays(&before) && swipe(1) == NAV_DO_NOTHING && stays(&before),
+	      "web access: a tap on a row that does not exist and a swipe are ignored");
+	check(tap(2) == NAV_DO_NOTHING && at(NAV_MENU, 3), "web access, a tap on Zurück: the menu");
+
+	// Dauerhaft frei: the first row flips the setting, whatever the release is at the moment
+	open_web(0);
+	before = nav;
+	check(press() == NAV_DO_WEB_OPEN_TOGGLE && stays(&before), "web access, short press on Dauerhaft frei while the release is closed: the setting is to be flipped, the screen stays");
+	world.release_open = true;
+	check(press() == NAV_DO_WEB_OPEN_TOGGLE && stays(&before), "web access, short press on Dauerhaft frei while the release of ten minutes holds: the setting is to be flipped as well");
+	world.release_lasting = true;
+	check(press() == NAV_DO_WEB_OPEN_TOGGLE && stays(&before), "web access, short press on Dauerhaft frei while the release lasts: the setting is to be flipped - that takes it back");
+	world.release_open = false;
+	check(press() == NAV_DO_WEB_OPEN_TOGGLE && stays(&before), "web access, short press on Dauerhaft frei in a world that calls a closed release lasting: flipped all the same - the row asks nothing");
+	check(nav.last_input_ms == now && nav.clock_ms == now, "web access, a short press on Dauerhaft frei is an input for the idle time");
+	open_web(2);
 	before = nav;
 	before.row = 0;
-	check(tap(0) == NAV_DO_RELEASE_ON && stays(&before), "web access, a tap on the release: the focus goes there, it is to be opened");
-	before.row = 0;
-	check(tap(2) == NAV_DO_NOTHING && stays(&before) && tap(-1) == NAV_DO_NOTHING && stays(&before) && swipe(1) == NAV_DO_NOTHING && stays(&before),
-	      "web access: a tap on a row that does not exist and a swipe are ignored");
-	check(tap(1) == NAV_DO_NOTHING && at(NAV_MENU, 3), "web access, a tap on Zurück: the menu");
+	check(tap(0) == NAV_DO_WEB_OPEN_TOGGLE && stays(&before), "web access, a tap on Dauerhaft frei: the focus goes there, the setting is to be flipped");
+	world.release_open = world.release_lasting = true;
+	check(tap(0) == NAV_DO_WEB_OPEN_TOGGLE && stays(&before), "web access, a tap on Dauerhaft frei while the release lasts: the setting is to be flipped");
+	open_web(0);
+	check(long_press() == NAV_DO_NOTHING && at(NAV_MENU, 3), "web access, long press on Dauerhaft frei: the menu with the focus on Web-Zugriff, nothing is flipped");
+	open_web(0);
+	world.release_open = world.release_lasting = true;
+	check(long_press() == NAV_DO_NOTHING && at(NAV_MENU, 3), "web access, long press on Dauerhaft frei while the release lasts: the menu, nothing is flipped");
+
+	// A release that lasts is not switched by the row of the ten minutes: the row does nothing, as Hotspot while
+	// the access point is kept on
+	open_web(1);
+	world.release_open = world.release_lasting = true;
+	before = nav;
+	check(press() == NAV_DO_NOTHING && stays(&before), "web access, short press on Freigabe while the release lasts: nothing, the screen stays");
+	check(nav.last_input_ms == now && nav.clock_ms == now, "web access, a short press on Freigabe that does nothing: an input for the idle time all the same");
+	check(press() == NAV_DO_NOTHING && stays(&before), "web access, a second short press on Freigabe while the release lasts: nothing again");
+	world.release_lasting = false;
+	check(press() == NAV_DO_RELEASE_OFF && stays(&before), "web access, short press on Freigabe when the release is the one of ten minutes: it is to be closed");
+	world.release_lasting = true;
+	check(press() == NAV_DO_NOTHING && stays(&before), "web access, the release lasts again: the next short press on Freigabe does nothing - the world of the call decides");
+	world.release_open = false;
+	check(press() == NAV_DO_NOTHING && stays(&before), "web access, short press on Freigabe in a world that calls a closed release lasting: nothing either - no release of ten minutes is given below it");
+	world.release_lasting = false;
+	check(press() == NAV_DO_RELEASE_ON && stays(&before), "web access, short press on Freigabe when the release is closed and not lasting: it is to be opened");
+	open_web(0);
+	world.release_open = world.release_lasting = true;
+	before = nav;
+	before.row = 1;
+	check(tap(1) == NAV_DO_NOTHING && stays(&before), "web access, a tap on Freigabe while the release lasts: the focus goes there, nothing else");
+	check(nav.last_input_ms == now && nav.clock_ms == now, "web access, a tap on Freigabe while the release lasts: an input for the idle time all the same");
+	check(tap(1) == NAV_DO_NOTHING && stays(&before), "web access, a tap on Freigabe with the focus on it while the release lasts: nothing either");
+	check(turn(-1) == NAV_DO_NOTHING && at(NAV_WEB, 0) && turn(2) == NAV_DO_NOTHING && at(NAV_WEB, 2) && turn(-1) == NAV_DO_NOTHING && at(NAV_WEB, 1),
+	      "web access, the release lasts: the focus moves onto Freigabe and over it as over every row");
+	check(long_press() == NAV_DO_NOTHING && at(NAV_MENU, 3), "web access, long press on Freigabe while the release lasts: the menu, as from every row");
+	open_web(1);
+	world.release_open = world.release_lasting = true;
+	check(tap(2) == NAV_DO_NOTHING && at(NAV_MENU, 3), "web access, the release lasts: Zurück leads to the menu as always");
+
+	// Only the web access has a row for the release
+	open_settings(1);
+	world.release_open = world.release_lasting = true;
+	before = nav;
+	check(press() == NAV_DO_AP_TOGGLE && stays(&before), "settings, the release lasts: row 1 there is Hotspot and toggles the access point as always");
+	open_menu(1);
+	world.release_open = world.release_lasting = true;
+	check(press() == NAV_DO_NOTHING && at(NAV_BRIGHTNESS, 0), "menu, the release lasts: row 1 there is Helligkeit and opens as always");
+	open_dtc(1);
+	world.release_open = world.release_lasting = true;
+	world.flow = DTC_FLOW_LIST;
+	check(press() == NAV_DO_NOTHING && at(NAV_DTC_LIST, 0), "fault memory, the release lasts: row 1 there is Liste ansehen and opens as always");
 }
 
 static void test_info(void)
@@ -1506,10 +1579,13 @@ static void test_settings(void)
 	open_menu(1);
 	world.ap_kept = true;
 	check(press() == NAV_DO_NOTHING && at(NAV_BRIGHTNESS, 0), "menu, the access point kept on: row 1 there is Helligkeit and opens as always");
-	open_web(1);
+	open_web(2);
 	world.ap_kept = true;
-	check(tap(0) == NAV_DO_RELEASE_ON && at(NAV_WEB, 0) && press() == NAV_DO_RELEASE_ON && tap(1) == NAV_DO_NOTHING && at(NAV_MENU, 3),
+	check(tap(1) == NAV_DO_RELEASE_ON && at(NAV_WEB, 1) && press() == NAV_DO_RELEASE_ON && tap(2) == NAV_DO_NOTHING && at(NAV_MENU, 3),
 	      "web access, the access point kept on: Freigabe and Zurück do what they always do");
+	open_web(2);
+	world.ap_kept = true;
+	check(tap(0) == NAV_DO_WEB_OPEN_TOGGLE && at(NAV_WEB, 0), "web access, the access point kept on: Dauerhaft frei flips the setting as always");
 
 	// The dialog for each of the three, opened with row 2, 3 and 4
 	for(int row = 2; row <= 4; row++)
@@ -2091,6 +2167,18 @@ static void test_idle(void)
 	nav_tap(&nav, 1, &world, now = input + 100000);
 	check(tick_at(input + 219999) == NAV_DO_NOTHING && at(NAV_SETTINGS, 1) && tick_at(input + 220000) == NAV_DO_NOTHING && page_is(2),
 	      "a tap on Hotspot while the access point is kept on moves the focus there and starts the idle time anew");
+	open_web(1);
+	world.release_open = world.release_lasting = true;
+	input = now;
+	nav_short(&nav, &world, now = input + 100000);
+	check(tick_at(input + 219999) == NAV_DO_NOTHING && at(NAV_WEB, 1) && tick_at(input + 220000) == NAV_DO_NOTHING && page_is(2),
+	      "a short press on Freigabe while the release lasts does nothing and starts the idle time anew");
+	open_web(0);
+	world.release_open = world.release_lasting = true;
+	input = now;
+	nav_tap(&nav, 1, &world, now = input + 100000);
+	check(tick_at(input + 219999) == NAV_DO_NOTHING && at(NAV_WEB, 1) && tick_at(input + 220000) == NAV_DO_NOTHING && page_is(2),
+	      "a tap on Freigabe while the release lasts moves the focus there and starts the idle time anew");
 	reach(NAV_SETTINGS, false);
 	input = now;
 	nav_long(&nav, &world, now = input + 100000);
@@ -2653,6 +2741,7 @@ typedef struct
 	dtc_flow_phase_t flow;
 	bool can_read, can_clear, release_open, previous_firmware;
 	bool ap_kept;                   // the own access point stays on whatever is asked
+	bool lasting;                   // the release is the one that lasts: the row of the ten minutes switches nothing
 	int list, cleared, old, info;   // lines as the header counts them: within 0 and INT_MAX - 3
 	int brightness;
 	bool reverse;                   // the knob reports a detent clockwise as positive, not as negative
@@ -2743,9 +2832,10 @@ static const rule_t rules[] =
 	{NAV_BRIGHTNESS,  's', ANY,        ALWAYS,        NAV_MENU,        1,         NAV_DO_SETTINGS_STORE, NAV_DO_NOTHING},
 	{NAV_BRIGHTNESS,  'l', ANY,        ALWAYS,        NAV_MENU,        1,         NAV_DO_SETTINGS_STORE, NAV_DO_NOTHING},
 
-	{NAV_WEB,         's', 0,          RELEASED,      STAY,            0,         NAV_DO_RELEASE_OFF,    NAV_DO_NOTHING},
-	{NAV_WEB,         's', 0,          NOT_RELEASED,  STAY,            0,         NAV_DO_RELEASE_ON,     NAV_DO_NOTHING},
-	{NAV_WEB,         's', 1,          ALWAYS,        NAV_MENU,        3,         NAV_DO_NOTHING,        NAV_DO_NOTHING},
+	{NAV_WEB,         's', 0,          ALWAYS,        STAY,            0,         NAV_DO_WEB_OPEN_TOGGLE, NAV_DO_NOTHING},
+	{NAV_WEB,         's', 1,          RELEASED,      STAY,            0,         NAV_DO_RELEASE_OFF,    NAV_DO_NOTHING},
+	{NAV_WEB,         's', 1,          NOT_RELEASED,  STAY,            0,         NAV_DO_RELEASE_ON,     NAV_DO_NOTHING},
+	{NAV_WEB,         's', 2,          ALWAYS,        NAV_MENU,        3,         NAV_DO_NOTHING,        NAV_DO_NOTHING},
 	{NAV_WEB,         'l', ANY,        ALWAYS,        NAV_MENU,        3,         NAV_DO_NOTHING,        NAV_DO_NOTHING},
 
 	{NAV_INFO,        's', ANY,        ALWAYS,        NAV_MENU,        4,         NAV_DO_NOTHING,        NAV_DO_NOTHING},
@@ -2782,8 +2872,9 @@ static bool model_when(const seen_t *seen, when_t when)
 		case HAS_CLEARED:   return seen->flow == DTC_FLOW_CLEARED;
 		case HAS_FAILED:    return seen->flow == DTC_FLOW_FAILED || seen->flow == DTC_FLOW_UNKNOWN;
 		case HAS_OLD:       return seen->old > 0;
-		case RELEASED:      return seen->release_open;
-		case NOT_RELEASED:  return !seen->release_open;
+		// The release of ten minutes, given or not. One that lasts is neither: no rule switches it here.
+		case RELEASED:      return seen->release_open && !seen->lasting;
+		case NOT_RELEASED:  return !seen->release_open && !seen->lasting;
 		case PREVIOUS_AND_NOT_UNDER_WAY: return seen->previous_firmware && !model_under_way(seen);
 		case AP_NOT_KEPT:   return !seen->ap_kept;
 	}
@@ -2823,7 +2914,7 @@ static bool model_acts(nav_screen_t screen, int at_row, const seen_t *seen)
 static int model_rows(nav_screen_t screen, const seen_t *seen)
 {
 	//                                  pages menu dtc busy list dialog cleared failed old brightness web info settings confirm
-	static const int behind[SCREENS] = {0,    7,   4,  0,   3,   2,     1,      0,     1,  0,         2,  0,   6,       2};
+	static const int behind[SCREENS] = {0,    7,   4,  0,   3,   2,     1,      0,     1,  0,         3,  0,   6,       2};
 
 	return model_lines(screen, seen) + behind[screen];
 }
@@ -3143,6 +3234,13 @@ static struct
 	long levels;                        // ... and those that went against the hand: must not happen
 	long reversed_calls;                // calls with the direction reversed
 	long reversed_turns[2];             // turns over the value pages and over a screen with rows with the direction reversed
+	// The release of the web interface
+	long released;                      // a release switched, or the setting flipped, by something else than its row: must not happen
+	long release_switches[2];           // short presses and taps on Freigabe that switched the release of ten minutes
+	long release_refused[2];            // short presses and taps on Freigabe while the release lasts
+	long lasting_flips[2][2];           // short presses and taps on Dauerhaft frei: while the release does not last, and while it does
+	long lasting_calls;                 // calls with the release lasting
+	long acts_lasting;                  // times the row Freigabe was asked whether it acts while the release lasts
 } walked;
 
 static uint32_t walk_state;
@@ -3172,6 +3270,15 @@ static uint32_t side_random(uint32_t below)
 	return (side_state >> 8) % below;
 }
 
+// ... and so has the release that lasts: the walk rolls for it what it never rolled for anything else
+static uint32_t web_state;
+
+static uint32_t web_random(uint32_t below)
+{
+	web_state = web_state * 1664525u + 1013904223u;
+	return (web_state >> 8) % below;
+}
+
 static int walk_layout, walk_catalog;
 
 // The world as the model sees it
@@ -3187,6 +3294,7 @@ static void see(seen_t *seen)
 	seen->release_open = world.release_open;
 	seen->previous_firmware = world.previous_firmware;
 	seen->ap_kept = world.ap_kept;
+	seen->lasting = world.release_lasting;
 	seen->brightness = world.brightness;
 	seen->reverse = world.reverse;
 	seen->over = world.uploading ? NAV_OVER_UPLOAD : world.asking != ACCESS_ASK_NONE ? NAV_OVER_ASK : world.update_pending ? NAV_OVER_UPDATE : NAV_OVER_NONE;
@@ -3312,6 +3420,11 @@ static void carry_out(nav_do_t action)
 		case NAV_DO_RELEASE_OFF:
 			world.release_open = false;
 			break;
+		case NAV_DO_WEB_OPEN_TOGGLE:
+			// Given for good, or taken back: closed then
+			world.release_lasting = !world.release_lasting;
+			world.release_open = world.release_lasting;
+			break;
 		case NAV_DO_BRIGHTNESS:
 			world.brightness = nav.value;
 			break;
@@ -3400,6 +3513,7 @@ static void walk(uint32_t seed)
 
 	walk_state = seed;
 	side_state = seed ^ 0xD1CEu;
+	web_state = seed ^ 0x0FFEu;
 	quiet_world();
 	walk_layout = 0;
 	walk_catalog = 3;
@@ -3461,6 +3575,9 @@ static void walk(uint32_t seed)
 		if((nav.screen == NAV_DTC_CONFIRM || nav.screen == NAV_CONFIRM) && what >= 28 && walk_random(30) == 0) what = 98;
 		// The user reverses the direction of the knob, or the browser does: at any time, on any screen
 		if(side_random(20) == 0) world.reverse = !world.reverse;
+		// The release lasts or does not, whatever the display did last: a restart with other settings, and worlds
+		// the display never is in - a release that is called lasting while it is closed
+		if(web_random(25) == 0) world.release_lasting = !world.release_lasting;
 		see(&seen);
 		rows = model_rows(model.screen, &seen);
 		before = nav;
@@ -3580,6 +3697,7 @@ static void walk(uint32_t seed)
 				walked.acts_asked[asked[i] < 0 || asked[i] >= all ? 2 : expected_acts ? 0 : 1]++;
 				if(nav.screen == NAV_SETTINGS && asked[i] >= 2 && asked[i] <= 4 && model_under_way(&seen) && (asked[i] != 3 || seen.previous_firmware)) walked.acts_refused++;
 				if(nav.screen == NAV_SETTINGS && asked[i] == 1 && world.ap_kept) walked.acts_kept++;
+				if(nav.screen == NAV_WEB && asked[i] == 1 && world.release_lasting) walked.acts_lasting++;
 			}
 		}
 
@@ -3649,6 +3767,28 @@ static void walk(uint32_t seed)
 			walked.ap_refused[call == CALL_TAP]++;
 		}
 		if(world.ap_kept) walked.ap_kept_calls++;
+
+		// The release: the one of ten minutes is switched only by a short press or a tap on Freigabe of the web
+		// access, with nothing lying over it, and never while the release lasts - then the row takes the focus
+		// and nothing else. The setting is flipped only by a short press or a tap on Dauerhaft frei.
+		if(action == NAV_DO_RELEASE_ON || action == NAV_DO_RELEASE_OFF)
+		{
+			if(before.screen != NAV_WEB || pressed_row != 1 || world.release_lasting || seen.over != NAV_OVER_NONE || !at(NAV_WEB, 1) ||
+			   (action == NAV_DO_RELEASE_OFF) != world.release_open) walked.released++;
+			walked.release_switches[call == CALL_TAP]++;
+		}
+		if(before.screen == NAV_WEB && pressed_row == 1 && world.release_lasting && seen.over == NAV_OVER_NONE)
+		{
+			if(action != NAV_DO_NOTHING || !at(NAV_WEB, 1) || nav.last_input_ms != nav.clock_ms) walked.released++;
+			walked.release_refused[call == CALL_TAP]++;
+		}
+		if(action == NAV_DO_WEB_OPEN_TOGGLE)
+		{
+			if(before.screen != NAV_WEB || pressed_row != 0 || seen.over != NAV_OVER_NONE || !at(NAV_WEB, 0)) walked.released++;
+			walked.lasting_flips[world.release_lasting][call == CALL_TAP]++;
+		}
+		if(before.screen == NAV_WEB && pressed_row == 0 && seen.over == NAV_OVER_NONE && action != NAV_DO_WEB_OPEN_TOGGLE) walked.released++;
+		if(world.release_lasting) walked.lasting_calls++;
 
 		// The focus of the two dialogs: moved by the knob alone, and a tap on the second answer changes nothing
 		if(in_dialog && nav.screen == before.screen && nav.row != before.row && call != CALL_TURN) walked.touched++;
@@ -3764,6 +3904,11 @@ static void test_walk(void)
 	printf("  the brightness: turned with the direction normal %ld times as negative and %ld as positive detents, with it reversed %ld and %ld; %ld turns made it darker, %ld brighter\n",
 	       walked.level_turns[0][0], walked.level_turns[0][1], walked.level_turns[1][0], walked.level_turns[1][1], walked.level_moves[0], walked.level_moves[1]);
 	printf("  the direction reversed in %ld calls, in %ld turns over the value pages and %ld over rows\n", walked.reversed_calls, walked.reversed_turns[0], walked.reversed_turns[1]);
+	printf("  the release: the one of ten minutes switched by %ld short presses and %ld taps on Freigabe, left alone under %ld short presses and %ld taps on it while the release lasts; "
+	       "the setting flipped by %ld short presses and %ld taps on Dauerhaft frei while it does not last, by %ld and %ld while it does; lasting in %ld calls, "
+	       "and the row Freigabe asked %ld times whether it acts then\n",
+	       walked.release_switches[0], walked.release_switches[1], walked.release_refused[0], walked.release_refused[1], walked.lasting_flips[0][0], walked.lasting_flips[0][1],
+	       walked.lasting_flips[1][0], walked.lasting_flips[1][1], walked.lasting_calls, walked.acts_lasting);
 
 	for(int i = 0; i < CALLS; i++) reached = reached && walked.calls[i] >= 200;
 	for(int i = 0; i < SCREENS; i++) reached = reached && walked.screens[i] >= 1000;
@@ -3794,6 +3939,13 @@ static void test_walk(void)
 	                             "which is entered only from their row of the settings and never while a request is under way");
 	check(walked.switched == 0, "in the walk the own access point is switched only by a short press or a tap on Hotspot of the settings with nothing lying over them, "
 	                            "and never while it is kept on: the row then takes the focus, counts as an input and does nothing else");
+	check(walked.release_switches[0] >= 200 && walked.release_switches[1] >= 100 && walked.release_refused[0] >= 200 && walked.release_refused[1] >= 100 &&
+	      walked.lasting_flips[0][0] >= 200 && walked.lasting_flips[0][1] >= 100 && walked.lasting_flips[1][0] >= 200 && walked.lasting_flips[1][1] >= 100 &&
+	      walked.lasting_calls >= 100000 && walked.acts_lasting >= 10000,
+	      "the walk presses and taps Freigabe while the release lasts and while it does not, and Dauerhaft frei in both as well, in numbers");
+	check(walked.released == 0, "in the walk the release of ten minutes is switched only by a short press or a tap on Freigabe of the web access with nothing lying over it, "
+	                            "off while it is open and on while it is not, and never while the release lasts: the row then takes the focus, counts as an input and does nothing else; "
+	                            "the setting is flipped by every short press and tap on Dauerhaft frei there, and by nothing else");
 	check(walked.touched == 0, "in the walk the focus of the two dialogs is moved by the knob alone, and a tap on their second answer changes nothing");
 	check(walked.touch_confirms == 0, "in the walk no tap ever returns what confirms a question: not the one of the browser, not the update, not the clear, not restart, previous firmware or factory reset");
 	check(walked.overlays == 0, "in the walk an input under an overlay changes nothing below it and returns only what the overlay names; the hold returns nothing there, the tick at most the closing of the hold dialog");
@@ -3867,17 +4019,18 @@ static void test_acts(void)
 	check(!acts(0) && !acts(1) && acts(2), "outcome of a clear with two lines: the lines do not act, Fertig does");
 	open_old(2, 0);
 	check(!acts(0) && !acts(1) && acts(2), "list before the last clear with two lines: the lines do not act, Zurück does");
-	open_web(1);
-	check(acts(0) && acts(1), "web access: the release acts whether it is given or not, and so does Zurück");
+	open_web(2);
+	check(acts(1) && acts(2), "web access: the release acts whether it is given or not, and so does Zurück");
 	world.release_open = true;
-	check(acts(0), "web access with the release given: the row takes it back - it acts");
+	check(acts(1), "web access with the release given: the row takes it back - it acts");
+	check(acts(0), "web access: Dauerhaft frei acts - a press there flips the setting");
 	open_info(4, 0);
 	check(acts(0) && acts(3), "info: a press on any line leads back to the menu - every line acts");
 
 	// A row that does not exist
 	open_web(0);
-	check(!acts(-1), "web access, row -1: no such row - it does not act, although a press with the focus anywhere but on the release leads back");
-	check(!acts(2), "web access, row 2: no such row behind the two - it does not act");
+	check(!acts(-1), "web access, row -1: no such row - it does not act");
+	check(!acts(3), "web access, row 3: no such row behind the three - it does not act");
 	open_info(4, 0);
 	check(!acts(4) && !acts(-1) && !acts(INT_MAX) && !acts(INT_MIN), "info of four lines: the rows 4, -1, the largest and the smallest number do not exist and do not act");
 	start();
@@ -3947,7 +4100,45 @@ static void test_acts(void)
 	check(acts(1), "menu, the access point kept on: row 1 there is Helligkeit and acts");
 	open_web(0);
 	world.ap_kept = true;
-	check(acts(0) && acts(1), "web access, the access point kept on: both rows act - the release is not the access point");
+	check(acts(0) && acts(1) && acts(2), "web access, the access point kept on: all three rows act - the release is not the access point");
+
+	// The web access: a release that lasts is not offered to be switched by the row of the ten minutes
+	open_web(1);
+	world.release_open = world.release_lasting = true;
+	before = nav;
+	check(!acts(1) && press() == NAV_DO_NOTHING && stays(&before), "web access, Freigabe while the release lasts: the row does not act, and the press on it does nothing");
+	world.release_lasting = false;
+	check(acts(1) && press() == NAV_DO_RELEASE_OFF && stays(&before), "web access, Freigabe when the release is the one of ten minutes: the row acts, and the press on it closes the release");
+	open_web(2);
+	world.release_open = world.release_lasting = true;
+	check(acts(0) && !acts(1) && acts(2), "web access, the release lasts, the focus on Zurück: of its three rows Freigabe alone does not act");
+	world.release_open = false;
+	check(acts(0) && !acts(1) && acts(2), "web access in a world that calls a closed release lasting: Freigabe does not act either");
+	wrong = 0;
+	for(int i = 0; i <= PHASES; i++)
+	{
+		open_web(0);
+		world.flow = phases[i];
+		world.release_open = world.release_lasting = true;
+		world.ap_kept = world.previous_firmware = true;
+		if(acts(1) || !acts(0) || !acts(2)) wrong++;
+		world.release_lasting = false;
+		if(!acts(1) || !acts(0) || !acts(2)) wrong++;
+	}
+	check(wrong == 0, "web access in every phase of the flow: Freigabe does not act while the release lasts and acts when it does not, Dauerhaft frei and Zurück always act");
+	open_settings(0);
+	world.release_open = world.release_lasting = true;
+	check(acts(0) && acts(1) && acts(2) && acts(4) && acts(5), "settings, the release lasts: Hotspot and the other rows act as without that");
+	wrong = 0;
+	for(int over = NAV_OVER_UPLOAD; over <= NAV_OVER_UPDATE; over++)
+	{
+		open_web(0);
+		set_overlay((nav_overlay_t)over);
+		if(nav_overlay(&world) != (nav_overlay_t)over || !acts(0) || !acts(1) || !acts(2)) wrong++;
+		world.release_open = world.release_lasting = true;
+		if(acts(1) || !acts(0) || !acts(2)) wrong++;
+	}
+	check(wrong == 0, "web access below an upload, a question and the update question: Freigabe acts unless the release lasts, as without what lies over it");
 
 	// What lies over the screen is not looked at: the screen below is drawn as without it
 	for(int over = NAV_OVER_UPLOAD; over <= NAV_OVER_UPDATE; over++)

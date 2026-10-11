@@ -422,6 +422,9 @@ void app_init(app_t *app, const app_boot_t *boot, uint64_t now_ms)
 	knob_init(&app->knob, app->settings.reverse);
 	hold_init(&app->hold);
 	access_init(&app->access);
+	// Released for good from the first moment while the setting says so, with nobody at the display - also in
+	// safe mode: the web interface is the way out of it
+	if(app->settings.web_open) access_open_lasting(&app->access, now_ms);
 
 	if(boot->builtin_layout != NULL && layout_parse(boot->builtin_layout, boot->builtin_length, &app->builtin, NULL, app->work, app->work_count))
 	{
@@ -683,8 +686,25 @@ void app_do(app_t *app, nav_do_t what, uint64_t now_ms)
 			break;
 
 		case NAV_DO_RELEASE_OFF:
+			// The release that lasts ends with its setting alone: the switch of the ten minutes does not take it
+			if(access_is_lasting(&app->access)) break;
 			access_close(&app->access, now);
 			drop_asked(app);
+			break;
+
+		case NAV_DO_WEB_OPEN_TOGGLE:
+			app->settings.web_open = !app->settings.web_open;
+			if(app->settings.web_open)
+			{
+				access_open_lasting(&app->access, now);
+			}
+			else
+			{
+				// Taken back: closed at once, also for a question that waits
+				access_close(&app->access, now);
+				drop_asked(app);
+			}
+			app->events |= APP_EVENT_STORE_SETTINGS;
 			break;
 
 		case NAV_DO_ASK_CONFIRM:
@@ -754,6 +774,7 @@ void app_world(const app_t *app, nav_world_t *world, uint64_t now_ms)
 	world->info_lines = app->info_count;
 	world->asking = access_asking(&app->access, now);
 	world->release_open = access_is_open(&app->access, now);
+	world->release_lasting = access_is_lasting(&app->access);
 	world->update_pending = app->update_pending;
 	world->uploading = app->uploading;
 	world->previous_firmware = app->previous_firmware;

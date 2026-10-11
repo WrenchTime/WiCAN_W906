@@ -5,6 +5,7 @@
  * The scenes below all use the same times: the release is given at 1000 and ends at 601000, and at
  * 1801000 at the latest, whatever renews it. A question is asked at 2000 and waits until 62000; the knob
  * counts from 3500 on. The question renews the release, which then ends at 602000.
+ * That is the timed release. The lasting one (test_lasting()) is given at 1000 as well and has no end.
  */
 #include <stdint.h>
 #include <sys/types.h>
@@ -63,7 +64,7 @@ static void released_up_to_the_latest_end(void)
 // The fields of two structs are the same. Not compared as memory: the gaps between the fields hold anything.
 static bool same_fields(const access_t *one, const access_t *other)
 {
-	return one->open == other->open && one->open_until_ms == other->open_until_ms && one->open_max_ms == other->open_max_ms &&
+	return one->open == other->open && one->lasting == other->lasting && one->open_until_ms == other->open_until_ms && one->open_max_ms == other->open_max_ms &&
 	       one->clock_ms == other->clock_ms && one->asking == other->asking && one->asking_since_ms == other->asking_since_ms &&
 	       one->asking_until_ms == other->asking_until_ms && one->ticket == other->ticket && one->ticket_end == other->ticket_end &&
 	       one->previous_end == other->previous_end;
@@ -80,6 +81,7 @@ static void test_init(void)
 {
 	// Whatever stood in the memory before
 	acc.open = true;
+	acc.lasting = true;
 	acc.open_until_ms = 999999;
 	acc.open_max_ms = 999999;
 	acc.clock_ms = 5000;
@@ -93,6 +95,7 @@ static void test_init(void)
 	check(!access_is_open(&acc, 0) && !access_is_open(&acc, 6000) && access_seconds_left(&acc, 6000) == 0,
 	      "after the start the release is closed, whatever stood in the memory");
 	check(access_asking(&acc, 6000) == ACCESS_ASK_NONE && access_ask_seconds_left(&acc, 6000) == 0, "after the start nothing is asked");
+	check(!acc.lasting && !access_is_lasting(&acc), "after the start the release is not the lasting one, whatever stood in the memory");
 	check(acc.ticket == 0, "after the start the number of the last ticket is 0: none yet");
 	check(access_ticket(&acc, 0, 6000) == ACCESS_TICKET_UNKNOWN, "after the start the ticket 0 is unknown");
 	check(access_ticket(&acc, 77, 6000) == ACCESS_TICKET_UNKNOWN && access_ticket(&acc, 76, 6000) == ACCESS_TICKET_UNKNOWN &&
@@ -1411,11 +1414,278 @@ static void test_may_ask(void)
 }
 
 /*
+ * The lasting release: given by the display itself at its start (app.h), with nobody at the device. The
+ * scenes use the times of the head: given at 1000, a question at 2000 that waits until 62000.
+ */
+static void lasting(void)
+{
+	access_init(&acc);
+	access_open_lasting(&acc, 1000);
+}
+
+static void test_lasting(void)
+{
+	access_t untouched;
+	uint64_t now;
+	int refused = 0;
+
+	access_init(&acc);
+	check(!access_is_lasting(&acc), "after the start the release is not the lasting one");
+	released();
+	check(access_is_open(&acc, 1000) && !access_is_lasting(&acc) && access_seconds_left(&acc, 1000) == 600,
+	      "the release given at the device is not the lasting one: it is open, and 600 s are left");
+	check(!access_is_lasting(&acc) && !access_write(&acc, 601000) && !access_is_lasting(&acc), "a timed release that ended is not the lasting one either");
+
+	lasting();
+	check(access_is_open(&acc, 1000) && access_is_lasting(&acc), "the lasting release holds from the moment it is given");
+	check(acc.open && acc.lasting && acc.open_until_ms == 0 && acc.open_max_ms == 0 && acc.clock_ms == 1000 && acc.asking == ACCESS_ASK_NONE && acc.ticket == 0,
+	      "the fields after the lasting release was given at 1000: open and lasting, the time seen 1000, no end written, nothing asked");
+	check(access_is_open(&acc, 600999) && access_is_open(&acc, 601000) && access_is_open(&acc, 601001),
+	      "the lasting release does not end 600000 ms after it was given");
+	check(access_is_open(&acc, 1800999) && access_is_open(&acc, 1801000) && access_is_open(&acc, 1801001),
+	      "the lasting release does not end 1800000 ms after it was given");
+	check(access_is_open(&acc, 86400000ull) && access_is_open(&acc, 4294967296ull + 5) && access_is_open(&acc, 1099511627776ull),
+	      "the lasting release is open a day, 2^32 ms and 2^40 ms after it was given");
+	check(access_seconds_left(&acc, 1000) == UINT32_MAX && access_seconds_left(&acc, 601000) == UINT32_MAX && access_seconds_left(&acc, 1801000) == UINT32_MAX &&
+	      access_seconds_left(&acc, 1099511627776ull) == UINT32_MAX, "the lasting release has 2^32-1 s left at every time: no end");
+	check(access_asking(&acc, 1000) == ACCESS_ASK_NONE && access_ask_seconds_left(&acc, 1000) == 0 && access_ticket(&acc, 0, 1000) == ACCESS_TICKET_UNKNOWN,
+	      "under the lasting release nothing is asked by itself");
+
+	// Changes: accepted at every time, and they move nothing
+	lasting();
+	check(access_write(&acc, 1000) && access_write(&acc, 601000) && access_write(&acc, 1801000) && access_write(&acc, 86400000ull),
+	      "under the lasting release a change is accepted at once, 600000 ms, 1800000 ms and a day after it was given");
+	check(acc.open && acc.lasting && acc.open_until_ms == 0 && acc.open_max_ms == 0 && acc.clock_ms == 86400000ull,
+	      "the fields after changes under the lasting release: the time seen follows, no end is written");
+	check(access_is_open(&acc, 86400000ull + 600000) && access_is_open(&acc, 86400000ull + 1800000) && access_seconds_left(&acc, 86400000ull + 600000) == UINT32_MAX,
+	      "a change under the lasting release gives it no end: open 600000 ms and 1800000 ms behind the change");
+	lasting();
+	for(now = 2000; now < 36000000; now += 1000)
+	{
+		if(!access_write(&acc, now)) refused++;
+	}
+	check(refused == 0 && access_is_open(&acc, 36000000) && access_is_lasting(&acc) && access_seconds_left(&acc, 36000000) == UINT32_MAX,
+	      "a change every second for ten hours under the lasting release: each is accepted, and it is open and lasting behind them");
+	lasting();
+	refused = 0;
+	for(now = 541000; now < 86400000ull; now += 540000)
+	{
+		if(!access_write(&acc, now)) refused++;
+	}
+	check(refused == 0 && access_is_open(&acc, 86400000ull), "a change every 540000 ms for a day under the lasting release: each is accepted");
+
+	// The questions are asked as under the timed release, and they need the knob all the same
+	lasting();
+	check(access_may_ask(&acc, ACCESS_ASK_WIFI, 2000) == ACCESS_ALLOWED && access_may_ask(&acc, ACCESS_ASK_NONE, 2000) == ACCESS_BAD_QUESTION,
+	      "under the lasting release a question is allowed, and one that is none is a bad question");
+	check(access_ask(&acc, ACCESS_ASK_WIFI, 2000) == 1 && access_asking(&acc, 2000) == ACCESS_ASK_WIFI && access_ticket(&acc, 1, 2000) == ACCESS_TICKET_WAITING,
+	      "under the lasting release a question gets the ticket 1 and waits");
+	check(access_may_ask(&acc, ACCESS_ASK_RESET, 2500) == ACCESS_ASKING && access_ask(&acc, ACCESS_ASK_RESET, 2500) == 0 && access_asking(&acc, 2500) == ACCESS_ASK_WIFI,
+	      "under the lasting release a second question is refused while the first waits");
+	check(access_ask_seconds_left(&acc, 2500) == 60 && access_ask_seconds_left(&acc, 3000) == 59 && access_ask_seconds_left(&acc, 61999) == 1,
+	      "a question under the lasting release has 60000 ms from the moment it was asked");
+	check(acc.open && acc.lasting && acc.open_until_ms == 0 && acc.open_max_ms == 0 && acc.clock_ms == 2500 && acc.asking == ACCESS_ASK_WIFI &&
+	      acc.asking_since_ms == 2000 && acc.asking_until_ms == 62000 && acc.ticket == 1 && acc.ticket_end == ACCESS_TICKET_WAITING,
+	      "the fields after a question under the lasting release: it waits since 2000 until 62000, no end of the release is written");
+	check(access_confirm(&acc, 3499) == ACCESS_ASK_NONE && access_asking(&acc, 3499) == ACCESS_ASK_WIFI,
+	      "under the lasting release a press 1499 ms after the question confirms nothing: nothing happens without the knob at its time");
+	check(access_confirm(&acc, 3500) == ACCESS_ASK_WIFI && access_ticket(&acc, 1, 3500) == ACCESS_TICKET_CONFIRMED && access_confirm(&acc, 3600) == ACCESS_ASK_NONE,
+	      "under the lasting release the knob confirms the question 1500 ms after it was asked, once");
+	check(access_is_open(&acc, 3600) && access_is_lasting(&acc), "the press of the knob leaves the lasting release as it is");
+
+	lasting();
+	access_ask(&acc, ACCESS_ASK_FIRMWARE, 2000);
+	check(access_asking(&acc, 61999) == ACCESS_ASK_FIRMWARE && access_ticket(&acc, 1, 61999) == ACCESS_TICKET_WAITING && access_asking(&acc, 62000) == ACCESS_ASK_NONE &&
+	      access_ask_seconds_left(&acc, 62000) == 0, "a question under the lasting release waits 60000 ms and no longer");
+	check(access_ticket(&acc, 1, 62000) == ACCESS_TICKET_EXPIRED && access_ticket(&acc, 1, 86400000ull) == ACCESS_TICKET_EXPIRED && access_is_open(&acc, 62000),
+	      "a question nobody answered under the lasting release has expired, however late that is asked; the release goes on");
+	check(access_confirm(&acc, 62000) == ACCESS_ASK_NONE && access_ticket(&acc, 1, 62000) == ACCESS_TICKET_EXPIRED && access_is_lasting(&acc),
+	      "the knob pressed 60000 ms after a question under the lasting release confirms nothing");
+	check(access_ask(&acc, ACCESS_ASK_RESET, 62000) == 2 && access_ticket(&acc, 1, 62000) == ACCESS_TICKET_EXPIRED && access_ticket(&acc, 2, 62000) == ACCESS_TICKET_WAITING,
+	      "behind a question that expired under the lasting release the next one gets the ticket 2");
+	access_refuse(&acc, 63000);
+	check(access_ticket(&acc, 2, 63000) == ACCESS_TICKET_REFUSED && access_is_open(&acc, 63000) && access_is_lasting(&acc),
+	      "a question refused at the device under the lasting release: refused, the release goes on");
+
+	// Long after the start, where a timed release would have ended long ago
+	lasting();
+	check(access_ask(&acc, ACCESS_ASK_RESET, 86400000ull) == 1 && access_ask_seconds_left(&acc, 86400000ull) == 60 && access_confirm(&acc, 86401500ull) == ACCESS_ASK_RESET,
+	      "a day after the lasting release was given a question is asked, waits its 60 s and is confirmed by the knob");
+
+	// What the timed release left in the fields means nothing under the lasting one
+	released();
+	access_open_lasting(&acc, 2000);
+	check(access_is_open(&acc, 2000) && access_is_lasting(&acc) && access_seconds_left(&acc, 2000) == UINT32_MAX,
+	      "the lasting release given while a timed one holds: the release is the lasting one from then on");
+	check(acc.open && acc.lasting && acc.open_until_ms == 601000 && acc.open_max_ms == 1801000 && acc.clock_ms == 2000,
+	      "the fields after the lasting release was given over a timed one: lasting, the two ends of the timed one are not written");
+	check(access_is_open(&acc, 600999) && access_is_open(&acc, 601000) && access_is_open(&acc, 1801000) && access_is_open(&acc, 86400000ull),
+	      "the lasting release given over a timed one does not end where that one would have ended, nor at its latest end");
+	check(access_write(&acc, 3000) && acc.open_until_ms == 601000 && acc.open_max_ms == 1801000 && acc.clock_ms == 3000,
+	      "a change under the lasting release given over a timed one renews nothing: the fields of the timed one stay as they were");
+	check(access_write(&acc, 601000) && access_write(&acc, 1801000) && access_ask(&acc, ACCESS_ASK_WIFI, 1801000) == 1,
+	      "under the lasting release given over a timed one a change is accepted where that one would have ended, and a question at its latest end");
+	released();
+	access_open_lasting(&acc, 2000);
+	check(access_ask(&acc, ACCESS_ASK_WIFI, 590000) == 1 && access_ask_seconds_left(&acc, 590000) == 60 && access_ask_seconds_left(&acc, 600000) == 50 &&
+	      acc.open_until_ms == 601000, "a question under the lasting release given over a timed one, 11000 ms before the end that one had: 60 s to press, and no end is renewed");
+	check(access_asking(&acc, 601000) == ACCESS_ASK_WIFI && access_ticket(&acc, 1, 601000) == ACCESS_TICKET_WAITING && access_ask_seconds_left(&acc, 601000) == 49,
+	      "where the timed release would have ended the question under the lasting one waits on");
+	check(access_asking(&acc, 649999) == ACCESS_ASK_WIFI && access_ticket(&acc, 1, 650000) == ACCESS_TICKET_EXPIRED && access_is_open(&acc, 650000),
+	      "the question under the lasting release given over a timed one ends with its own time, as expired, not refused");
+	check(access_confirm(&acc, 601000) == ACCESS_ASK_WIFI, "the knob confirms a question under the lasting release behind the end the timed one had");
+
+	// The switch of the timed release gives less than there is: it changes nothing
+	released();
+	access_open_lasting(&acc, 2000);
+	untouched = acc;
+	access_open(&acc, 5000);
+	check(access_is_lasting(&acc) && access_is_open(&acc, 605000) && access_is_open(&acc, 1805000) && access_seconds_left(&acc, 5000) == UINT32_MAX,
+	      "the timed release given under the lasting one: the release stays the lasting one and gets no end");
+	check(acc.open && acc.lasting && acc.open_until_ms == untouched.open_until_ms && acc.open_max_ms == untouched.open_max_ms && acc.clock_ms == 5000,
+	      "the timed release given under the lasting one changes no field but the time seen");
+	access_close(&acc, 6000);
+	check(!access_is_open(&acc, 6000) && !access_write(&acc, 6000), "the timed release given under the lasting one is not there when the lasting one is switched off");
+	lasting();
+	access_ask(&acc, ACCESS_ASK_WIFI, 2000);
+	access_open(&acc, 2500);
+	check(access_asking(&acc, 2500) == ACCESS_ASK_WIFI && access_ticket(&acc, 1, 2500) == ACCESS_TICKET_WAITING && access_ask_seconds_left(&acc, 2500) == 60 &&
+	      access_is_lasting(&acc), "the timed release given under the lasting one leaves a question that waits as it is");
+	lasting();
+	access_open(&acc, 50000);
+	check(access_ask(&acc, ACCESS_ASK_WIFI, 2000) == 1 && access_asking(&acc, 109999) == ACCESS_ASK_WIFI && access_asking(&acc, 110000) == ACCESS_ASK_NONE,
+	      "the time of the timed release given under the lasting one counts as seen");
+
+	// The lasting release over a timed one with a question
+	asked(ACCESS_ASK_WIFI);
+	access_open_lasting(&acc, 3000);
+	check(access_asking(&acc, 3000) == ACCESS_ASK_WIFI && access_ticket(&acc, 1, 3000) == ACCESS_TICKET_WAITING && access_ask_seconds_left(&acc, 3000) == 59,
+	      "the lasting release given while a question waits: the question waits on with its ticket and its time");
+	check(acc.asking == ACCESS_ASK_WIFI && acc.asking_since_ms == 2000 && acc.asking_until_ms == 62000 && acc.ticket == 1 && acc.ticket_end == ACCESS_TICKET_WAITING &&
+	      acc.previous_end == ACCESS_TICKET_UNKNOWN, "the fields of the question after the lasting release was given over it: as the question left them");
+	check(access_confirm(&acc, 3499) == ACCESS_ASK_NONE && access_confirm(&acc, 3500) == ACCESS_ASK_WIFI,
+	      "the lasting release given while a question waits does not let the knob count sooner: 1500 ms after the question");
+	asked(ACCESS_ASK_WIFI);
+	access_open_lasting(&acc, 3000);
+	check(access_ticket(&acc, 1, 61999) == ACCESS_TICKET_WAITING && access_ticket(&acc, 1, 62000) == ACCESS_TICKET_EXPIRED,
+	      "the lasting release given while a question waits gives the question no more time: it expires 60000 ms after it was asked");
+	released_up_to_the_latest_end();
+	check(access_ask(&acc, ACCESS_ASK_FIRMWARE, 1790000) == 1 && access_ask_seconds_left(&acc, 1790000) == 11,
+	      "the scene of a question 11000 ms before the latest end of a timed release: 11 s to press");
+	access_open_lasting(&acc, 1795000);
+	check(access_ask_seconds_left(&acc, 1795000) == 55 && access_asking(&acc, 1801000) == ACCESS_ASK_FIRMWARE && access_ticket(&acc, 1, 1801000) == ACCESS_TICKET_WAITING,
+	      "the lasting release given 6000 ms before that end: the question has its own time alone and waits beyond the end the release had");
+	check(access_ticket(&acc, 1, 1849999) == ACCESS_TICKET_WAITING && access_ticket(&acc, 1, 1850000) == ACCESS_TICKET_EXPIRED && access_is_open(&acc, 1850000),
+	      "that question ends with its own time, as expired");
+	released_up_to_the_latest_end();
+	access_ask(&acc, ACCESS_ASK_FIRMWARE, 1790000);
+	access_open_lasting(&acc, 1801000);
+	check(access_is_open(&acc, 1801000) && access_is_lasting(&acc) && access_asking(&acc, 1801000) == ACCESS_ASK_NONE && access_ticket(&acc, 1, 1801000) == ACCESS_TICKET_REFUSED,
+	      "the lasting release given at the moment a timed one ends under a question: the timed one ended first, the question is refused, the lasting one holds");
+	check(access_ask(&acc, ACCESS_ASK_FIRMWARE, 1801000) == 2, "behind it a new question is asked under the lasting release");
+	released();
+	access_write(&acc, 700000);
+	access_open_lasting(&acc, 800000);
+	check(access_is_open(&acc, 800000) && access_is_lasting(&acc) && access_write(&acc, 5000000), "the lasting release given after a timed one ended: open, and for good");
+
+	// Given again, and the time
+	lasting();
+	access_ask(&acc, ACCESS_ASK_RESET, 2000);
+	untouched = acc;
+	access_open_lasting(&acc, 2500);
+	untouched.clock_ms = 2500;
+	check(same_fields(&acc, &untouched), "the lasting release given again while it lasts and a question waits: no field changes but the time seen");
+	access_init(&acc);
+	access_open_lasting(&acc, 50000);
+	check(access_ask(&acc, ACCESS_ASK_WIFI, 2000) == 1 && access_asking(&acc, 109999) == ACCESS_ASK_WIFI && access_asking(&acc, 110000) == ACCESS_ASK_NONE,
+	      "the time at which the lasting release is given counts as seen: a question with a time before it waits 60000 ms from then");
+	access_init(&acc);
+	access_write(&acc, 50000);
+	access_open_lasting(&acc, 1000);
+	check(acc.clock_ms == 50000 && access_is_open(&acc, 0) && access_is_open(&acc, 50000), "the lasting release given with a time before the previous call: no time passed, open");
+	lasting();
+	access_write(&acc, 5000000);
+	check(access_is_open(&acc, 0) && access_write(&acc, 0) && access_seconds_left(&acc, 0) == UINT32_MAX, "the time steps back under the lasting release: open as before");
+
+	// Only the switch-off ends it
+	lasting();
+	access_close(&acc, 2000);
+	check(!access_is_open(&acc, 2000) && !access_is_lasting(&acc) && access_seconds_left(&acc, 2000) == 0 && !access_write(&acc, 2000) &&
+	      access_ask(&acc, ACCESS_ASK_WIFI, 2000) == 0 && access_may_ask(&acc, ACCESS_ASK_WIFI, 2000) == ACCESS_CLOSED,
+	      "the lasting release switched off: closed at once, not lasting, 0 s left, a change and a question refused");
+	check(!acc.open && !acc.lasting && acc.clock_ms == 2000, "the fields after the lasting release was switched off: closed, not lasting");
+	check(!access_is_open(&acc, 86400000ull) && !access_is_open(&acc, 0), "a lasting release that was switched off stays closed");
+	access_open(&acc, 3000);
+	check(access_is_open(&acc, 602999) && !access_is_open(&acc, 603000) && !access_is_lasting(&acc) && access_seconds_left(&acc, 3000) == 600,
+	      "the timed release given after the lasting one was switched off: it ends 600000 ms later, as every timed one");
+	check(access_write(&acc, 600000) && access_write(&acc, 1100000) && access_write(&acc, 1600000) && access_is_open(&acc, 1802999) && !access_is_open(&acc, 1803000),
+	      "the timed release given after the lasting one was switched off ends 1800000 ms after it was given at the latest");
+	lasting();
+	access_close(&acc, 2000);
+	access_open_lasting(&acc, 3000);
+	check(access_is_open(&acc, 3000) && access_is_lasting(&acc) && access_is_open(&acc, 86400000ull), "the lasting release given again after it was switched off: open, and for good");
+	lasting();
+	access_ask(&acc, ACCESS_ASK_WIFI, 2000);
+	access_close(&acc, 2500);
+	check(access_asking(&acc, 2500) == ACCESS_ASK_NONE && access_ticket(&acc, 1, 2500) == ACCESS_TICKET_REFUSED && access_confirm(&acc, 3500) == ACCESS_ASK_NONE,
+	      "the lasting release switched off while a question waits: the question is refused, the knob confirms nothing");
+	released();
+	access_open_lasting(&acc, 2000);
+	access_ask(&acc, ACCESS_ASK_RESET, 3000);
+	access_close(&acc, 4000);
+	check(access_asking(&acc, 4000) == ACCESS_ASK_NONE && access_ticket(&acc, 1, 4000) == ACCESS_TICKET_REFUSED && acc.asking == ACCESS_ASK_NONE &&
+	      acc.ticket_end == ACCESS_TICKET_REFUSED, "the lasting release given over a timed one and switched off while a question waits: the question is refused at once");
+	check(!access_is_open(&acc, 4000) && !access_write(&acc, 4000) && !access_write(&acc, 600999),
+	      "the lasting release given over a timed one and switched off: closed, the timed one below it is not there any more");
+	access_init(&acc);
+	acc.lasting = true;
+	acc.open = true;
+	access_init(&acc);
+	check(!acc.lasting && !access_is_lasting(&acc) && !access_is_open(&acc, 0), "the start ends a lasting release that stood in the memory");
+
+	// The functions that only ask
+	lasting();
+	access_ask(&acc, ACCESS_ASK_WIFI, 2000);
+	untouched = acc;
+	check(access_is_open(&acc, 70000) && access_is_lasting(&acc) && access_seconds_left(&acc, 70000) == UINT32_MAX && access_asking(&acc, 70000) == ACCESS_ASK_NONE &&
+	      access_ask_seconds_left(&acc, 70000) == 0 && access_ticket(&acc, 1, 70000) == ACCESS_TICKET_EXPIRED && access_may_ask(&acc, ACCESS_ASK_WIFI, 70000) == ACCESS_ALLOWED &&
+	      same_fields(&acc, &untouched), "the functions that only ask leave the fields alone under the lasting release as well");
+	check(access_asking(&acc, 61999) == ACCESS_ASK_WIFI && access_confirm(&acc, 61999) == ACCESS_ASK_WIFI,
+	      "under the lasting release the functions that only ask do not store their time: a call with an earlier time finds the question waiting");
+
+	// The largest time: the lasting release has no end that could lie there
+	access_init(&acc);
+	access_open_lasting(&acc, UINT64_MAX - 1000);
+	check(access_is_open(&acc, UINT64_MAX - 1) && access_is_open(&acc, UINT64_MAX) && access_seconds_left(&acc, UINT64_MAX) == UINT32_MAX,
+	      "the lasting release is open at the largest time: it has no end");
+	check(access_write(&acc, UINT64_MAX) && access_is_open(&acc, UINT64_MAX) && access_is_lasting(&acc) && access_write(&acc, 0),
+	      "a change at the largest time is accepted under the lasting release, and every one behind it");
+	access_init(&acc);
+	access_open_lasting(&acc, UINT64_MAX);
+	check(access_is_open(&acc, UINT64_MAX) && access_is_lasting(&acc) && access_write(&acc, UINT64_MAX), "the lasting release given at the largest time is open");
+	access_init(&acc);
+	access_open_lasting(&acc, UINT64_MAX - 100000);
+	check(access_ask(&acc, ACCESS_ASK_WIFI, UINT64_MAX - 30000) == 1 && access_ask_seconds_left(&acc, UINT64_MAX - 30000) == 30 &&
+	      access_asking(&acc, UINT64_MAX - 1) == ACCESS_ASK_WIFI && access_asking(&acc, UINT64_MAX) == ACCESS_ASK_NONE,
+	      "a question 30000 ms before the largest time under the lasting release waits up to there and no longer");
+	check(access_ticket(&acc, 1, UINT64_MAX) == ACCESS_TICKET_EXPIRED && access_is_open(&acc, UINT64_MAX) && access_confirm(&acc, UINT64_MAX) == ACCESS_ASK_NONE,
+	      "at the largest time the question has expired and the knob confirms nothing; the lasting release is open");
+	check(access_may_ask(&acc, ACCESS_ASK_RESET, UINT64_MAX) == ACCESS_ALLOWED && access_ask(&acc, ACCESS_ASK_RESET, UINT64_MAX) == 2 &&
+	      access_asking(&acc, UINT64_MAX) == ACCESS_ASK_NONE && access_ticket(&acc, 2, UINT64_MAX) == ACCESS_TICKET_EXPIRED && access_confirm(&acc, UINT64_MAX) == ACCESS_ASK_NONE,
+	      "a question asked at the largest time under the lasting release gets a ticket and has expired at once: nothing waits beyond that time");
+	access_init(&acc);
+	access_open(&acc, UINT64_MAX - 1000);
+	access_open_lasting(&acc, UINT64_MAX - 500);
+	check(access_is_open(&acc, UINT64_MAX) && access_write(&acc, UINT64_MAX), "the lasting release given over a timed one 500 ms before the largest time: open there");
+}
+
+/*
  * The same rules written a second time for the walk below: with times that are counted down instead of
  * points in time that are compared, with the two ends of the release kept apart and looked at when time
  * passes instead of one end that is cut short when it is renewed, with the time a question has waited
  * counted up, with the events worked off in the order they happen, and with a list of all tickets instead
- * of the ends of the last two.
+ * of the ends of the last two. The lasting release is a release for which no time passes: its two times are
+ * not counted down, so nothing of it ever falls due.
  */
 #define WALKS           1500
 #define WALK_STEPS      800
@@ -1424,6 +1694,7 @@ typedef struct
 {
 	uint64_t seen;              // the latest time of a call that may change something
 	bool open;
+	bool forever;               // the release is the lasting one: the two times below stand still
 	uint64_t open_left;         // ms the release still lasts if no change comes, counted from `seen`
 	uint64_t latest_left;       // ms it lasts at the most, whatever comes, counted from `seen`
 	access_ask_t waiting;
@@ -1462,6 +1733,8 @@ static uint64_t model_knob_left(const model_t *model)
 {
 	uint64_t release_left = model_release_left(model);
 
+	// A release that never ends cuts no question short
+	if(model->forever) return model->waiting_left;
 	return model->waiting_left < release_left ? model->waiting_left : release_left;
 }
 
@@ -1474,7 +1747,7 @@ static void model_pass(model_t *model, uint64_t now_ms)
 	for(;;)
 	{
 		bool question_due = model->waiting != ACCESS_ASK_NONE && model->waiting_left <= passed;
-		bool release_due = model->open && model_release_left(model) <= passed;
+		bool release_due = model->open && !model->forever && model_release_left(model) <= passed;
 
 		if(question_due && (!release_due || model->waiting_left <= model_release_left(model)))
 		{
@@ -1490,7 +1763,7 @@ static void model_pass(model_t *model, uint64_t now_ms)
 			break;
 		}
 	}
-	if(model->open)
+	if(model->open && !model->forever)
 	{
 		model->open_left -= passed;
 		model->latest_left -= passed;
@@ -1505,15 +1778,25 @@ static void model_pass(model_t *model, uint64_t now_ms)
 static void model_open(model_t *model, uint64_t now_ms)
 {
 	model_pass(model, now_ms);
+	// Ten minutes are nothing to add to for ever
+	if(model->forever) return;
 	model->open = true;
 	model->open_left = model_room(model->seen, 600000);
 	model->latest_left = model_room(model->seen, 1800000);
+}
+
+static void model_open_for_good(model_t *model, uint64_t now_ms)
+{
+	model_pass(model, now_ms);
+	model->open = true;
+	model->forever = true;
 }
 
 static void model_close(model_t *model, uint64_t now_ms)
 {
 	model_pass(model, now_ms);
 	model->open = false;
+	model->forever = false;
 	if(model->waiting != ACCESS_ASK_NONE) model_end_question(model, ACCESS_TICKET_REFUSED);
 }
 
@@ -1521,7 +1804,7 @@ static bool model_write(model_t *model, uint64_t now_ms)
 {
 	model_pass(model, now_ms);
 	if(!model->open) return false;
-	model->open_left = model_room(model->seen, 600000);
+	if(!model->forever) model->open_left = model_room(model->seen, 600000);
 	return true;
 }
 
@@ -1627,12 +1910,17 @@ static uint64_t earlier(uint64_t time, uint64_t by)
 #define WRONG_REPLACED      16      // a second question took the place of one that waited
 #define WRONG_COVERAGE      32      // the walks did not reach what they are meant to reach
 #define WRONG_FORETOLD      64      // access_may_ask() changed a field, or access_ask() then did something else
+#define WRONG_LASTING       128     // a lasting release was closed, refused a change or told an end, or a release
+                                    // that was not given as lasting told that it is
 
 typedef struct
 {
 	long confirmed, too_soon, too_late, expired, refused_by_the_end, refused_by_switch, questions, second_questions, no_questions;
 	long written, not_written, ended_by_itself, ended_at_the_latest, kept_open, steps_back, wraps_of_the_number, at_the_largest_time, previous_known;
 	long foretold[4], closed_and_none, waiting_and_none;
+	// The walks with both releases
+	long for_good, for_good_again, for_good_over_timed, for_good_over_question, timed_under_lasting, lasting_closed, written_lasting, written_late,
+	     asked_lasting, confirmed_lasting, expired_lasting, lasting_at_the_largest_time, timed_given;
 } walk_counts_t;
 
 static walk_counts_t walk_counts;
@@ -1651,8 +1939,8 @@ static bool same_answers(const access_t *walked, const model_t *model, uint64_t 
 	asks[0] = (access_ask_t)(ACCESS_ASK_WIFI + walk_random(3));
 	asks[1] = (access_ask_t)(walk_random(2) * 4);
 	model_pass(&at, when);
-	same = access_is_open(walked, when) == at.open &&
-	       access_seconds_left(walked, when) == (at.open ? model_whole_seconds(model_release_left(&at)) : 0) &&
+	same = access_is_open(walked, when) == at.open && access_is_lasting(walked) == model->forever &&
+	       access_seconds_left(walked, when) == (at.forever ? UINT32_MAX : at.open ? model_whole_seconds(model_release_left(&at)) : 0) &&
 	       access_asking(walked, when) == at.waiting &&
 	       access_ask_seconds_left(walked, when) == (at.waiting != ACCESS_ASK_NONE ? model_whole_seconds(model_knob_left(&at)) : 0);
 	for(i = 0; i < COUNT(numbers); i++)
@@ -1678,7 +1966,10 @@ static bool same_answers(const access_t *walked, const model_t *model, uint64_t 
 // moment something runs out or the knob begins to count, sometimes jump far and sometimes step back. Now
 // and then a release is kept open by a change every 9 minutes and a question is asked shortly before its
 // latest end. Returns the WRONG_ bits.
-static int walk(uint32_t walk_seed)
+// both: one in three releases is given as the lasting one, so that the walk passes through both, from each
+// into the other and through the switch-off of each. Without it the walk is the one of the timed release
+// alone, call for call as before there was a second one.
+static int walk(uint32_t walk_seed, bool both)
 {
 	static const uint64_t starts[] = {0, 0, 1000, 86400000, 4294967296ull - 30000, 4294967296ull - 30000, 4294967296ull + 5, 1099511627776ull,
 	                                  UINT64_MAX - 3000000, UINT64_MAX - 700000};
@@ -1697,10 +1988,11 @@ static int walk(uint32_t walk_seed)
 	model_t model;
 	// The rules of safety are followed here a third time, with as little as they need: the latest time of
 	// a call, when the release was given and when it was renewed, and the last ticket
-	uint64_t now, clock = 0, given_at = 0, renewed_at = 0, asked_at = 0;
+	// and whether the release was given as the lasting one, and when
+	uint64_t now, clock = 0, given_at = 0, renewed_at = 0, asked_at = 0, lasting_since = 0;
 	uint32_t waiting_ticket = 0;
 	access_ask_t waiting_question = ACCESS_ASK_NONE;
-	bool released_now = false, confirmable = false;
+	bool released_now = false, confirmable = false, lasting_now = false;
 	int given_count = 0, wrong = 0, at_the_end = 0, keeping = 0, step;
 
 	walk_random_state = walk_seed;
@@ -1782,6 +2074,9 @@ static int walk(uint32_t walk_seed)
 			{
 				if(before.newest_end == ACCESS_TICKET_EXPIRED) walk_counts.expired++;
 				else walk_counts.refused_by_the_end++;
+				if(lasting_now && before.newest_end == ACCESS_TICKET_EXPIRED) walk_counts.expired_lasting++;
+				// No release that lasts ends under a question
+				if(lasting_now && before.newest_end != ACCESS_TICKET_EXPIRED) wrong |= WRONG_LASTING;
 			}
 			if(model.open && !before.open)
 			{
@@ -1789,15 +2084,36 @@ static int walk(uint32_t walk_seed)
 				if(model.latest_left < model.open_left) walk_counts.ended_at_the_latest++;
 			}
 			if(released_now && (clock - renewed_at >= 600000 || clock - given_at >= 1800000)) released_now = false;
+			if(lasting_now && clock == UINT64_MAX) walk_counts.lasting_at_the_largest_time++;
 		}
 
-		if(operation < 14)
+		if(operation < 14 && both && walk_random(3) == 0)
+		{
+			access_open_lasting(&walked, now);
+			model_open_for_good(&model, now);
+			walk_counts.for_good++;
+			if(lasting_now) walk_counts.for_good_again++;
+			else if(before.open) walk_counts.for_good_over_timed++;
+			if(!lasting_now && before.open && before.waiting != ACCESS_ASK_NONE) walk_counts.for_good_over_question++;
+			if(!lasting_now) lasting_since = clock;
+			lasting_now = true;
+			what = "open for good";
+		}
+		else if(operation < 14)
 		{
 			access_open(&walked, now);
 			model_open(&model, now);
-			released_now = true;
-			given_at = clock;
-			renewed_at = clock;
+			if(lasting_now)
+			{
+				walk_counts.timed_under_lasting++;
+			}
+			else
+			{
+				released_now = true;
+				given_at = clock;
+				renewed_at = clock;
+				walk_counts.timed_given++;
+			}
 			if(walk_random(8) == 0) keeping = 4;
 			what = "open";
 		}
@@ -1806,7 +2122,9 @@ static int walk(uint32_t walk_seed)
 			access_close(&walked, now);
 			model_close(&model, now);
 			if(before.waiting != ACCESS_ASK_NONE) walk_counts.refused_by_switch++;
+			if(lasting_now) walk_counts.lasting_closed++;
 			released_now = false;
+			lasting_now = false;
 			confirmable = false;
 			what = "close";
 		}
@@ -1815,10 +2133,14 @@ static int walk(uint32_t walk_seed)
 			bool written = access_write(&walked, now);
 
 			same = written == model_write(&model, now);
-			if(written && !released_now) wrong |= WRONG_WRITTEN;
+			if(written && !released_now && !lasting_now) wrong |= WRONG_WRITTEN;
+			if(!written && lasting_now) wrong |= WRONG_LASTING;
 			if(written) renewed_at = clock;
 			if(written) walk_counts.written++;
 			else walk_counts.not_written++;
+			if(written && lasting_now) walk_counts.written_lasting++;
+			// Where every timed release has ended, however often it was renewed
+			if(written && lasting_now && clock - lasting_since > 1800000) walk_counts.written_late++;
 			what = "write";
 		}
 		else if(operation < 63)
@@ -1856,7 +2178,8 @@ static int walk(uint32_t walk_seed)
 					if(given[i] == number) wrong |= WRONG_NUMBER;
 				}
 				given[given_count++] = number;
-				if(!released_now) wrong |= WRONG_WRITTEN;
+				if(!released_now && !lasting_now) wrong |= WRONG_WRITTEN;
+				if(lasting_now) walk_counts.asked_lasting++;
 				if(number == 1 && model_number_before != 0) walk_counts.wraps_of_the_number++;
 				waiting_ticket = number;
 				waiting_question = question;
@@ -1875,9 +2198,10 @@ static int walk(uint32_t walk_seed)
 			if(question != ACCESS_ASK_NONE)
 			{
 				// Only the question of the last ticket, once, not too soon, within its time, under a release that holds
-				if(!confirmable || question != waiting_question || clock - asked_at < 1500 || clock - asked_at >= 60000 || !released_now) wrong |= WRONG_CONFIRMED;
+				if(!confirmable || question != waiting_question || clock - asked_at < 1500 || clock - asked_at >= 60000 || (!released_now && !lasting_now)) wrong |= WRONG_CONFIRMED;
 				confirmable = false;
 				walk_counts.confirmed++;
+				if(lasting_now) walk_counts.confirmed_lasting++;
 			}
 			else if(before.waiting != ACCESS_ASK_NONE)
 			{
@@ -1905,6 +2229,13 @@ static int walk(uint32_t walk_seed)
 			printf("  walk %lu, step %d, %s at %llu ms: the answer or the time seen differs from the model\n",
 			       (unsigned long)walk_seed, step, what, (unsigned long long)now);
 			wrong |= WRONG_ANSWER;
+		}
+		// The lasting release as the walk itself kept track of it: open, without an end, and no other is lasting
+		if(access_is_lasting(&walked) != lasting_now || (lasting_now && (!access_is_open(&walked, now) || access_seconds_left(&walked, now) != UINT32_MAX)))
+		{
+			printf("  walk %lu, step %d, after %s at %llu ms: the release is %s as the lasting one, and is not what that means\n",
+			       (unsigned long)walk_seed, step, what, (unsigned long long)now, lasting_now ? "given" : "not given");
+			wrong |= WRONG_LASTING;
 		}
 		after_the_call = walked;
 		for(probe = 0; probe < 4 && wrong == 0; probe++)
@@ -1949,7 +2280,7 @@ static void test_walk_against_the_model(void)
 	if(child == 0)
 	{
 		alarm(120);
-		for(walk_seed = 1; walk_seed <= WALKS; walk_seed++) wrong |= walk(walk_seed);
+		for(walk_seed = 1; walk_seed <= WALKS; walk_seed++) wrong |= walk(walk_seed, false);
 		printf("  walks: %ld questions, %ld confirmed, %ld pressed too soon, %ld pressed too late, %ld left to expire, %ld refused by the end of the release, "
 		       "%ld refused by the switch-off, %ld second questions, %ld refused otherwise, %ld changes accepted, %ld refused, %ld releases ended by themselves, "
 		       "%ld of them at the latest end, %ld changes of a device that writes every 9 minutes, %ld steps back, %ld wraps of the number, "
@@ -1982,6 +2313,50 @@ static void test_walk_against_the_model(void)
 	check((wrong & WRONG_REPLACED) == 0, "in the walks a second question never takes the place of one that waits");
 }
 
+// The same walks through both releases: the timed one as above, and the lasting one given over it, under it,
+// again and after a switch-off
+static void test_walk_with_both_releases(void)
+{
+	int status = 0, wrong = 0;
+	uint32_t walk_seed;
+	bool ended;
+	pid_t child;
+
+	fflush(stdout);
+	child = fork();
+	if(child == 0)
+	{
+		alarm(120);
+		for(walk_seed = 1; walk_seed <= WALKS; walk_seed++) wrong |= walk(walk_seed, true);
+		printf("  walks with both releases: %ld times the lasting one given, %ld of them again, %ld over a timed one, %ld over a timed one with a question, "
+		       "%ld times the timed one given, %ld more under the lasting one, %ld lasting ones switched off, %ld changes accepted under the lasting one, "
+		       "%ld of them later than 1800000 ms after it was given, %ld questions under it, %ld confirmed, %ld left to expire, %ld calls under it at the largest time; "
+		       "%ld releases ended by themselves, %ld questions refused by the end of a release, %ld changes refused\n",
+		       walk_counts.for_good, walk_counts.for_good_again, walk_counts.for_good_over_timed, walk_counts.for_good_over_question, walk_counts.timed_given,
+		       walk_counts.timed_under_lasting, walk_counts.lasting_closed, walk_counts.written_lasting, walk_counts.written_late, walk_counts.asked_lasting,
+		       walk_counts.confirmed_lasting, walk_counts.expired_lasting, walk_counts.lasting_at_the_largest_time, walk_counts.ended_by_itself,
+		       walk_counts.refused_by_the_end, walk_counts.not_written);
+		if(walk_counts.for_good < 20000 || walk_counts.for_good_again < 10000 || walk_counts.for_good_over_timed < 2000 || walk_counts.for_good_over_question < 500 ||
+		   walk_counts.timed_given < 15000 || walk_counts.timed_under_lasting < 20000 || walk_counts.lasting_closed < 8000 || walk_counts.written_lasting < 50000 ||
+		   walk_counts.written_late < 30000 || walk_counts.asked_lasting < 30000 || walk_counts.confirmed_lasting < 8000 || walk_counts.expired_lasting < 20000 ||
+		   walk_counts.lasting_at_the_largest_time < 1000 || walk_counts.ended_by_itself < 8000 || walk_counts.refused_by_the_end < 500 ||
+		   walk_counts.not_written < 20000) wrong |= WRONG_COVERAGE;
+		fflush(stdout);
+		_exit(wrong);
+	}
+	ended = child > 0 && waitpid(child, &status, 0) == child && WIFEXITED(status);
+	wrong = ended ? WEXITSTATUS(status) : 0xFF;
+	check(ended, "1500 random walks through both releases: no crash and no hang");
+	check((wrong & WRONG_COVERAGE) == 0, "the walks through both releases reach the lasting one given over a timed one with and without a question, given again, the timed one given under it, its switch-off, changes long after it was given, questions confirmed and expired under it and the largest time in numbers, and the ends of the timed one as well");
+	check((wrong & WRONG_ANSWER) == 0, "in the walks through both releases every answer after every call is the one of the model, and no function that only asks changes a field");
+	check((wrong & WRONG_LASTING) == 0, "in the walks through both releases the lasting one is open with 2^32-1 s left behind every call until it is switched off, refuses no change, ends no question as refused, and no other release tells that it is the lasting one");
+	check((wrong & WRONG_CONFIRMED) == 0, "in the walks through both releases the knob confirms a question at most once per ticket, never sooner than 1500 ms after it was asked, never after its time, never under a release that ended or was switched off");
+	check((wrong & WRONG_WRITTEN) == 0, "in the walks through both releases no change and no question is accepted while the release is closed, and under the timed one none later than 600000 ms after the last one and none later than 1800000 ms after it was given");
+	check((wrong & WRONG_FORETOLD) == 0, "in the walks through both releases access_may_ask() changes no field, and access_ask() with the same time gives a ticket exactly if it said allowed");
+	check((wrong & WRONG_NUMBER) == 0, "in the walks through both releases no ticket number is 0 and none is given twice");
+	check((wrong & WRONG_REPLACED) == 0, "in the walks through both releases a second question never takes the place of one that waits");
+}
+
 int main(void)
 {
 	test_constants();
@@ -2004,6 +2379,8 @@ int main(void)
 	test_question_at_the_latest_end();
 	test_press_too_soon();
 	test_may_ask();
+	test_lasting();
 	test_walk_against_the_model();
+	test_walk_with_both_releases();
 	return test_end();
 }

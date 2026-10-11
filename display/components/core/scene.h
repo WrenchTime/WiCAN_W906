@@ -176,8 +176,9 @@ typedef struct
  * rule of its own for that, it asks nav.h (nav_row_acts(), with the row as nav.h counts it and the world as
  * it is). So the screen never draws a row as if it worked while the press on it is ignored. The conditions
  * named with the screens below are those of nav.h, written down for the reader (can_read, can_clear, flow,
- * old_lines, previous_firmware and ap_kept of the world). What lies over the screen is not asked: the rows
- * below an overlay are those without it. Phase, number and reason of the own request come from `flow`.
+ * old_lines, previous_firmware, ap_kept and release_lasting of the world). What lies over the screen is not
+ * asked: the rows below an overlay are those without it. Phase, number and reason of the own request come
+ * from `flow`.
  *
  * ring: ring_state() with the view of the connection, its state, and - on a value page - the worst level
  * and `old`; level 0 and not old on every other screen.
@@ -305,11 +306,15 @@ typedef struct
  * NAV_BRIGHTNESS SCENE_LEVEL "Helligkeit", in night mode "Helligkeit (Nacht)"; big "80 %" (nav->value);
  *                permille = nav->value * 10, kept within 0..1000; note "Drehen zum Ändern, Drücken zum
  *                Speichern"
- * NAV_WEB        SCENE_LIST "Web-Zugriff": "Freigabe" detail "an – noch 9:12" (access_seconds_left()) or
- *                "aus" (when that is 0); "Zurück". lines: the address; without one "Kein WLAN" while the
- *                own access point is off, and no line in its place while it is on (a phone is to join the
- *                network named next, not to read that there is none); then, with the own access point on,
- *                "WLAN: <ap_ssid>" and "Passwort: <ap_password>".
+ * NAV_WEB        SCENE_LIST "Web-Zugriff": "Dauerhaft frei" detail "ja" / "nein" (access_is_lasting()); "Freigabe"
+ *                detail "dauerhaft" while the release is the one that lasts, else "an – noch 9:12"
+ *                (access_seconds_left()) or "aus" (when that is 0); "Zurück". "Freigabe" is not enabled while
+ *                the world says that the release lasts (world->release_lasting): nav.h ignores the press - the
+ *                release that lasts is taken back by "Dauerhaft frei" alone. The details are those of access.h
+ *                all the same, as the time left always was: the world decides about the press, not about a text.
+ *                lines: the address; without one "Kein WLAN" while the own access point is off, and no line in
+ *                its place while it is on (a phone is to join the network named next, not to read that there
+ *                is none); then, with the own access point on, "WLAN: <ap_ssid>" and "Passwort: <ap_password>".
  * NAV_INFO       SCENE_LIST "Info": the texts of `info` as rows of the kind SCENE_ROW_LINE
  * NAV_SETTINGS   SCENE_LIST "Einstellungen": "Drehrichtung" detail "umgekehrt" / "normal"; "Hotspot" detail
  *                "an" / "aus" (ap_on; enabled unless world->ap_kept); "Neustart"; "Vorherige Version"

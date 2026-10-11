@@ -162,7 +162,14 @@ static bool browser_forget(const char *ssid)
 // POST /api/settings
 static bool browser_settings(const char *json)
 {
-	if(!access_write(&app->access, now) || !settings_from_json(&app->settings, json, strlen(json), NULL, 0, app->work, app->work_count)) return false;
+	settings_t wanted;
+
+	// As bytes, there and back: what is copied into the app has no byte that only lay on the stack
+	memcpy(&wanted, &app->settings, sizeof(wanted));
+	if(!access_write(&app->access, now) || !settings_from_json(&wanted, json, strlen(json), NULL, 0, app->work, app->work_count)) return false;
+	// Whether the web interface is released for good is set at the display alone (app_web.h)
+	if(wanted.web_open != app->settings.web_open) return false;
+	memcpy(&app->settings, &wanted, sizeof(wanted));
 
 	knob_set_reverse(&app->knob, app->settings.reverse);
 	// The second source follows its address
@@ -246,21 +253,24 @@ static bool flash_catalog_is(int count, const char *name, const char *unit)
 
 static void test_first_start(void)
 {
-	static const flash_t empty;
+	// What the story begins with: nothing but the setting of the stories (app_harness.h)
+	static flash_t untouched;
 	access_ticket_t ticket;
 
 	factory();
+	memcpy(&untouched, &flash, sizeof(flash));
 	start();
 	check(all_bytes(box.front, sizeof(box.front), FILL) && all_bytes(box.behind, sizeof(box.behind), FILL), "the start writes no byte outside of its app_t");
 	check(stores() + restarts() + done.valid == 0 && app->events == 0, "the start raises no event");
 	run(100);
-	shows("first_start", "first start without anything stored and without a network: the adapter was not found, the first of the seven built-in pages");
+	shows("first_start", "first start with nothing stored but the settings of the stories and without a network: the adapter was not found, the first of the seven built-in pages");
 	check(app->source == APP_LAYOUT_BUILTIN && app->has_builtin && app->layout.page_count == 7 &&
 	      strcmp(app->layout.name, "W906 OM651 Standard") == 0, "first start: the built-in layout is in use");
 	check(app->layout_length == strlen(builtin_text) && strcmp(app->layout_text, builtin_text) == 0 && app->builtin_text == builtin_text,
 	      "first start: layout_text is the text of the built-in layout, and the app keeps the text it was given");
 	check(wifi.ap_on && wifi.aps_on == 1 && wifi.scans == 0 && app->link.phase == LINK_IDLE, "first start: without a stored network the own access point opens and nothing is scanned");
-	check(memcmp(&flash, &empty, sizeof(flash)) == 0 && stores() + restarts() + done.valid == 0, "first start: nothing is stored and nothing is asked of the platform");
+	check(memcmp(&flash, &untouched, sizeof(flash)) == 0 && strcmp(flash.settings, WEB_TIMED) == 0 && stores() + restarts() + done.valid == 0,
+	      "first start: nothing is stored and nothing is asked of the platform");
 	check(requests() == 0 && app_host(app)[0] == '\0', "first start: no request without a network, and no address of an adapter");
 	check(app->settings.brightness == 80 && app->settings.night == 25 && !app->settings.night_mode && !app->settings.reverse && app->settings.standby_s == 60 && light() == 80,
 	      "first start: the settings are the defaults, the backlight is at 80");
@@ -280,6 +290,7 @@ static void test_first_start(void)
 	shows("first_menu", "first start: a short press opens the menu, three detents lead to Web-Zugriff");
 	short_press();
 	shows("first_web", "first start: the web screen names the own access point and its password, and no address");
+	turn(1);
 	short_press();
 	check(access_is_open(&app->access, now) && now == 580, "first start: a short press on Freigabe gives the release");
 
@@ -347,7 +358,7 @@ static void test_first_start(void)
 static void test_stored_start(void)
 {
 	garage();
-	strcpy(flash.settings, "{\"brightness\":60,\"night\":15,\"night_mode\":true,\"reverse\":true,\"standby_s\":0}");
+	strcpy(flash.settings, "{\"brightness\":60,\"night\":15,\"night_mode\":true,\"reverse\":true,\"standby_s\":0" WEB_OFF);
 	flash.has_settings = true;
 	strcpy(flash.layout, stored_layout);
 	flash.has_layout = true;
@@ -427,11 +438,11 @@ static void test_pages(void)
 }
 
 
-#define SETTINGS_10     "{\"brightness\":10,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}"
-#define SETTINGS_NIGHT  "{\"brightness\":10,\"night\":25,\"night_mode\":true,\"reverse\":false,\"standby_s\":60}"
-#define SETTINGS_30     "{\"brightness\":10,\"night\":30,\"night_mode\":true,\"reverse\":false,\"standby_s\":60}"
-#define SETTINGS_40     "{\"brightness\":10,\"night\":40,\"night_mode\":true,\"reverse\":false,\"standby_s\":60}"
-#define SETTINGS_TURN   "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60}"
+#define SETTINGS_10     "{\"brightness\":10,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60" WEB_OFF
+#define SETTINGS_NIGHT  "{\"brightness\":10,\"night\":25,\"night_mode\":true,\"reverse\":false,\"standby_s\":60" WEB_OFF
+#define SETTINGS_30     "{\"brightness\":10,\"night\":30,\"night_mode\":true,\"reverse\":false,\"standby_s\":60" WEB_OFF
+#define SETTINGS_40     "{\"brightness\":10,\"night\":40,\"night_mode\":true,\"reverse\":false,\"standby_s\":60" WEB_OFF
+#define SETTINGS_TURN   "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60" WEB_OFF
 
 static bool flash_settings_are(const char *text)
 {
@@ -711,13 +722,13 @@ static void test_brightness(void)
 	short_press();
 	turn(2);
 	short_press();
-	check(!app->settings.night_mode && light() == 10 && flash_settings_are("{\"brightness\":10,\"night\":40,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}"),
+	check(!app->settings.night_mode && light() == 10 && flash_settings_are("{\"brightness\":10,\"night\":40,\"night_mode\":false,\"reverse\":false,\"standby_s\":60" WEB_OFF),
 	      "a second short press on Nachtmodus switches it off again");
 }
 
-#define SETTINGS_25         "{\"brightness\":25,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}"
-#define SETTINGS_25_TURN    "{\"brightness\":25,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60}"
-#define SETTINGS_40_TURN    "{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60}"
+#define SETTINGS_25         "{\"brightness\":25,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60" WEB_OFF
+#define SETTINGS_25_TURN    "{\"brightness\":25,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60" WEB_OFF
+#define SETTINGS_40_TURN    "{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60" WEB_OFF
 
 /*
  * The hand at the ring, in counts of the encoder as the board delivers them. Seen on the device on 2026-10-10
@@ -1673,11 +1684,11 @@ static void test_standby(void)
 	// Settings: never, and one second
 	garage();
 	wifi.in_range_count = 0;
-	strcpy(flash.settings, "{\"standby_s\":0}");
+	strcpy(flash.settings, "{\"standby_s\":0" WEB_OFF);
 	flash.has_settings = true;
 	start();
 	check(app_backlight(app, 3600000) == 80, "with the standby time 0 the backlight never goes off");
-	strcpy(flash.settings, "{\"standby_s\":1}");
+	strcpy(flash.settings, "{\"standby_s\":1" WEB_OFF);
 	start();
 	check(app_backlight(app, 999) == 80 && app_backlight(app, 1000) == 0, "with the standby time 1 the backlight goes off after 1000 ms");
 
@@ -1745,7 +1756,7 @@ static void test_standby(void)
 
 	// ... and one that never delivers a value
 	garage();
-	strcpy(flash.settings, "{\"standby_s\":1}");
+	strcpy(flash.settings, "{\"standby_s\":1" WEB_OFF);
 	flash.has_settings = true;
 	wican.api = false;
 	wican.ignition = false;
@@ -1837,7 +1848,7 @@ static void test_heat(void)
 	app_temperature(app, 69, true);
 
 	garage();
-	strcpy(flash.settings, "{\"brightness\":20}");
+	strcpy(flash.settings, "{\"brightness\":20" WEB_OFF);
 	flash.has_settings = true;
 	start();
 	app_temperature(app, 75, true);
@@ -2561,6 +2572,7 @@ static void scene_released(void)
 	short_press();
 	turn(3);
 	short_press();
+	turn(1);
 	short_press();
 	long_press();
 	long_press();
@@ -2659,11 +2671,13 @@ static void test_release(void)
 	short_press();
 	shows("web", "the web screen in the network: the address of the display, the release off");
 	check(browser_wifi("Neu", "passwort1", "") == 0 && browser_reset() == 0 && !browser_upload_begin("0.2.0") && nothing_asked(), "without the release the browser can ask nothing");
+	turn(1);
 	short_press();
 	shows("web_open", "a short press on Freigabe gives the release for ten minutes");
 	long_press();
 	shows("menu_open", "the menu tells that the web access is free");
 	short_press();
+	turn(1);
 	short_press();
 	check(!access_is_open(&app->access, now) && has_line("row: > action | Freigabe | aus | enabled") && stores() == 0, "a second short press on Freigabe takes the release back; nothing of it is stored");
 	short_press();
@@ -2673,7 +2687,7 @@ static void test_release(void)
 	shows("ask_reset", "the question of the factory reset lies over the web screen, without a detail");
 	turn(1);
 	swipe(0, -1);
-	check(app->nav.row == 0 && access_asking(&app->access, now) == ACCESS_ASK_RESET, "under the question turning and swiping do nothing");
+	check(app->nav.row == 1 && access_asking(&app->access, now) == ACCESS_ASK_RESET, "under the question turning and swiping do nothing");
 	long_press();
 	check(access_ticket(&app->access, 1, now) == ACCESS_TICKET_REFUSED && restarts() == 0 && access_is_open(&app->access, now) && !has_line("over: ask"),
 	      "a long press refuses the question: nothing is reset, the release goes on");
@@ -2697,6 +2711,306 @@ static void test_release(void)
 	drive();
 	app_do(app, NAV_DO_RELEASE_ON, now);
 	check(access_is_open(&app->access, 602099) && !access_is_open(&app->access, 602100), "a release given at 2100 ends at 602100");
+}
+
+/* The web interface released for good --------------------------------------------------------------- */
+
+#define SETTINGS_OPEN   "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":true}"
+// What a firmware from before the member stored on a display nobody set anything on
+#define SETTINGS_OLDER  "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}"
+
+// Released for good: the setting says so, the release holds and has no end, and nav is told
+static bool for_good(void)
+{
+	nav_world_t seen;
+
+	app_world(app, &seen, now);
+	return app->settings.web_open && access_is_open(&app->access, now) && access_is_lasting(&app->access) && access_seconds_left(&app->access, now) == UINT32_MAX &&
+	       seen.release_open && seen.release_lasting;
+}
+
+// Closed, and the switch off
+static bool closed(void)
+{
+	nav_world_t seen;
+
+	app_world(app, &seen, now);
+	return !app->settings.web_open && !access_is_open(&app->access, now) && !access_is_lasting(&app->access) && access_seconds_left(&app->access, now) == 0 &&
+	       !seen.release_open && !seen.release_lasting;
+}
+
+// The knob on a row of the web screen, from wherever the display is
+static void at_web(int row)
+{
+	long_press();
+	long_press();
+	long_press();
+	short_press();
+	turn(3);
+	short_press();
+	turn(row);
+}
+
+// The first start of a display as it comes: nothing stored, and the web interface released for good. What
+// test_first_start() tells of a display whose owner switched that off, without the walk to the display.
+static void test_delivered(void)
+{
+	static const flash_t empty;
+	int refused = 0;
+
+	factory();
+	as_delivered();
+	start();
+	check(memcmp(&flash, &empty, sizeof(flash)) == 0 && stores() + restarts() + done.valid == 0 && app->events == 0, "as delivered: nothing at all is stored, and the start stores nothing");
+	check(for_good() && now == 0, "as delivered: the web interface is released for good from the moment of the start, with nobody at the display");
+	run(100);
+	shows("first_start", "as delivered: the screen of a first start without a network, as on every display");
+
+	// A phone in the access point of the display enters the network of the workshop. Nobody was at the knob.
+	strcpy(wifi.in_range[0], "Werkstatt");
+	wifi.in_range_count = 1;
+	wifi.found = "192.168.1.50";
+	check(browser_wifi("Werkstatt", "geheim-123", "") == 1, "as delivered: the browser asks to store a network and gets the ticket 1 - no release was given at the display");
+	shows("delivered_ask", "as delivered: the question lies over the first value page with the SSID and 60 seconds");
+	run(5000);
+	tap(0);
+	tap(1);
+	swipe(-1, 0);
+	turn(1);
+	check(access_ticket(&app->access, 1, now) == ACCESS_TICKET_WAITING && app->has_wifi_asked && done.wifi == 0 && app->profile_count == 0 && wifi.scans == 0,
+	      "as delivered: 5 s, two taps, a swipe and a detent later the question still waits: storing a network needs the knob under the release for good as well");
+	short_press();
+	check(access_ticket(&app->access, 1, now) == ACCESS_TICKET_CONFIRMED && done.wifi == 1 && flash.has_wifi && strcmp(flash.profiles[0].ssid, "Werkstatt") == 0 && nothing_asked(),
+	      "as delivered: a short press of the knob confirms it, and the network is stored");
+	run(3000);
+	check(view() == CONN_VIEW_LIVE && strcmp(app->poll.bound_id, OWN) == 0 && for_good(), "as delivered: the display joins, finds its adapter and binds to it; the web interface stays released");
+	check(!flash.has_settings && done.settings == 0, "as delivered: of the settings nothing is stored by all that");
+
+	// What the knob finds
+	short_press();
+	turn(3);
+	shows("menu_open", "as delivered: the menu says that the web access is free");
+	short_press();
+	shows("delivered_web", "as delivered: the web screen says Dauerhaft frei ja, and Freigabe says dauerhaft and is not offered");
+	turn(1);
+	short_press();
+	tap(1);
+	check(for_good() && done.settings == 0 && has_line("row: > action | Freigabe | dauerhaft | disabled"),
+	      "as delivered: a short press and a tap on Freigabe do nothing: the release stays the one for good, nothing is stored");
+	long_press();
+	long_press();
+	check(on(NAV_PAGES) && for_good(), "as delivered: back on the value page, released as before");
+
+	// Hours and many changes later it is as open as in the first second
+	run_to(60000);
+	stride = 1000;
+	for(int minute = 9; minute <= 600; minute += 9)
+	{
+		run_to((uint64_t)minute * 60000u);
+		if(!browser_settings(minute % 2 != 0 ? "{\"brightness\":40}" : "{\"brightness\":80}") || !for_good()) refused++;
+	}
+	check(refused == 0 && now == 35640000, "as delivered: a change every nine minutes for ten hours, 66 of them: each is taken, and the release is the one for good behind each");
+	run(1000);
+	check(done.settings == 66 && flash_settings_are(SETTINGS_OPEN), "as delivered: each of those changes is stored, and the stored settings name web_open as true from the first one on");
+	run_to(43200000);
+	check(for_good() && browser_settings("{\"night\":30}"), "as delivered: twelve hours after the start, two of them without any change: released, and a change is taken");
+	stride = STEP_MS;
+	run(100);
+
+	// What needs the knob needs it as ever: the firmware and the factory reset
+	check(browser_upload_begin("0.2.0") && app->uploading, "as delivered: twelve hours after the start a firmware upload begins");
+	browser_upload_progress(100);
+	check(browser_upload_end() == 2 && access_asking(&app->access, now) == ACCESS_ASK_FIRMWARE && has_line("over_line: Firmware installieren?"),
+	      "as delivered: at its end the display asks whether to install it, ticket 2");
+	run(ACCESS_CONFIRM_MS);
+	check(access_ticket(&app->access, 2, now) == ACCESS_TICKET_EXPIRED && done.install == 0 && restarts() == 0 && for_good(),
+	      "as delivered: nobody presses the knob for 60 s: the firmware is not installed, the question has expired, the release goes on");
+	check(browser_reset() == 3 && has_line("over_line: Werkseinstellungen?"), "as delivered: the browser asks for the factory reset, ticket 3");
+	run(2000);
+	long_press();
+	check(access_ticket(&app->access, 3, now) == ACCESS_TICKET_REFUSED && done.reset == 0 && for_good(), "as delivered: a long press refuses it: nothing is reset, the release goes on");
+	check(browser_reset() == 4, "as delivered: the browser asks again, ticket 4");
+	run(2000);
+	short_press();
+	check(access_ticket(&app->access, 4, now) == ACCESS_TICKET_CONFIRMED && done.reset == 1 && done.last == APP_EVENT_FACTORY_RESET, "as delivered: a short press of the knob confirms the factory reset");
+	restart_as_asked();
+	check(!flash.has_settings && !flash.has_wifi && app->settings.brightness == 80 && for_good() && now == 0,
+	      "as delivered: behind the factory reset the display starts as it came: nothing stored of its settings, released for good");
+}
+
+// The switch "Dauerhaft frei" at the display
+static void test_web_switch(void)
+{
+	drive();
+	check(closed() && flash_settings_are(WEB_TIMED), "the switch: the display of the stories starts with the web interface closed, as its stored settings say");
+	short_press();
+	turn(3);
+	short_press();
+	check(on(NAV_WEB) && app->nav.row == 0 && has_line("row: > action | Dauerhaft frei | nein | enabled"), "the switch: the web screen opens with the focus on Dauerhaft frei, which says nein");
+	short_press();
+	check(for_good() && done.settings == 1 && stores() == 1 && done.last == APP_EVENT_STORE_SETTINGS && flash_settings_are(SETTINGS_OPEN),
+	      "the switch: a short press on Dauerhaft frei releases the web interface for good and stores the settings once, with web_open true");
+	shows("web_for_good", "the switch: the web screen then says Dauerhaft frei ja, and Freigabe says dauerhaft and is not offered");
+	check(browser_settings("{\"brightness\":70}") && browser_layout_reset(), "the switch: changes through the web are taken at once");
+	run(100);
+	turn(1);
+	short_press();
+	tap(1);
+	check(for_good() && done.settings == 2 && has_line("row: > action | Freigabe | dauerhaft | disabled"),
+	      "the switch: a short press and a tap on Freigabe do nothing while it is on: nothing is switched, and nothing more is stored than the change of the browser");
+	turn(-1);
+	short_press();
+	check(closed() && done.settings == 3 && flash_settings_are("{\"brightness\":70,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60" WEB_OFF),
+	      "the switch: a second short press on Dauerhaft frei takes it back: closed at once, stored with web_open false");
+	check(!browser_settings("{\"brightness\":80}") && browser_wifi("Neu", "passwort1", "") == 0 && browser_reset() == 0 && !browser_upload_begin("0.2.0") && nothing_asked(),
+	      "the switch: off, the browser can change and ask nothing");
+	check(has_line("row: > action | Dauerhaft frei | nein | enabled") && has_line("row: - action | Freigabe | aus | enabled"), "the switch: the web screen says nein and aus again, and Freigabe is offered");
+	tap(0);
+	check(for_good() && done.settings == 4, "the switch: a tap on Dauerhaft frei turns it as the knob does");
+	tap(0);
+	check(closed() && done.settings == 5, "the switch: and a second tap turns it back");
+
+	// Over a release of ten minutes, and back
+	turn(1);
+	short_press();
+	check(access_is_open(&app->access, now) && !access_is_lasting(&app->access) && access_seconds_left(&app->access, now) == 600 && !app->settings.web_open && done.settings == 5,
+	      "the switch: off, a short press on Freigabe gives the release of ten minutes as ever, and nothing is stored for it");
+	turn(-1);
+	short_press();
+	check(for_good() && done.settings == 6, "the switch: turned on over a release of ten minutes: that release is the one for good from then on");
+	short_press();
+	check(closed() && !access_is_open(&app->access, now + 1000), "the switch: turned off a moment later: closed at once - nothing is left of the ten minutes it was turned on over");
+	turn(1);
+	short_press();
+	turn(-1);
+	short_press();
+	stride = 1000;
+	run(ACCESS_OPEN_MAX_MS + 60000);
+	stride = STEP_MS;
+	check(for_good() && browser_settings("{\"brightness\":75}"), "the switch: turned on over a release of ten minutes again and left for 31 minutes: open, and a change is taken - the two ends of that release are gone");
+	run(100);
+
+	// The switch of the ten minutes does not end what the other switch gave
+	app_do(app, NAV_DO_RELEASE_OFF, now);
+	check(for_good() && app_take_events(app) == 0, "the switch: asked to take the release of ten minutes back while the release is the one for good, the display does nothing");
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	check(for_good() && app_take_events(app) == 0, "the switch: asked to give the release of ten minutes while the release is the one for good, the display does nothing either");
+
+	// A question waits while the switch is turned. The knob cannot do that - under a question it answers the
+	// question -, so the action is asked for as app.h names it.
+	drive();
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	check(browser_wifi("Neu", "passwort1", "") == 1 && app->has_wifi_asked, "the switch: the scene of a question to store a network under a release of ten minutes");
+	app_do(app, NAV_DO_WEB_OPEN_TOGGLE, now);
+	check(for_good() && access_ticket(&app->access, 1, now) == ACCESS_TICKET_WAITING && app->has_wifi_asked && strcmp(app->ask_detail, "Neu") == 0 &&
+	      strcmp(app->wifi_asked.password, "passwort1") == 0 && access_ask_seconds_left(&app->access, now) == 60,
+	      "the switch: turned on while a question waits: the question waits on with what it asks for and with its 60 s");
+	run(1600);
+	check(done.settings == 1 && flash_settings_are(SETTINGS_OPEN) && done.wifi == 0, "the switch: that turn is stored, the network is not");
+	short_press();
+	check(access_ticket(&app->access, 1, now) == ACCESS_TICKET_CONFIRMED && done.wifi == 1 && app->profile_count == 2 && for_good(),
+	      "the switch: the knob then confirms the question, and the network is stored");
+
+	check(browser_wifi("Noch eins", "passwort2", "") == 2 && app->has_wifi_asked, "the switch: the scene of a second question, under the release for good");
+	app_do(app, NAV_DO_WEB_OPEN_TOGGLE, now);
+	check(closed() && access_ticket(&app->access, 2, now) == ACCESS_TICKET_REFUSED && nothing_asked() && !has_line("over: ask"),
+	      "the switch: turned off while a question waits: closed at once, the question refused and what it asked for dropped, password included");
+	run(2000);
+	short_press();
+	check(done.wifi == 1 && app->profile_count == 2 && on(NAV_MENU) && done.settings == 2 && flash_settings_are(WEB_TIMED),
+	      "the switch: a press 2 s later is a press on the screen: no network is stored for a question that was refused; the turn is stored");
+
+	// Under a question the knob answers the question, whatever row lies below it
+	drive();
+	at_web(1);
+	short_press();
+	turn(-1);
+	check(on(NAV_WEB) && app->nav.row == 0 && access_is_open(&app->access, now) && browser_reset() == 1, "the switch: the scene of a question over the web screen with the focus on Dauerhaft frei");
+	short_press();
+	check(!app->settings.web_open && !access_is_lasting(&app->access) && access_ticket(&app->access, 1, now) == ACCESS_TICKET_WAITING && done.settings == 0,
+	      "the switch: a press 120 ms after the question is meant for the question and comes too soon for it: Dauerhaft frei below it is not turned");
+	tap(0);
+	check(!app->settings.web_open && done.settings == 0 && access_ticket(&app->access, 1, now) == ACCESS_TICKET_WAITING, "the switch: a tap on its row under the question does nothing either");
+	run(1600);
+	short_press();
+	check(access_ticket(&app->access, 1, now) == ACCESS_TICKET_CONFIRMED && done.reset == 1 && !app->settings.web_open && done.settings == 0,
+	      "the switch: the next press answers the question - the factory reset - and still turns nothing");
+
+	// What is stored decides at the start
+	garage();
+	start();
+	check(closed() && now == 0, "the start with web_open false stored: closed");
+	strcpy(flash.settings, SETTINGS_OPEN);
+	start();
+	check(for_good() && now == 0, "the start with web_open true stored: released for good, from the first moment");
+	strcpy(flash.settings, SETTINGS_OLDER);
+	start();
+	check(for_good() && stores() == 0 && strcmp(flash.settings, SETTINGS_OLDER) == 0,
+	      "the start with the settings a firmware from before the switch stored, which do not name it: released for good - the update opens the display - and nothing is stored by the start");
+	check(browser_settings("{\"night\":30}"), "... a change through the web is taken there at once");
+	run(100);
+	check(flash_settings_are("{\"brightness\":80,\"night\":30,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":true}"), "... and with the first settings that are stored the text names web_open");
+	// The first start of this firmware on a display that ran one from before the switch: its settings do not
+	// name it, and the update is not confirmed yet. That is the start of every display that gets this update.
+	strcpy(flash.settings, SETTINGS_OLDER);
+	machine.update_pending = true;
+	start();
+	check(app->update_pending && for_good() && now == 0,
+	      "the first start after the update, before it is confirmed, with settings from before the switch: released for good at once");
+	check(browser_settings("{\"night\":35}"), "... and a change through the web is taken while the question Update in Ordnung? waits");
+	machine.update_pending = false;
+	strcpy(flash.settings, "{\"brightness\":101" WEB_OFF);
+	start();
+	check(for_good() && app->settings.brightness == 80, "the start with stored settings that are refused for their brightness, although they say web_open false: the defaults, all of them - released for good");
+	strcpy(flash.settings, "{\"web_open\":0}");
+	start();
+	check(for_good(), "the start with a stored web_open that is no boolean: refused, the defaults - released for good");
+	flash.has_settings = false;
+	start();
+	check(for_good(), "the start with no settings stored: released for good");
+
+	// The switch outlasts a restart, either way
+	drive();
+	at_web(0);
+	short_press();
+	start();
+	check(for_good() && flash_settings_are(SETTINGS_OPEN), "the switch turned on, then a restart: released for good from the start");
+	run(2100);
+	at_web(0);
+	short_press();
+	start();
+	check(closed() && flash_settings_are(WEB_TIMED), "the switch turned off, then a restart: closed");
+
+	// Safe mode: the settings are read there too, and the web interface is the way out
+	garage();
+	as_delivered();
+	machine.safe_mode = true;
+	start();
+	run(100);
+	check(app->safe_mode && for_good() && has_line("note: Sicherer Modus – eingebaute Ansichten"), "safe mode with nothing stored about the switch: released for good");
+	check(browser_layout_reset() && browser_settings("{\"brightness\":50}"), "safe mode: a change through the web is taken without anybody at the display");
+	garage();
+	machine.safe_mode = true;
+	start();
+	run(100);
+	check(app->safe_mode && closed(), "safe mode with web_open false stored: closed - the stored settings count in safe mode as well");
+	at_web(0);
+	short_press();
+	check(for_good() && flash_settings_are(SETTINGS_OPEN), "safe mode: the switch at the display works as always");
+
+	// The factory reset at the display brings the default back
+	drive();
+	check(closed(), "the factory reset: the scene of a display with the switch off");
+	short_press();
+	turn(5);
+	short_press();
+	turn(4);
+	short_press();
+	turn(1);
+	short_press();
+	check(done.reset == 1, "the factory reset: asked for at the knob and confirmed there");
+	restart_as_asked();
+	check(!flash.has_settings && for_good(), "the factory reset: the display starts as it came, released for good");
 }
 
 // The question of the browser is answered with yes, 1500 ms after it was asked
@@ -3349,7 +3663,7 @@ static void test_world(void)
 	check(!seen->reverse, "the world with the direction set back: not reversed");
 
 	garage();
-	strcpy(flash.settings, "{\"brightness\":60,\"night\":15,\"night_mode\":true}");
+	strcpy(flash.settings, "{\"brightness\":60,\"night\":15,\"night_mode\":true" WEB_OFF);
 	flash.has_settings = true;
 	strcpy(flash.old, result_read);
 	flash.has_old = true;
@@ -3819,7 +4133,7 @@ static void test_boot(void)
 
 	// The settings
 	garage();
-	strcpy(flash.settings, "{\"night\":40}");
+	strcpy(flash.settings, "{\"night\":40" WEB_OFF);
 	flash.has_settings = true;
 	start();
 	check(app->settings.night == 40 && app->settings.brightness == 80 && app->settings.standby_s == 60, "stored settings with one member: the others are the defaults");
@@ -3970,6 +4284,12 @@ static void test_events_add_up(void)
 	app->events = APP_EVENT_STORE_LAYOUT;
 	app_do(app, NAV_DO_REVERSE_TOGGLE, now);
 	check(added(APP_EVENT_STORE_SETTINGS), "the direction to be stored is added to the events that wait");
+	app->events = APP_EVENT_STORE_LAYOUT;
+	app_do(app, NAV_DO_WEB_OPEN_TOGGLE, now);
+	check(added(APP_EVENT_STORE_SETTINGS), "the switch Dauerhaft frei to be stored is added to the events that wait");
+	app->events = APP_EVENT_STORE_LAYOUT;
+	app_do(app, NAV_DO_WEB_OPEN_TOGGLE, now);
+	check(added(APP_EVENT_STORE_SETTINGS), "the switch to be stored a second time, turned back, is added as well");
 	app->events = APP_EVENT_STORE_LAYOUT;
 	app_do(app, NAV_DO_UPDATE_OK, now);
 	check(added(APP_EVENT_MARK_VALID), "the confirmed update is added to the events that wait");
@@ -4613,7 +4933,7 @@ static void test_request_ends(void)
 
 	// ... and with a standby time longer than the idle time of nav: the screen stays lit behind the outcome
 	garage();
-	strcpy(flash.settings, "{\"standby_s\":300}");
+	strcpy(flash.settings, "{\"standby_s\":300" WEB_OFF);
 	flash.has_settings = true;
 	start();
 	run_to(20000);
@@ -4995,6 +5315,12 @@ static void real_story(bool literal, const char *name)
 	snprintf(what, sizeof(what), "%s: in 78.5 s the display sent 94 requests - 92 questions, one read, one clear - and every one was answered", name);
 	check(sent[POLL_DTC_READ] == 1 && sent[POLL_STATE] == 79 && sent[POLL_VALUES] == 9 && sent[POLL_RESULT] == 3 && sent[POLL_CATALOG] == 1 && requests() == 94 &&
 	      app->poll.http_ok == 94 && app->poll.http_failed == 0, what);
+
+	// One line and Fertig: two rows are the smallest screen a swipe can scroll. No screen has two rows by
+	// itself since the web screen got its third, so this outcome stands for them
+	swipe(0, -1);
+	snprintf(what, sizeof(what), "%s: a swipe up on the two rows of the outcome moves the focus to Fertig", name);
+	check(on(NAV_DTC_CLEARED) && app->nav.row == 1 && sent[POLL_DTC_CLEAR] == 1 && requests() == 94, what);
 }
 
 static bool read_file(const char *directory, const char *file, char *text, size_t size)
@@ -5151,7 +5477,7 @@ static void test_cerbo_start(void)
 	      "stored settings whose address is none are not taken, as every stored text with a bad member: the defaults, and no second source");
 	garage();
 	gx.there = true;
-	strcpy(flash.settings, "{\"brightness\":40,\"cerbo\":\"\"}");
+	strcpy(flash.settings, "{\"brightness\":40,\"cerbo\":\"\"" WEB_OFF);
 	flash.has_settings = true;
 	start();
 	run(5000);
@@ -5296,7 +5622,7 @@ static void test_cerbo_info(void)
 	check(app->info_count == 15 && info_is(5, "Cerbo: 192.168.88.2 (aus (sicherer Modus))") && info_is(6, "MQTT: 0 ok, 0 verworfen, 0 Verb."),
 	      "the info lines in safe mode: the address, and that the source is off for the safe mode");
 	garage();
-	strcpy(flash.settings, "{\"cerbo\":\"255.255.255.255\"}");
+	strcpy(flash.settings, "{\"cerbo\":\"255.255.255.255\"" WEB_OFF);
 	flash.has_settings = true;
 	machine.safe_mode = true;
 	start();
@@ -5493,12 +5819,12 @@ static void test_cerbo_apart(void)
 	check(browser_settings("{\"cerbo\":\"\"}") && !cerbo_on(&app->cerbo) && cerbo_host(&app->cerbo)[0] == '\0' && gx_view() == CERBO_VIEW_OFF, "no address: the source is off at once");
 	carry_out();
 	run(30000);
-	check(gx.opens == 2 && app->cerbo.phase == CERBO_IDLE && flash_settings_are("{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}"),
+	check(gx.opens == 2 && app->cerbo.phase == CERBO_IDLE && flash_settings_are("{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60" WEB_OFF),
 	      "... no order follows, and the stored settings are those of a display without a Cerbo, byte for byte");
 	check(browser_settings("{\"cerbo\":\"" GX_HOST "\"}"), "the address is set again");
 	carry_out();
 	run(60);
-	check(gx.opens == 3 && strcmp(gx.opened, GX_HOST) == 0 && gx_view() == CERBO_VIEW_LIVE && flash_settings_are("{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"" GX_HOST "\"}"),
+	check(gx.opens == 3 && strcmp(gx.opened, GX_HOST) == 0 && gx_view() == CERBO_VIEW_LIVE && flash_settings_are("{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"" GX_HOST "\"" WEB_OFF),
 	      "... the source opens it at once, without waiting, and the stored settings name it");
 	remember();
 	check(!browser_settings("{\"cerbo\":\"einstein\"}") && memcmp(&snapshot.cerbo, &app->cerbo, sizeof(app->cerbo)) == 0 && strcmp(app->settings.cerbo, GX_HOST) == 0,
@@ -5723,6 +6049,7 @@ static void story_release(void)
 	short_press();
 	turn(3);
 	short_press();
+	turn(1);
 	short_press();
 	stride = 200;
 	run_to(700000);
@@ -5743,6 +6070,33 @@ static void story_network_goes(void)
 	run(3000);
 }
 
+// The display as it comes: a network asked for by the browser with nobody at the knob and confirmed there, the
+// switch "Dauerhaft frei" turned off, a release of ten minutes, the switch turned on over it, a change through
+// the web, a restart
+static void story_for_good(void)
+{
+	garage();
+	as_delivered();
+	start();
+	run(2100);
+	browser_wifi("Neu", "passwort1", "");
+	run(2000);
+	short_press();
+	run(1000);
+	at_web(0);
+	short_press();
+	run(500);
+	turn(1);
+	short_press();
+	turn(-1);
+	short_press();
+	run(1000);
+	browser_settings("{\"brightness\":40}");
+	run(1000);
+	start();
+	run(3000);
+}
+
 static void test_cerbo_twice(void)
 {
 	check(told_twice(story_read_and_clear),
@@ -5756,6 +6110,10 @@ static void test_cerbo_twice(void)
 	check(gx_seen.taken >= 60, "... during which the source took bundles all along");
 	check(told_twice(story_release), "the release of the web interface, given at the knob and ended by its time, is the same story step for step with such a Cerbo");
 	check(gx_seen.taken >= 250 && gx_seen.sessions >= 50, "... during which the source took bundles and made sessions for eleven minutes");
+	check(told_twice(story_for_good), "the display as it comes - released for good, a network confirmed at the knob, the switch Dauerhaft frei turned off and on, a restart - is the same story "
+	                                  "step for step with such a Cerbo, each telling over another byte on the stack");
+	check(gx_seen.taken >= 15 && gx_seen.sessions >= 4 && app->settings.web_open && access_is_lasting(&app->access) && strcmp(app->settings.cerbo, GX_HOST) == 0 && app->settings.brightness == 40,
+	      "... at the end of which the display with the Cerbo is released for good with its address and the brightness of the browser, as stored before the restart");
 	check(told_twice(story_network_goes), "a clear whose network goes, and an adapter that has restarted when it is back, are the same story step for step with such a Cerbo");
 	check(gx_seen.closed >= 1, "... during which the source lost its network as well");
 }
@@ -5773,7 +6131,13 @@ static void test_fault_memory_with_cerbo(void);
  * what the knob will report, the flow of the poll which request is under way.
  */
 
-#define RUNS            24
+#define RUNS            32
+// The runs from this one on are those of the switch "Dauerhaft frei": half of their displays start as they
+// come, released for good, the owner changes his mind about it now and then, and the display is left alone
+// for longer than any release of ten minutes lasts. The runs before it are the ones there were before the
+// web interface could be released for good: their displays start with the switch off, and it is turned
+// where a press or a tap of the run happens to meet its row.
+#define WEB_RUNS        25
 #define RUN_DEEDS       240     // things a run does: an input, a wait, a fault, something the user sets out to do
 #define TWIN_RUNS       3       // every this many runs one is told a second time, in a world without a Cerbo
 #define TWIN_EVERY      64      // every this many steps of such a run the whole app goes into the number of a step
@@ -5803,11 +6167,12 @@ enum
 	PROMISE_APART,      // a round of the task of the second source changed something of the display outside of the source
 	PROMISE_TWIN,       // the run is another one than the same run on a display in a world without a Cerbo
 	PROMISE_HAND,       // the brightness being set went against the hand, or nav is told another direction than the one stored
+	PROMISE_WEB,        // the web interface is not released for good exactly while the switch "Dauerhaft frei" is on
 	PROMISES,
 };
 
 static const char *const PROMISE_NAMES[PROMISES] = {"clear", "danger", "store", "old list", "scene", "light", "wake", "world", "layout", "info", "memory", "pause", "end", "heal",
-                                                    "cerbo", "apart", "twin", "hand"};
+                                                    "cerbo", "apart", "twin", "hand", "web"};
 
 #define RESTARTS        (APP_EVENT_REBOOT | APP_EVENT_FACTORY_RESET | APP_EVENT_PREVIOUS_FIRMWARE | APP_EVENT_INSTALL_FIRMWARE)
 // The events with one cause each that the run knows before the call
@@ -5870,6 +6235,16 @@ typedef struct
 	long twins, twin_steps;     // runs told a second time in a world without a Cerbo, and their steps
 	long level_turns[2][2];     // detents on a lit brightness screen: with the direction normal and reversed, by a hand that
 	                            // turned counter-clockwise and clockwise
+	// The release of the web interface
+	long web_starts[2];         // starts with the switch "Dauerhaft frei" off, and on
+	long web_safe;              // ... of the latter those in safe mode
+	long web_flips[2];          // short presses and taps on its row that switched it off, and on
+	long web_steps[2];          // steps with it off, and on
+	long web_late;              // changes through the web accepted under the release for good later than 1800 s after it was
+	                            // given, where every release of ten minutes has ended
+	long web_asked;             // questions asked under it
+	long web_idle;              // short presses and taps on Freigabe while the release was the one for good
+	long web_locked;            // changes refused 40 minutes after anybody was at the display, the switch off
 } run_result_t;
 
 // What the run knows by itself
@@ -5884,6 +6259,10 @@ typedef struct
 	bool has_temp;
 	settings_t settings;        // as the flash holds them
 	int preview;                // the brightness being set, -1 if none
+	// The switch "Dauerhaft frei" as the run itself keeps track of it: what the settings stored before the start
+	// said - on where they said nothing -, turned by every short press and tap on its row
+	bool for_good;
+	uint64_t for_good_since;    // the time of the app at which it was last switched on, or started on
 
 	// The switch in the clear dialog, as hold.h wants it watched
 	bool read_before;           // there was a reading since the start ...
@@ -5916,6 +6295,8 @@ typedef struct
 	nav_t twin;                 // what nav makes of that input, asked of a copy of it
 	bool toggles_release;       // the input acts on "Freigabe" of the web screen
 	bool was_open;              // the release before it
+	bool flips;                 // the input is a short press or a tap on "Dauerhaft frei" of the web screen
+	bool idles;                 // ... or one on "Freigabe" while the release is the one for good
 	int tapped;                 // the row a tap on a lit screen meant, -1 if the input is none
 	bool ap_on, ap_wanted;      // the own access point before it: as ordered, and as wanted
 	bool uploading;             // an upload of the browser runs ...
@@ -5988,6 +6369,16 @@ static void model_start(void)
 	m.preview = -1;
 	settings_defaults(&m.settings);
 	if(flash.has_settings) settings_from_json(&m.settings, flash.settings, strlen(flash.settings), NULL, 0, work, SETTINGS_TOKENS);
+	// The release from the first moment: the one for good if the stored settings say so or say nothing, none if
+	// they say no - in safe mode as well
+	m.for_good = m.settings.web_open;
+	m.for_good_since = now;
+	if(access_is_lasting(&app->access) != m.for_good || access_is_open(&app->access, now) != m.for_good)
+	{
+		broke(PROMISE_WEB, "the start did not give the release for good exactly where the stored settings say so, or gave one of ten minutes");
+	}
+	tally->web_starts[m.for_good]++;
+	if(m.for_good && machine.safe_mode) tally->web_safe++;
 	strcpy(m.bound, flash.has_bound ? flash.bound : "");
 	m.source = app->source;
 	m.sum = app->catalog_sum;
@@ -6106,8 +6497,8 @@ static uint32_t acts(int row, uint64_t time, bool by_touch)
 		if(app->nav.confirm == NAV_DO_FACTORY_RESET) return APP_EVENT_FACTORY_RESET;
 		return app->previous_firmware ? APP_EVENT_PREVIOUS_FIRMWARE : 0;
 	}
-	// Nachtmodus and Drehrichtung
-	if((on(NAV_MENU) && row == 2) || (on(NAV_SETTINGS) && row == 0)) return APP_EVENT_STORE_SETTINGS;
+	// Nachtmodus, Drehrichtung and Dauerhaft frei
+	if((on(NAV_MENU) && row == 2) || (on(NAV_SETTINGS) && row == 0) || (on(NAV_WEB) && row == 0)) return APP_EVENT_STORE_SETTINGS;
 	return 0;
 }
 
@@ -6506,6 +6897,11 @@ static void behind(bool stepped, bool quick)
 	if(app->last_input_ms != m.last_input) broke(PROMISE_WAKE, "the idle time does not count from the last press, detent, tap or swipe, or from the end of a request of the display");
 	if(app->hold.open != on(NAV_DTC_CONFIRM)) broke(PROMISE_WORLD, "the hold dialog is not open exactly while the clear dialog shows");
 	if(app->events != 0) broke(PROMISE_WORLD, "an event is left behind app_take_events()");
+	// The release for good: exactly while the switch of the run is on, open then and without an end - behind every
+	// call, whatever it was
+	if(access_is_lasting(&app->access) != m.for_good || app->settings.web_open != m.for_good) broke(PROMISE_WEB, "the release is the one for good while the switch is off, or the other way round");
+	if(m.for_good && (!access_is_open(&app->access, now) || access_seconds_left(&app->access, now) != UINT32_MAX)) broke(PROMISE_WEB, "a release for good that is closed, or has an end");
+	if(stepped) tally->web_steps[m.for_good]++;
 	if(quick && phase() == m.phase && app->nav.screen == m.nav.screen && app->nav.page == m.nav.page && app->nav.row == m.nav.row && app->nav.value == m.nav.value)
 	{
 		// Every 100 ms
@@ -6536,6 +6932,8 @@ static void behind(bool stepped, bool quick)
 		if(!settings_from_json(&m.settings, flash.settings, strlen(flash.settings), NULL, 0, work, SETTINGS_TOKENS)) broke(PROMISE_STORE, "the settings stored cannot be read");
 	}
 	if(memcmp(&m.settings, &app->settings, sizeof(settings_t)) != 0 || app->knob.reverse != m.settings.reverse) broke(PROMISE_STORE, "the settings in use are not the settings stored");
+	// ... and they say of the switch what the presses on its row made of it
+	if(flash.has_settings && m.settings.web_open != m.for_good) broke(PROMISE_WEB, "the settings stored do not say what the presses on Dauerhaft frei made of the switch");
 	// The second source has the address that is stored, and is on exactly with one and outside the safe mode
 	if(strcmp(cerbo_host(&app->cerbo), m.settings.cerbo) != 0 || app->cerbo.safe_mode != machine.safe_mode || cerbo_on(&app->cerbo) != (m.settings.cerbo[0] != '\0' && !machine.safe_mode))
 	{
@@ -6636,6 +7034,31 @@ static void run_step(void)
 	nav_hold(&m.twin, held, &seen, m.time);
 	m.toggles_release = asked == NAV_DO_RELEASE_ON || asked == NAV_DO_RELEASE_OFF;
 	m.was_open = seen.release_open;
+	// The two rows of the release, written here without nav: the first turns the switch, the second does
+	// nothing while the switch is on
+	m.flips = m.knob == KNOB_SHORT && !m.woke && m.over == NAV_OVER_NONE && on(NAV_WEB) && app->nav.row == 0;
+	m.idles = m.knob == KNOB_SHORT && !m.woke && m.over == NAV_OVER_NONE && on(NAV_WEB) && app->nav.row == 1 && m.for_good;
+}
+
+// The row "Dauerhaft frei" was pressed or tapped: the switch of the run turns, and the display has followed
+static void flipped(void)
+{
+	m.for_good = !m.for_good;
+	m.for_good_since = m.time;
+	tally->web_flips[m.for_good]++;
+	if(access_is_lasting(&app->access) != m.for_good) broke(PROMISE_WEB, "a press on Dauerhaft frei did not give the release for good or take it back");
+	// Taken back: closed at once - no release of ten minutes is left below it -, and nothing waits or is kept
+	if(!m.for_good && (access_is_open(&app->access, m.time) || access_asking(&app->access, m.time) != ACCESS_ASK_NONE || app->has_wifi_asked || app->ask_detail[0] != '\0'))
+	{
+		broke(PROMISE_WEB, "the release for good was taken back and the web interface is still open, or a question still waits");
+	}
+}
+
+// The row "Freigabe" was pressed or tapped while the release is the one for good: nothing happened to it
+static void idled(void)
+{
+	if(!access_is_lasting(&app->access) || !access_is_open(&app->access, m.time)) broke(PROMISE_WEB, "a press on Freigabe ended the release for good or made it one of ten minutes");
+	tally->web_idle++;
 }
 
 static void run_button(void)
@@ -6660,6 +7083,9 @@ static void run_button(void)
 	else if(app->nav.last_input_ms != m.nav.last_input_ms) broke(PROMISE_WAKE, "nav was told of an input that was none, or of a press that began in the dark");
 	if(memcmp(&m.twin, &app->nav, sizeof(nav_t)) != 0) broke(PROMISE_WAKE, "what knob and hold reported of the reading was not passed on to nav as app.h says");
 	if(m.toggles_release && access_is_open(&app->access, m.time) == m.was_open) broke(PROMISE_WORLD, "a press on Freigabe did not give the release or take it back");
+	if(m.toggles_release && m.for_good) broke(PROMISE_WEB, "a press on Freigabe was to switch a release that is the one for good");
+	if(m.flips) flipped();
+	if(m.idles) idled();
 
 	// The tick of this step: the update nobody confirmed, the end of a request of the display, and the
 	// brightness screen that nobody leaves
@@ -6791,6 +7217,8 @@ static void run_touch(touch_t kind, int a, int b)
 	m.input = kind != TOUCH_COUNTS || detents != 0;
 	m.turned = kind == TOUCH_COUNTS && m.input;
 	m.toggles_release = false;
+	m.flips = false;
+	m.idles = false;
 	if(!m.input) return;
 
 	m.dark = dark_at(m.time);
@@ -6836,6 +7264,9 @@ static void run_touch(touch_t kind, int a, int b)
 	if(kind == TOUCH_TAP && m.over == NAV_OVER_ASK) tally->taps_on_asks++;
 	if(kind == TOUCH_TAP && m.over == NAV_OVER_UPDATE) tally->taps_on_updates++;
 	if(kind == TOUCH_TAP) m.tapped = a;
+	// The two rows of the release, as for the knob
+	m.flips = kind == TOUCH_TAP && m.over == NAV_OVER_NONE && on(NAV_WEB) && a == 0;
+	m.idles = kind == TOUCH_TAP && m.over == NAV_OVER_NONE && on(NAV_WEB) && a == 1 && m.for_good;
 }
 
 static void run_touched(void)
@@ -6846,6 +7277,9 @@ static void run_touched(void)
 		if(app->nav.last_input_ms != m.time) broke(PROMISE_WAKE, "an input on a lit screen was not passed on");
 		if(memcmp(&m.twin, &app->nav, sizeof(nav_t)) != 0) broke(PROMISE_WAKE, "an input on a lit screen was not passed on to nav as app.h says");
 		if(m.toggles_release && access_is_open(&app->access, m.time) == m.was_open) broke(PROMISE_WORLD, "a tap on Freigabe did not give the release or take it back");
+		if(m.toggles_release && m.for_good) broke(PROMISE_WEB, "a tap on Freigabe was to switch a release that is the one for good");
+		if(m.flips) flipped();
+		if(m.idles) idled();
 		if(m.tapped == 1 && m.over == NAV_OVER_NONE && m.nav.screen == NAV_SETTINGS) hotspot_taken();
 		// A detent on the brightness screen sets the brightness at once
 		if(m.turned && m.nav.screen == NAV_BRIGHTNESS && m.over == NAV_OVER_NONE)
@@ -7459,9 +7893,60 @@ static void release(void)
 	to_menu(3);
 	if(on(NAV_WEB) && !access_is_open(&app->access, now))
 	{
-		focus_on(0);
+		focus_on(1);
 		short_press();
 	}
+}
+
+// The switch "Dauerhaft frei" has a die of its own: with it the run rolls the numbers it always rolled
+static uint32_t web_dice;
+static bool web_run;            // the run is one of those of the switch (WEB_RUNS)
+
+static bool web_chance(int percent)
+{
+	web_dice ^= web_dice << 13;
+	web_dice ^= web_dice >> 17;
+	web_dice ^= web_dice << 5;
+	return (int)(web_dice % 100u) < percent;
+}
+
+// The owner changes his mind about it, at the display
+static void change_of_mind(void)
+{
+	doing = "Dauerhaft frei";
+	to_menu(3);
+	if(on(NAV_WEB))
+	{
+		focus_on(0);
+		// By the knob or by a finger
+		if(web_chance(70)) short_press();
+		else tap(0);
+	}
+}
+
+// A change through the web that needs the release was tried. alone: nothing but a closed release refuses it.
+static void changed_by_web(bool ok, bool alone)
+{
+	if(alone && m.for_good && !ok) broke(PROMISE_WEB, "a change that needs the release alone was refused while the web interface is released for good");
+	if(ok && m.for_good && now - m.for_good_since >= ACCESS_OPEN_MAX_MS) tally->web_late++;
+}
+
+// Nobody is at the display for 40 minutes, longer than a release of ten minutes lasts whatever renews it. Then
+// a browser sets the brightness: taken while the web interface is released for good, refused otherwise.
+static void left_alone(void)
+{
+	bool ok;
+
+	doing = "nobody at the display for 40 minutes";
+	stride = 1000;
+	run(ACCESS_OPEN_MAX_MS + 600000u);
+	stride = STEP_MS;
+	web_begin("the browser sets the brightness behind those 40 minutes");
+	ok = browser_settings("{\"brightness\":45}");
+	web_end(ok ? APP_EVENT_STORE_SETTINGS : 0);
+	changed_by_web(ok, true);
+	if(ok && !m.for_good) broke(PROMISE_WEB, "a change was taken 40 minutes after anybody was at the display, without the release for good");
+	if(!ok) tally->web_locked++;
 }
 
 // The link to the adapter drops out while the progress of a read shows, as measured on the vehicle on
@@ -7649,7 +8134,7 @@ static void intent(void)
 			to_menu(3);
 			if(on(NAV_WEB))
 			{
-				focus_on(0);
+				focus_on(1);
 				short_press();
 			}
 			break;
@@ -7660,12 +8145,14 @@ static void intent(void)
 			// A password of four bytes is one net_store() refuses
 			if(ticket != 0) m.wifi_good = password != 3;
 			web_end(0);
+			if(ticket != 0 && m.for_good) tally->web_asked++;
 			if(ticket != 0) answer();
 			break;
 		case 6:
 			web_begin("the browser asks for the factory reset");
 			ticket = browser_reset();
 			web_end(0);
+			if(ticket != 0 && m.for_good) tally->web_asked++;
 			if(ticket != 0) answer();
 			break;
 		case 7:
@@ -7707,16 +8194,19 @@ static void intent(void)
 			ok = chance(15) ? browser_layout("{\"format\":\"wican-display-layout\",\"v\":1,\"pages\":[]}", false) : browser_layout(stored_layout, chance(50));
 			if(ok) strcpy(m.layout_text, stored_layout);
 			web_end(ok && app->source == APP_LAYOUT_STORED ? APP_EVENT_STORE_LAYOUT : 0);
+			changed_by_web(ok, false);
 			break;
 		case 9:
 			web_begin("the browser resets the layout");
 			ok = browser_layout_reset();
 			web_end(ok ? APP_EVENT_ERASE_LAYOUT : 0);
+			changed_by_web(ok, true);
 			break;
 		case 10:
 			web_begin("the browser forgets a network");
 			ok = browser_forget(ssids[pick(COUNT(ssids))]);
 			web_end(ok ? APP_EVENT_STORE_WIFI : 0);
+			changed_by_web(ok, false);
 			break;
 		case 11:
 			web_begin("the browser sets the settings");
@@ -7725,6 +8215,7 @@ static void intent(void)
 			strcpy(address_before, app->settings.cerbo);
 			ok = browser_settings(sent_settings);
 			web_end(ok ? APP_EVENT_STORE_SETTINGS : 0);
+			changed_by_web(ok, false);
 			if(ok && strcmp(address_before, app->settings.cerbo) != 0)
 			{
 				// Another address, or none: nothing of the old one is left to show, at once
@@ -7862,6 +8353,11 @@ static void one(void)
 {
 	int what_now = pick(100);
 	bool valid;
+
+	// In the runs of the switch: now and then the owner changes his mind about "Dauerhaft frei", or leaves the
+	// display alone for longer than a release of ten minutes lasts, whatever else he is about to do
+	if(web_run && web_chance(3)) change_of_mind();
+	if(web_run && web_chance(2)) left_alone();
 
 	// The heat does not last: while it keeps the screen dark nothing else can be done at the display
 	if(m.heat == GUARD_HEAT_OFF && chance(25))
@@ -8012,7 +8508,8 @@ static bool heal(void)
 // a die of its own, and nothing the run does depends on it.
 static void random_run(uint32_t number, run_result_t *result, bool cerbo_world)
 {
-	static const char *const settings[] = {"{\"brightness\":60,\"night\":15,\"night_mode\":true,\"reverse\":true,\"standby_s\":0}", "{\"standby_s\":2}", "{\"reverse\":true}"};
+	static const char *const settings[] = {"{\"brightness\":60,\"night\":15,\"night_mode\":true,\"reverse\":true,\"standby_s\":0" WEB_OFF, "{\"standby_s\":2" WEB_OFF,
+	                                       "{\"reverse\":true" WEB_OFF};
 	static const int storms[] = {0, 1200, 400, 150};
 	trace_t *traced = tracing;
 
@@ -8020,6 +8517,10 @@ static void random_run(uint32_t number, run_result_t *result, bool cerbo_world)
 	tally = result;
 	dice = number * 2654435761u + 977u;
 	gx_dice = number * 2246822519u + 40503u;
+	// The die of the switch. Its seed is one of eight that were tried (2026-10-11): with it the runs reach
+	// everything test_random_runs() asks them to reach, with room to spare
+	web_dice = number * 40503u + 211u;
+	web_run = number >= WEB_RUNS;
 	gx_world = cerbo_world;
 	memset(&gx_seen, 0, sizeof(gx_seen));
 	doing = "start";
@@ -8058,6 +8559,15 @@ static void random_run(uint32_t number, run_result_t *result, bool cerbo_world)
 	machine.rolled_back = chance(15);
 	machine.no_builtin = chance(10);
 	machine.safe_mode = chance(10);
+	// In the runs of the switch half of the displays are as they come where the web interface is concerned:
+	// their stored settings do not name web_open - the text a firmware from before the member stored - and so
+	// it is released for good
+	if(web_run && web_chance(50))
+	{
+		char *member = strstr(flash.settings, WEB_OFF);
+
+		if(member != NULL) strcpy(member, "}");
+	}
 	gx_until_ms = 0;
 	if(gx_world)
 	{
@@ -8200,6 +8710,9 @@ static void test_random_runs(void)
 		"64 steps every byte of the app but the source, its address and the info lines",
 		"in every random run a detent on the brightness screen makes it brighter when the hand turned clockwise and darker when it turned the other way, 5 percent a detent "
 		"within 5 and 100, whatever direction is set for pages and rows - and nav is told the direction the stored settings hold",
+		"in every random run the web interface is released for good exactly while the switch Dauerhaft frei is on - as the settings stored before the start left it, turned by every "
+		"short press and tap on its row and by nothing else, and stored with every turn -, open without an end then, also in safe mode and behind every restart; switched off it "
+		"is closed at once with no question left waiting; and no change that needs the release alone is refused while it is on",
 	};
 	run_result_t result;
 	int ends[2];
@@ -8316,10 +8829,15 @@ static void test_random_runs(void)
 	       result.ended[0], result.ended[1], result.ended[2], result.ended[3], result.ended[4], result.ended_late, result.ended_dark, result.ended_hot);
 	printf("  random runs: detents on a lit brightness screen: with the direction normal %ld by a hand turning counter-clockwise and %ld clockwise, with it reversed %ld and %ld\n",
 	       result.level_turns[0][0], result.level_turns[0][1], result.level_turns[1][0], result.level_turns[1][1]);
+	printf("  random runs: the web interface released for good at %ld starts (%ld of them in safe mode) and not at %ld; Dauerhaft frei switched on %ld times and off %ld times; "
+	       "%ld steps with it on and %ld with it off; %ld changes accepted under it later than 1800 s after it was given, %ld questions asked under it, "
+	       "%ld presses and taps on Freigabe that did nothing under it; %ld changes refused 40 minutes after anybody was at a display with the switch off\n",
+	       result.web_starts[1], result.web_safe, result.web_starts[0], result.web_flips[1], result.web_flips[0], result.web_steps[1], result.web_steps[0], result.web_late,
+	       result.web_asked, result.web_idle, result.web_locked);
 
-	check(complete && status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0, "24 random runs of 240 deeds each, eight of them told twice: no crash and no hang");
+	check(complete && status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0, "32 random runs of 240 deeds each, ten of them told twice: no crash and no hang");
 	for(int i = 0; i < PROMISES; i++) check(complete && result.broken[i] == 0, promises[i]);
-	check(complete && result.healed == RUNS, "every one of the 24 random runs ends on live values");
+	check(complete && result.healed == RUNS, "every one of the 32 random runs ends on live values");
 
 	for(int i = 0; i <= NAV_CONFIRM; i++) reached = reached && result.screens[i] >= 100;
 	for(int i = 0; i <= CONN_VIEW_LIVE; i++) reached = reached && result.views[i] >= 100;
@@ -8335,6 +8853,10 @@ static void test_random_runs(void)
 	      "the random runs make inputs in the dark and on a lit screen, with times that step back, with the backlight limited and switched off by heat and by standby");
 	check(complete && result.values >= 1000 && result.lines >= 500 && result.summaries >= 50 && result.reboots_late >= 2 && result.taps_that_acted >= 5 && result.starts >= RUNS + 10,
 	      "the random runs look at values, lines and summaries on the screen, restart the display and let an update go unconfirmed");
+	check(complete && result.web_starts[0] >= 20 && result.web_starts[1] >= 20 && result.web_safe >= 2 && result.web_flips[0] >= 20 && result.web_flips[1] >= 20 &&
+	      result.web_steps[0] >= 50000 && result.web_steps[1] >= 50000 && result.web_late >= 5 && result.web_asked >= 5 && result.web_idle >= 5,
+	      "the random runs start with the web interface released for good and not, in safe mode as well, switch Dauerhaft frei on and off, change things through the web long "
+	      "after a release of ten minutes would have ended, ask questions under the release for good and press Freigabe while it lasts, in numbers");
 	check(complete && result.spoiled_holds >= 20 && result.heat_closed >= 2 && result.dialog_swipes >= 5 && result.asks_refused >= 3,
 	      "the random runs keep the knob pressed in the clear dialog in ways that must not clear, let the heat close the dialog, swipe in the dialogs and press the rows of the settings that "
 	      "lead to a restart while a request is under way");
@@ -8372,7 +8894,7 @@ static void test_random_runs(void)
 	check(complete && result.gx_rounds >= 400000 && result.gx_looked >= 4000 && result.gx_set >= 3 && result.gx_moved >= 1 && result.gx_cleared >= 3,
 	      "the random runs look at every round of the task of the second source, and set its address, change it and take it away through the browser");
 	check(complete && result.gx_healed == RUNS && result.gx_wrong >= 5 && result.gx_wrong < RUNS,
-	      "behind every one of the 24 random runs the second source delivers again - where the display had lost the address or was in safe mode, once it was given the address and started anew");
+	      "behind every one of the 32 random runs the second source delivers again - where the display had lost the address or was in safe mode, once it was given the address and started anew");
 	check(complete && result.twins == RUNS / TWIN_RUNS && result.twin_steps >= 50000, "every third random run is told a second time in a world without a Cerbo");
 }
 
@@ -8424,6 +8946,8 @@ int main(void)
 	test_update();
 	test_upload();
 	test_release();
+	test_delivered();
+	test_web_switch();
 	test_questions();
 	test_no_tap_confirms();
 	test_layout_choice();

@@ -19,21 +19,28 @@
  * What the user sets at the display itself or in the browser, apart from the views and the WiFi.
  * Stored on the display as the JSON text below (so a later firmware can add members):
  *
- *   {"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60}
+ *   {"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"web_open":true}
  *
- * A display that reads the values of a Cerbo GX (cerbo.h) holds the address of its MQTT broker as a sixth
- * member, behind the five:
+ * A display that reads the values of a Cerbo GX (cerbo.h) holds the address of its MQTT broker as one
+ * member more, behind standby_s:
  *
- *   {"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"cerbo":"192.168.88.2"}
+ *   {"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"cerbo":"192.168.88.2","web_open":true}
  *
- * Without an address the text is the one above, byte for byte: the member is not written. So a display
- * nobody gave an address stores, answers and shows what it did before the second source came.
+ * Without an address the text is the one above, byte for byte: the member cerbo is not written. So a
+ * display nobody gave an address stores and answers the same settings as one that never heard of a second
+ * source.
+ *
+ * web_open is always written, last: whether the web interface is released for good (access.h: the lasting
+ * release). A text stored by a firmware that did not know the member has none, and a member that is
+ * missing keeps its value: read into the defaults, as the app reads what is stored, it is true. So a display
+ * that is updated opens its web interface, as the owner asked for (2026-10-10) - and one whose owner
+ * switched it off at the device stays closed over every restart and update.
  */
 
 #define SETTINGS_BRIGHTNESS_MIN 5       // percent; 0 would be a dark display nobody can set back
 #define SETTINGS_BRIGHTNESS_MAX 100
 #define SETTINGS_STANDBY_MAX    3600
-#define SETTINGS_JSON_SIZE      128     // enough for settings_to_json(): the longest text has 109 bytes
+#define SETTINGS_JSON_SIZE      128     // enough for settings_to_json(): the longest text has 126 bytes
 #define SETTINGS_TOKENS         32      // tokens the reader needs
 #define SETTINGS_CERBO_SIZE     16      // "255.255.255.255" and its zero (CERBO_HOST_SIZE of cerbo.h)
 
@@ -47,10 +54,13 @@ typedef struct
 	                        // show (see settings_backlight), 0 = never. For a display on permanent power.
 	char cerbo[SETTINGS_CERBO_SIZE];    // the address of the MQTT broker of the Cerbo GX, empty: the display has
 	                                    // no second source. Every byte behind the text is zero.
+	bool web_open;          // the web interface is released for good: everybody in the WiFi may change what the
+	                        // release alone allows (access.h). false: a change needs the release given at the
+	                        // device, for ten minutes. Set at the device alone, never through the web (app_web.h)
 } settings_t;
 
 // brightness 80, night 25, night_mode false, reverse false, standby_s 60, no address of a Cerbo (the whole
-// field is zero)
+// field is zero), web_open true
 void settings_defaults(settings_t *settings);
 
 // true if the text is an IPv4 address in dotted form and nothing else: four numbers from 0 to 255 without a
@@ -64,9 +74,10 @@ bool settings_is_address(const char *text);
 // the format does not know are ignored. Returns true if the text was taken. Returns false and changes
 // nothing if the text is not a JSON object or a known member is of the wrong type or out of range:
 // brightness and night integers from SETTINGS_BRIGHTNESS_MIN to SETTINGS_BRIGHTNESS_MAX, standby_s an
-// integer from 0 to SETTINGS_STANDBY_MAX, night_mode and reverse booleans, cerbo a text that is empty (no
-// second source) or an address as settings_is_address() takes it, read with its escapes resolved; the field
-// is written whole, with zeros behind the text. `bad` (may be NULL) then
+// integer from 0 to SETTINGS_STANDBY_MAX, night_mode, reverse and web_open booleans, cerbo a text that is
+// empty (no second source) or an address as settings_is_address() takes it, read with its escapes resolved;
+// the field is written whole, with zeros behind the text. (This function reads web_open like every member:
+// that the web interface cannot change it is the rule of app_web.h.) `bad` (may be NULL) then
 // receives the name of the first such member in the order of the text, or an empty text if the text as a
 // whole is refused; it is an empty text when the text was taken. A name that does not fit into bad_size
 // bytes is cut, with bad_size 0 nothing is written. Of two members with the same name the last counts, and
@@ -76,11 +87,12 @@ bool settings_is_address(const char *text);
 bool settings_from_json(settings_t *settings, const char *json, size_t length, char *bad, size_t bad_size,
                         json_token_t *work, int work_count);
 
-// The text above, without whitespace, members in that order. The member cerbo is written behind the five
+// The text above, without whitespace, members in that order. The member cerbo is written behind standby_s
 // if the field holds an address (settings_is_address()), and not at all otherwise: not for an empty field,
 // and not for one that holds something else (settings that were not read by settings_from_json(), down to
-// a field without a zero in it) - what is written can always be read again. Returns the length, -1 if
-// it does not fit (out is then an empty string; with size 0 nothing is written).
+// a field without a zero in it) - what is written can always be read again. web_open is written in every
+// text, as its last member. Returns the length, -1 if it does not fit (out is then an empty string; with
+// size 0 nothing is written).
 int settings_to_json(const settings_t *settings, char *out, size_t size);
 
 // The brightness the user wants right now, 0 to 100, before the limit by heat (guard.h):

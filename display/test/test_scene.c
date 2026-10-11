@@ -3065,20 +3065,20 @@ static void test_web(void)
 		{"http://192.168.88.37", false, {"http://192.168.88.37", NULL, NULL}, "with an address and without the own access point: the address alone"},
 	};
 
-	stage_on(NAV_WEB, 0);
-	screen("web_closed", "the web access while it is locked, in a network: the release is off, the address of the display");
 	stage_on(NAV_WEB, 1);
+	screen("web_closed", "the web access while it is locked, in a network: the release is off, the address of the display");
+	stage_on(NAV_WEB, 2);
 	access_open(&gate, NOW - 48000);
 	screen("web_open", "the web access released 48 seconds ago: the release is on for 9:12, the focus on the way back");
-	stage_on(NAV_WEB, 0);
+	stage_on(NAV_WEB, 1);
 	view_no_wifi();
 	input.address = NULL;
 	screen("web_no_wifi", "the web access in no network and without the own access point: \"Kein WLAN\" in place of the address");
-	stage_on(NAV_WEB, 0);
+	stage_on(NAV_WEB, 1);
 	input.address = "http://192.168.4.1";
 	input.ap_on = true;
 	screen("web_hotspot", "the web access with the own access point: the address, then its name and its password");
-	stage_on(NAV_WEB, 0);
+	stage_on(NAV_WEB, 1);
 	view_no_wifi();
 	access_open(&gate, NOW);
 	input.address = "";
@@ -3087,59 +3087,60 @@ static void test_web(void)
 
 	for(int i = 0; i < COUNT(times); i++)
 	{
-		stage_on(NAV_WEB, 0);
+		stage_on(NAV_WEB, 1);
 		access_open(&gate, NOW - times[i].open_ms);
 		// The world says the opposite: the time left is that of access.h, and with it whether it is on
 		world.release_open = times[i].detail[1] == 'u';
 		build();
 		snprintf(what, sizeof(what), "the release, switched on %lu ms ago: \"%s\"", (unsigned long)times[i].open_ms, times[i].detail);
-		check(row_is(0, true, SCENE_ROW_ACTION, "Freigabe", times[i].detail, true) && row_is(1, false, SCENE_ROW_ACTION, "Zurück", "", true), what);
+		check(row_is(1, true, SCENE_ROW_ACTION, "Freigabe", times[i].detail, true) && row_is(2, false, SCENE_ROW_ACTION, "Zurück", "", true) &&
+		      row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "nein", true), what);
 	}
-	stage_on(NAV_WEB, 0);
+	stage_on(NAV_WEB, 1);
 	access_open(&gate, NOW - 48000);
 	access_close(&gate, NOW - 1000);
 	build();
-	check(row_is(0, true, SCENE_ROW_ACTION, "Freigabe", "aus", true), "a release that was switched off again: \"aus\"");
-	stage_on(NAV_WEB, 0);
+	check(row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "aus", true), "a release that was switched off again: \"aus\"");
+	stage_on(NAV_WEB, 1);
 	access_open(&gate, NOW - 48000);
 	input.now_ms = NOW - 60000;
 	build();
-	check(row_is(0, true, SCENE_ROW_ACTION, "Freigabe", "an – noch 10:00", true), "a release at a time before it was switched on: no time has passed, 10:00 are left");
+	check(row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "an – noch 10:00", true), "a release at a time before it was switched on: no time has passed, 10:00 are left");
 
-	stage_on(NAV_WEB, 0);
+	stage_on(NAV_WEB, 1);
 	gate.open = true;
 	gate.open_until_ms = NOW + 4000000;
 	build();
-	check(row_is(0, true, SCENE_ROW_ACTION, "Freigabe", "an – noch 66:40", true), "a release made by hand that lasts 4000 seconds: the time is what access.h says, 66:40");
+	check(row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "an – noch 66:40", true), "a release made by hand that lasts 4000 seconds: the time is what access.h says, 66:40");
 
 	// The first line: the address, "Kein WLAN" only where nothing else can be told
 	for(int i = 0; i < COUNT(firsts); i++)
 	{
-		stage_on(NAV_WEB, 0);
+		stage_on(NAV_WEB, 1);
 		input.address = firsts[i].address;
 		input.ap_on = firsts[i].ap_on;
 		build();
 		snprintf(what, sizeof(what), "the lines of the web access %s", firsts[i].rule);
-		check(lines_are(firsts[i].lines[0], firsts[i].lines[1], firsts[i].lines[2], NULL) && scene->total == 2 && scene->row_count == 2, what);
+		check(lines_are(firsts[i].lines[0], firsts[i].lines[1], firsts[i].lines[2], NULL) && scene->total == 3 && scene->row_count == 3, what);
 	}
-	stage_on(NAV_WEB, 0);
+	stage_on(NAV_WEB, 1);
 	input.address = NULL;
 	input.ap_on = true;
 	input.ap_ssid = NULL;
 	input.ap_password = NULL;
 	build();
 	check(lines_are("WLAN: ", "Passwort: ", NULL, NULL), "the own access point without an address, a name and a password: its two lines with nothing behind the colon, and still no \"Kein WLAN\"");
-	stage_on(NAV_WEB, 1);
+	stage_on(NAV_WEB, 2);
 	input.address = NULL;
 	build();
-	check(lines_are("Kein WLAN", NULL, NULL, NULL) && row_is(1, true, SCENE_ROW_ACTION, "Zurück", "", true), "without an address and without the own access point, the focus on the way back: \"Kein WLAN\" wherever the focus is");
+	check(lines_are("Kein WLAN", NULL, NULL, NULL) && row_is(2, true, SCENE_ROW_ACTION, "Zurück", "", true), "without an address and without the own access point, the focus on the way back: \"Kein WLAN\" wherever the focus is");
 	input.ap_ssid = NULL;
 	input.ap_password = NULL;
 	world.release_open = true;
 	world.night_mode = true;
 	build();
 	check(lines_are("Kein WLAN", NULL, NULL, NULL), "without an address and without the own access point, which has no name and no password either: \"Kein WLAN\"");
-	stage_on(NAV_WEB, 0);
+	stage_on(NAV_WEB, 1);
 	view_no_wifi();
 	input.address = NULL;
 	input.ap_on = true;
@@ -3147,7 +3148,7 @@ static void test_web(void)
 	build();
 	check(lines_are("WLAN: WiCAN-Display", "Passwort: geheim1234", NULL, NULL), "the own access point without an address, in safe mode and out of reach of the adapter: its two lines, no \"Kein WLAN\"");
 
-	stage_on(NAV_WEB, 0);
+	stage_on(NAV_WEB, 1);
 	input.ap_on = false;
 	input.ap_ssid = "WiCAN-Display";
 	build();
@@ -3165,7 +3166,115 @@ static void test_web(void)
 	input.ap_password = "Wort";
 	input.address = "x";
 	build();
-	check(lines_are("x", "WLAN: Netz", "Passwort: Wort", NULL) && scene->total == 2 && scene->row_count == 2, "an address of one byte is an address; name and password each on their own line");
+	check(lines_are("x", "WLAN: Netz", "Passwort: Wort", NULL) && scene->total == 3 && scene->row_count == 3, "an address of one byte is an address; name and password each on their own line");
+
+	// The release that lasts (access.h): no time to count, and the row of the ten minutes switches nothing
+	stage_on(NAV_WEB, 0);
+	access_open_lasting(&gate, NOW - 48000);
+	world.release_open = world.release_lasting = true;
+	screen("web_lasting", "the web access released for good, as the screen is entered: Dauerhaft frei says ja, Freigabe says dauerhaft and is disabled, the address of the display");
+	stage_on(NAV_WEB, 1);
+	view_no_wifi();
+	access_open_lasting(&gate, NOW);
+	world.release_open = world.release_lasting = true;
+	input.address = "";
+	input.ap_on = true;
+	screen("web_lasting_hotspot", "the web access released for good, with the own access point and without an address, the focus on Freigabe: the row is disabled and has the focus all the same");
+	for(int i = 0; i < COUNT(times); i++)
+	{
+		stage_on(NAV_WEB, 1);
+		access_open_lasting(&gate, NOW - times[i].open_ms);
+		world.release_open = world.release_lasting = true;
+		build();
+		snprintf(what, sizeof(what), "the release for good, given %lu ms ago: \"dauerhaft\", and no time", (unsigned long)times[i].open_ms);
+		check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "ja", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "dauerhaft", false) &&
+		      row_is(2, false, SCENE_ROW_ACTION, "Zurück", "", true) && scene->total == 3 && scene->row_count == 3, what);
+	}
+	stage_on(NAV_WEB, 1);
+	access_open_lasting(&gate, 0);
+	world.release_open = world.release_lasting = true;
+	input.now_ms = 86400000ull * 365;
+	build();
+	check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "ja", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "dauerhaft", false),
+	      "the release for good a year after it was given: \"ja\" and \"dauerhaft\" as on the first day");
+	stage_on(NAV_WEB, 1);
+	access_open(&gate, NOW - 48000);
+	access_open_lasting(&gate, NOW - 20000);
+	world.release_open = world.release_lasting = true;
+	build();
+	check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "ja", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "dauerhaft", false),
+	      "the release for good, given over one of ten minutes: \"dauerhaft\", not the time that one had left");
+	stage_on(NAV_WEB, 1);
+	access_open_lasting(&gate, NOW - 48000);
+	access_open(&gate, NOW - 20000);
+	world.release_open = world.release_lasting = true;
+	build();
+	check(row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "dauerhaft", false), "the release of ten minutes given under the one for good: \"dauerhaft\" stays");
+	stage_on(NAV_WEB, 1);
+	access_open_lasting(&gate, NOW - 48000);
+	access_close(&gate, NOW - 1000);
+	build();
+	check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "nein", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "aus", true),
+	      "a release for good that was taken back: \"nein\" and \"aus\", and Freigabe is enabled again");
+	access_open(&gate, NOW - 500);
+	world.release_open = true;
+	build();
+	check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "nein", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "an – noch 10:00", true),
+	      "the release of ten minutes given after the one for good was taken back: \"nein\", and its ten minutes");
+
+	// The texts are those of access.h, the press that of the world (nav.h): each is asked for its own
+	stage_on(NAV_WEB, 1);
+	access_open_lasting(&gate, NOW - 48000);
+	world.release_open = true;
+	build();
+	check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "ja", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "dauerhaft", true),
+	      "the release lasts in access.h while the world does not say so: the texts are \"ja\" and \"dauerhaft\", and Freigabe is enabled - the knob would act on it");
+	stage_on(NAV_WEB, 1);
+	access_open(&gate, NOW - 48000);
+	world.release_open = world.release_lasting = true;
+	build();
+	check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "nein", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "an – noch 9:12", false),
+	      "the world says the release lasts while access.h holds one of ten minutes: the texts are \"nein\" and its time, and Freigabe is disabled");
+	stage_on(NAV_WEB, 1);
+	world.release_lasting = true;
+	build();
+	check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "nein", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "aus", false),
+	      "the world says the release lasts while access.h is closed: \"nein\" and \"aus\", Freigabe disabled");
+	stage_on(NAV_WEB, 1);
+	access_open_lasting(&gate, NOW - 48000);
+	world.release_open = world.release_lasting = true;
+	world.ap_kept = true;
+	input.safe_mode = true;
+	input.heat = GUARD_HEAT_DIM;
+	build();
+	check(row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "ja", true) && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "dauerhaft", false) &&
+	      row_is(2, false, SCENE_ROW_ACTION, "Zurück", "", true), "the release for good in safe mode, the access point kept on, too hot: the rows are the same three");
+	stage_on(NAV_WEB, 1);
+	access_open_lasting(&gate, NOW - 48000);
+	world.release_open = world.release_lasting = true;
+	world.update_pending = true;
+	build();
+	check(scene->over == SCENE_OVER_UPDATE && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "dauerhaft", false) && row_is(0, false, SCENE_ROW_ACTION, "Dauerhaft frei", "ja", true),
+	      "the release for good below the update question: the rows are those without the overlay, Freigabe disabled");
+	stage_on(NAV_WEB, 1);
+	access_open_lasting(&gate, NOW - 48000);
+	world.release_open = world.release_lasting = true;
+	if(access_ask(&gate, ACCESS_ASK_WIFI, NOW - 18000) == 0) setup_failures++;
+	world.asking = ACCESS_ASK_WIFI;
+	build();
+	check(scene->over == SCENE_OVER_ASK && row_is(1, true, SCENE_ROW_ACTION, "Freigabe", "dauerhaft", false) &&
+	      strcmp(scene->over_lines[scene->over_line_count - 1], "Drücken = ja · lang = nein (42 s)") == 0,
+	      "a question of the browser under the release for good: 42 s of its own 60 are left, and the rows below say \"dauerhaft\"");
+
+	// The menu tells free or locked, not which of the two releases it is
+	stage_on(NAV_MENU, 3);
+	access_open_lasting(&gate, NOW - 48000);
+	world.release_open = world.release_lasting = true;
+	build();
+	check(row_is(2, true, SCENE_ROW_ACTION, "Web-Zugriff", "frei", true), "the menu while the release lasts: Web-Zugriff says frei, as for a release of ten minutes");
+	world.release_open = false;
+	build();
+	check(row_is(2, true, SCENE_ROW_ACTION, "Web-Zugriff", "gesperrt", true), "the menu in a world that calls a closed release lasting: Web-Zugriff says gesperrt - release_open alone is asked");
 }
 
 static void test_settings(void)
@@ -3337,7 +3446,7 @@ static void test_confirm(void)
 {
 	static const int rows[] = {0, 1, 2, -1, INT_MAX, INT_MIN};
 	static const int options[] = {0, 1, 1, 0, 1, 0};
-	static const nav_do_t others[] = {NAV_DO_NOTHING, NAV_DO_READ, NAV_DO_CLEAR, NAV_DO_UPDATE_OK, (nav_do_t)19, (nav_do_t)-1, (nav_do_t)(256 + NAV_DO_REBOOT), (nav_do_t)(256 + NAV_DO_FACTORY_RESET)};
+	static const nav_do_t others[] = {NAV_DO_NOTHING, NAV_DO_READ, NAV_DO_CLEAR, NAV_DO_UPDATE_OK, (nav_do_t)20, (nav_do_t)-1, (nav_do_t)(256 + NAV_DO_REBOOT), (nav_do_t)(256 + NAV_DO_FACTORY_RESET)};
 
 	stage_on(NAV_CONFIRM, 0);
 	nav.confirm = NAV_DO_REBOOT;
@@ -3454,7 +3563,7 @@ static void test_overlays(void)
 	world.asking = ACCESS_ASK_WIFI;
 	input.ask_detail = "Werkstatt";
 	screen("over_ask_wifi", "the browser asks to store a network, over the menu: the question, the name of the network, how to answer and how long");
-	stage_on(NAV_WEB, 1);
+	stage_on(NAV_WEB, 2);
 	access_open(&gate, NOW - 100000);
 	if(access_ask(&gate, ACCESS_ASK_FIRMWARE, NOW - 59001) == 0) setup_failures++;
 	world.asking = ACCESS_ASK_FIRMWARE;
@@ -4299,6 +4408,17 @@ static int pick(int count)
 	return (int)(random_number() % (uint32_t)count);
 }
 
+// The release that lasts has a die of its own, so that the made-up inputs stay the ones they were before it
+static uint32_t web_state;
+
+static int web_pick(int count)
+{
+	web_state ^= web_state << 13;
+	web_state ^= web_state >> 17;
+	web_state ^= web_state << 5;
+	return (int)(web_state % (uint32_t)count);
+}
+
 // A number of every kind: small ones around 0, the ends, numbers whose low byte is small
 static int any_number(void)
 {
@@ -4328,6 +4448,7 @@ typedef enum
 	UNLESS_UNDER_WAY,   // the own request is not sent or accepted without having ended: a restart would cut it off
 	IF_PREVIOUS,    // the other slot holds a firmware, and the own request is not under way
 	UNLESS_KEPT,    // the own access point does not stay on whatever is asked
+	UNLESS_LASTING, // the release is not the one that lasts, which the row of the ten minutes does not switch
 } when_t;
 
 // The choices of the screens, in their order
@@ -4343,7 +4464,7 @@ static const struct
 	{NAV_DTC_LIST, "Erneut lesen", IF_READ}, {NAV_DTC_LIST, "Fehler löschen", IF_CLEAR}, {NAV_DTC_LIST, "Zurück", ALWAYS},
 	{NAV_DTC_CLEARED, "Fertig", ALWAYS},
 	{NAV_DTC_OLD, "Zurück", ALWAYS},
-	{NAV_WEB, "Freigabe", ALWAYS}, {NAV_WEB, "Zurück", ALWAYS},
+	{NAV_WEB, "Dauerhaft frei", ALWAYS}, {NAV_WEB, "Freigabe", UNLESS_LASTING}, {NAV_WEB, "Zurück", ALWAYS},
 	{NAV_SETTINGS, "Drehrichtung", ALWAYS}, {NAV_SETTINGS, "Hotspot", UNLESS_KEPT}, {NAV_SETTINGS, "Neustart", UNLESS_UNDER_WAY}, {NAV_SETTINGS, "Vorherige Version", IF_PREVIOUS},
 	{NAV_SETTINGS, "Werkseinstellungen", UNLESS_UNDER_WAY}, {NAV_SETTINGS, "Zurück", ALWAYS},
 };
@@ -4383,6 +4504,7 @@ static bool holds(when_t when)
 		case UNLESS_UNDER_WAY: return !UNDER_WAY[(unsigned)world.flow < (unsigned)COUNT(UNDER_WAY) ? (unsigned)world.flow : 0];
 		case IF_PREVIOUS:   return world.previous_firmware && holds(UNLESS_UNDER_WAY);
 		case UNLESS_KEPT:   return !world.ap_kept;
+		case UNLESS_LASTING: return !world.release_lasting;
 		default:            return true;
 	}
 }
@@ -4675,6 +4797,13 @@ static const char *model(void)
 				action = nav_short(&pressed, &bare, input.now_ms);
 				if(row->enabled != (action != NAV_DO_NOTHING || pressed.screen != nav.screen)) return "a row is enabled although a press on it is ignored, or the other way round";
 			}
+			// The two rows of the release tell what access.h holds, whatever the world says about the press
+			if(on == NAV_WEB && choice == 0 && strcmp(row->detail, access_is_lasting(&gate) ? "ja" : "nein") != 0) return "Dauerhaft frei does not tell whether the release lasts";
+			if(on == NAV_WEB && choice == 1 && (strcmp(row->detail, "dauerhaft") == 0) != access_is_lasting(&gate)) return "Freigabe says dauerhaft for a release that does not last, or the other way round";
+			if(on == NAV_WEB && choice == 1 && !access_is_lasting(&gate) && (strcmp(row->detail, "aus") == 0) != (access_seconds_left(&gate, input.now_ms) == 0))
+			{
+				return "Freigabe says aus for a release of ten minutes that holds, or the other way round";
+			}
 			if(row->focus) focused++;
 		}
 		if(focused != (nav.row >= first && nav.row < first + scene->row_count ? 1 : 0)) return "the focus is visible although it is on no visible row, or the other way round";
@@ -4711,12 +4840,15 @@ static void test_made_up(void)
 	int waiting[2] = {0, 0}, unseen_clears = 0;
 	// The row Hotspot of the settings where it is visible: [kept][told of the safe mode][told that it is on]
 	int switches[2][2][2] = {{{0, 0}, {0, 0}}, {{0, 0}, {0, 0}}};
+	// The row Freigabe of the web access where it is visible: [the world says the release lasts][access.h holds one that does]
+	int lastings[2][2] = {{0, 0}, {0, 0}};
 	int differences = 0, dumps = 0, scenes = 0;
 	bool reached = true;
 
 	for(int s = 0; s < COUNT(seeds); s++)
 	{
 		random_state = seeds[s];
+		web_state = seeds[s] ^ 0x0FFEu;
 		for(int n = 0; n < 4000; n++)
 		{
 			const char *wrong;
@@ -4847,6 +4979,11 @@ static void test_made_up(void)
 			// Whether the own access point can be switched, whatever the scene is told of the safe mode and of
 			// the access point: the world alone decides about the row
 			world.ap_kept = pick(2) == 0;
+			// Whether the release is the one that lasts: the world for the press on Freigabe, access.h for the texts,
+			// each as it likes. Rolled with a die of its own: the inputs above stay the ones they were before
+			// there was such a release.
+			world.release_lasting = web_pick(2) == 0;
+			if(web_pick(3) == 0) access_open_lasting(&gate, NOW - 30000);
 
 			build();
 			scenes++;
@@ -4882,6 +5019,7 @@ static void test_made_up(void)
 			if(nav.screen == NAV_WEB && !has_text(input.address) && input.ap_on) hotspots++;
 			if(nav.screen == NAV_WEB && !has_text(input.address) && !input.ap_on) no_networks++;
 			if(nav.screen == NAV_SETTINGS && scene->first <= 1 && scene->row_count > 1 - scene->first) switches[world.ap_kept][input.safe_mode][input.ap_on]++;
+			if(nav.screen == NAV_WEB && scene->first <= 1 && scene->row_count > 1 - scene->first) lastings[world.release_lasting][access_is_lasting(&gate)]++;
 		}
 	}
 	for(int i = 0; i < 15; i++) reached = reached && screens[i] >= 500;
@@ -4913,6 +5051,10 @@ static void test_made_up(void)
 	      "and the fault memory in every phase, each at least 50 times, a list with and without a summary at least 20 times, and the row Hotspot with its access point kept "
 	      "on and not, whatever the scene is told of the safe mode and of the access point, each of the eight at least 20 times; the progress of a read that waits for an "
 	      "adapter out of sight, sent and accepted, each at least 15 times, and that of a clear in such a view at least 30 times");
+	printf("  web access with the row Freigabe visible: the world says the release does not last %d %d, that it lasts %d %d (each: access.h holds none that lasts, holds one)\n",
+	       lastings[0][0], lastings[0][1], lastings[1][0], lastings[1][1]);
+	check(lastings[0][0] >= 20 && lastings[0][1] >= 20 && lastings[1][0] >= 20 && lastings[1][1] >= 20,
+	      "the made-up inputs reach the row Freigabe with the release lasting and not, in the world and in access.h, each of the four at least 20 times");
 	check(differences == 0, "the scenes of the made-up inputs have the kind, the title, the note, the lines, the overlay, the dots, the ring, the window, the focus, the choices, the answers and the level the rules give "
 	      "when they are followed a second way");
 	check(dumps == 0, "each of those scenes can be written as a text of 34 to 2734 bytes, the smallest and the largest dump there is");

@@ -14,6 +14,7 @@
  * Behind the stories: random sequences of requests and of inputs at the device in a child process, with what
  * app_web.h and display/API.md promise watched around every request (see there).
  */
+#include <stddef.h>
 #include <stdint.h>
 #include <inttypes.h>
 #include <limits.h>
@@ -559,15 +560,15 @@ static void test_info(void)
 	check(strstr(reply, "geheim1234") == NULL && strcmp(app->ap_password, "geheim1234") == 0, "the info does not hold the password of the own access point");
 
 	get_at("/api/info", 2999);
-	check(answered_with(200, "\"up\":2,") && answered_with(200, "\"left_s\":600}"), "the info at 2999 ms: up 2 s, the release ends in 599.101 s, written as 600");
+	check(answered_with(200, "\"up\":2,") && answered_with(200, "\"left_s\":600,\"lasting\":false}"), "the info at 2999 ms: up 2 s, the release ends in 599.101 s, written as 600");
 	get_at("/api/info", 3000);
 	check(answered_with(200, "\"up\":3,"), "the info at 3000 ms: up 3 s");
 	get_at("/api/info", 3100);
-	check(answered_with(200, "\"left_s\":599}"), "the info at 3100 ms: the release ends in 599 s");
+	check(answered_with(200, "\"left_s\":599,\"lasting\":false}"), "the info at 3100 ms: the release ends in 599 s");
 	get_at("/api/info", 602099);
-	check(answered_with(200, "\"release\":{\"open\":true,\"left_s\":1}"), "the info in the last millisecond of the release: open, 1 s left");
+	check(answered_with(200, "\"release\":{\"open\":true,\"left_s\":1,\"lasting\":false}"), "the info in the last millisecond of the release: open, 1 s left");
 	get_at("/api/info", 602100);
-	check(answered_with(200, "\"release\":{\"open\":false,\"left_s\":0}"), "the info when the release has ended: closed, 0 s left");
+	check(answered_with(200, "\"release\":{\"open\":false,\"left_s\":0,\"lasting\":false}"), "the info when the release has ended: closed, 0 s left");
 	get_at("/api/info", 3000000000999u);
 	check(answered_with(200, "\"up\":3000000000,"), "the info after 3000000000.999 s, more than 31 bit hold: up 3000000000");
 	get_at("/api/info", 4294967294999u);
@@ -685,7 +686,7 @@ static void test_info(void)
 	check(answered_with(200, "\"ap\":false,\"ap_ssid\":\"WiCAN-Display\"}"), "the hotspot was asked for at the device and is not ordered yet: the info says that it is off");
 	run(100);
 	get("/api/info");
-	check(answered_with(200, "\"settings\":{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":0}}") && answered_with(200, "\"ap\":true,\"ap_ssid\":\"WiCAN-Display\"}"),
+	check(answered_with(200, "\"settings\":{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":0,\"web_open\":false}}") && answered_with(200, "\"ap\":true,\"ap_ssid\":\"WiCAN-Display\"}"),
 	      "the info after the settings were changed and the hotspot was switched on at the device");
 }
 
@@ -704,23 +705,23 @@ static void test_info_long(void)
 	app_platform(app, &platform);
 	get("/api/info");
 	// The names of app_web_info.json have 9 and 13 bytes; a quote is written with two
-	check(code == 200 && sound() && reply_length == strlen(fixture("info")) - 9 - 13 + 64 + 64 && reply_length == 853, "the info with two network names of 32 quotes each has 853 bytes: 200");
+	check(code == 200 && sound() && reply_length == strlen(fixture("info")) - 9 - 13 + 64 + 64 && reply_length == 886, "the info with two network names of 32 quotes each has 886 bytes: 200");
 	snprintf(written, sizeof(written), "\"wifi\":{\"ssid\":\"%s%s\",\"ip\":", "\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"", "\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"\\\"");
 	check(strstr(reply, written) != NULL, "the name of the network is written with a backslash before each of its 32 quotes");
 
-	// The version texts are the platform's and have no limit: with app_web_info.json, 747 bytes with a git
-	// text of 25, a git text of 19757 bytes fills the room to its last byte
+	// The version texts are the platform's and have no limit: with app_web_info.json, 780 bytes with a git
+	// text of 25, a git text of 19724 bytes fills the room to its last byte
 	released();
 	app_temperature(app, 47, true);
 	app->poll.http_ok = 12345;
 	app->poll.http_failed = 7;
-	memset(expected, 'g', 19758);
-	expected[19757] = '\0';
+	memset(expected, 'g', 19725);
+	expected[19724] = '\0';
 	app->git = expected;
 	get("/api/info");
 	check(code == 200 && sound() && reply_length == 20479, "an info of 20479 bytes fills the room to its last byte: 200");
-	expected[19757] = 'g';
-	expected[19758] = '\0';
+	expected[19724] = 'g';
+	expected[19725] = '\0';
 	get("/api/info");
 	check(code == 500 && sound() && strcmp(reply, "{\"error\":\"too_large\"}") == 0, "an info of 20480 bytes has no room for its zero: 500 too_large");
 	app->git = GIT;
@@ -3185,6 +3186,8 @@ static void release_at_knob(void)
 	short_press();
 	turn(3);
 	short_press();
+	// From "Dauerhaft frei", where the focus starts, to "Freigabe"
+	turn(1);
 	short_press();
 	long_press();
 	long_press();
@@ -3244,6 +3247,284 @@ static void test_stories(void)
 	get("/api/info");
 	check(answered_with(200, "\"wifi\":{\"ssid\":\"Werkstatt\",\"ip\":\"192.168.1.77\",\"rssi\":-61,") && answered_with(200, "\"wican\":{\"host\":\"192.168.1.50\",\"id\":\"a1b2c3d4e5f6\",\"fw\":\"4.21\",\"view\":\"live\"}"),
 	      "the story of the first network: the info names the network and the adapter");
+}
+
+/* The web interface released for good ------------------------------------------------------------------ */
+
+#define FOR_GOOD    "\"release\":{\"open\":true,\"left_s\":0,\"lasting\":true}"
+#define CLOSED      "\"release\":{\"open\":false,\"left_s\":0,\"lasting\":false}"
+#define DEFAULTS    "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":true}"
+
+// drive() on a display as it comes: nothing is stored about its settings, and nobody was at its knob
+static void delivered(void)
+{
+	garage();
+	as_delivered();
+	start();
+	run(2100);
+	memset(&done, 0, sizeof(done));
+	memset(sent, 0, sizeof(sent));
+}
+
+static void test_for_good(void)
+{
+	static char from_browser[512], sent_back[SETTINGS_JSON_SIZE];
+	web_request_t asked;
+	access_t release;
+	int refused = 0, locked = 0;
+
+	check(read_fixture("fixtures/settings_from_browser.json", from_browser, sizeof(from_browser)), "the settings of the browser are there for the release for good as well");
+
+	// The display as it comes: open from the start, with nobody at the knob
+	delivered();
+	app_temperature(app, 47, true);
+	app->poll.http_ok = 12345;
+	app->poll.http_failed = 7;
+	remember();
+	get("/api/info");
+	check(answered(200, "info_for_good"), "app_web_info_for_good.json: GET /api/info of a display as it comes, two seconds after its start: the release open and lasting with 0 s left, web_open true in its settings");
+	check(untouched(), "GET /api/info of a display as it comes changes nothing of the app");
+	memset(&asked, 0, sizeof(asked));
+	app_web_request(app, &asked, now);
+	check(asked.release_open && !asked.busy, "a request to a display as it comes: release_open is true, with nobody at the knob");
+	asked.release_open = false;
+	app_web_request(app, &asked, 86400000000ull);
+	check(asked.release_open && untouched(), "a request a thousand days later: release_open is true");
+
+	memcpy(&release, &app->access, sizeof(release));
+	access_write(&release, now);
+	post("/api/settings", "{\"brightness\":40}");
+	check(!by_route && answered_text(200, "{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":true}") &&
+	      nothing_but(MAY_CLOCK | MAY_SETTINGS, &release, now) && done.settings == 1 && carried() == 1,
+	      "settings sent to a display as it comes are taken with nobody at the knob: 200, the answer names web_open as true, and nothing changes but the settings and the time");
+	check(strcmp(flash.settings, reply) == 0 && access_is_lasting(&app->access), "... they are stored as answered, and the release is the one for good as before: a change neither renews nor shortens it");
+	put("/api/layout?mode=apply", stored_layout);
+	check(!by_route && code == 200 && app->source == APP_LAYOUT_PREVIEW, "a layout is applied on a display as it comes, without a release given at the knob");
+	post("/api/layout/reset", "");
+	check(!by_route && code == 200 && app->source == APP_LAYOUT_BUILTIN, "... and the views are reset");
+
+	// Hours and many changes later
+	stride = 1000;
+	for(int minute = 9; minute <= 600; minute += 9)
+	{
+		run_to((uint64_t)minute * 60000u);
+		post("/api/settings", minute % 2 != 0 ? "{\"brightness\":41}" : "{\"brightness\":42}");
+		if(code != 200 || by_route) refused++;
+	}
+	stride = STEP_MS;
+	check(refused == 0 && done.settings == 67, "a change every nine minutes for ten hours, 66 of them: each is taken and stored - under a release of ten minutes the fourth would have been the last");
+	get("/api/info");
+	check(answered_with(200, FOR_GOOD), "ten hours after the start the info says open, lasting, 0 s left");
+	get_at("/api/info", UINT64_MAX);
+	check(answered_with(200, FOR_GOOD), "... and at the largest time as well: the release for good has no end");
+	run_to(43200000);
+	post("/api/settings", "{\"brightness\":80}");
+	check(code == 200 && !by_route, "twelve hours after the start, two of them without any change: a change is taken");
+
+	// What needs the knob needs it under the release for good as well
+	post("/api/wifi", NEU);
+	check(answered(202, "asked_1") && access_asking(&app->access, now) == ACCESS_ASK_WIFI && app->has_wifi_asked, "storing a network is asked at the display under the release for good: 202 with the ticket 1");
+	get("/api/ticket?id=1");
+	check(answered_text(200, "{\"ticket\":1,\"state\":\"waiting\",\"left_s\":60}"), "the ticket waits with the 60 s of a question: the release for good gives it no more and cuts it no shorter");
+	run(2000);
+	tap(0);
+	tap(1);
+	run(28000);
+	get("/api/ticket?id=1");
+	check(answered_text(200, "{\"ticket\":1,\"state\":\"waiting\",\"left_s\":30}") && done.wifi == 0 && app->profile_count == 1, "30 s and two taps later it still waits, and no network is stored");
+	run(30000);
+	get("/api/ticket?id=1");
+	check(answered_text(200, "{\"ticket\":1,\"state\":\"expired\",\"left_s\":0}") && done.wifi == 0 && app->profile_count == 1 && access_is_lasting(&app->access),
+	      "60 s after it was asked the question has expired: without the knob no network is stored, however open the web interface is");
+	check(upload_begin("0.2.0") == 0 && app->uploading, "twelve hours after the start an upload begins: the release for good always has the 300 s an upload asks for");
+	upload_progress(FILE_SIZE);
+	check(upload_end(true) == 202 && answered(202, "asked_2") && access_asking(&app->access, now) == ACCESS_ASK_FIRMWARE, "at the end of the upload the display asks whether to install it: 202 with the ticket 2");
+	run(2000);
+	long_press();
+	get("/api/ticket?id=2");
+	check(answered_text(200, "{\"ticket\":2,\"state\":\"refused\",\"left_s\":0}") && done.install == 0 && access_is_lasting(&app->access), "a long press refuses it: the firmware is not installed, the release goes on");
+	post("/api/reset", "");
+	check(answered(202, "asked_3") && access_asking(&app->access, now) == ACCESS_ASK_RESET, "the factory reset is asked at the display: 202 with the ticket 3");
+	run(2000);
+	short_press();
+	check(done.reset == 1 && done.last == APP_EVENT_FACTORY_RESET, "a short press of the knob confirms it");
+	restart_as_asked();
+	run(2100);
+	get("/api/info");
+	check(answered_with(200, FOR_GOOD) && answered_with(200, "\"settings\":" DEFAULTS "}") && !flash.has_settings,
+	      "behind the factory reset the display starts as it came: released for good, the settings the defaults, nothing stored of them");
+
+	// The switch is at the display: the web interface cannot turn it
+	delivered();
+	run_to(10000);
+	remember();
+	post("/api/settings", "{\"web_open\":false}");
+	check(!by_route && answered(400, "member_web_open") && only_time() && carried() == 0 && app->settings.web_open && access_is_lasting(&app->access),
+	      "app_web_member_web_open.json: settings that would take the release for good back: 400 with the name of the member, and nothing changes");
+	remember();
+	post("/api/settings", "{\"brightness\":50,\"night\":30,\"reverse\":true,\"web_open\":false}");
+	check(answered(400, "member_web_open") && only_time() && carried() == 0 && light() == 80 && !app->knob.reverse, "settings that name other members as well and would turn the switch: 400 web_open, and none of the other members is taken");
+	remember();
+	post("/api/settings", "{\"web_open\":false,\"cerbo\":\"192.168.88.2\"}");
+	check(answered(400, "member_web_open") && only_time() && carried() == 0 && !cerbo_on(&app->cerbo), "... not the address of a Cerbo either");
+	remember();
+	post("/api/settings", "{\"web_open\":false,\"brightness\":4}");
+	check(answered(400, "member_brightness") && only_time() && carried() == 0, "settings that are refused for their brightness are answered with that member, also when their web_open is the other value");
+	remember();
+	post("/api/settings", "{\"web_open\":0}");
+	check(answered(400, "member_web_open") && only_time() && carried() == 0 && app->settings.web_open, "a web_open that is no boolean: 400 with the name of the member, as for every member of the wrong type");
+	remember();
+	post("/api/settings", "{\"web_open\":true,\"web_open\":false}");
+	check(answered(400, "member_web_open") && only_time() && carried() == 0, "of two web_open members the last counts: true, then false, would turn the switch and is refused");
+	post("/api/settings", "{\"web_open\":false,\"web_open\":true}");
+	check(answered_text(200, DEFAULTS) && done.settings == 1, "false, then true, names it as it is: taken");
+	post("/api/settings", "{\"web_open\":true}");
+	check(answered_text(200, DEFAULTS) && done.settings == 2 && strcmp(flash.settings, DEFAULTS) == 0, "settings that name web_open as it is, true, are taken and stored as every accepted text");
+	post("/api/settings", "{\"web_open\":true,\"brightness\":60}");
+	check(code == 200 && light() == 60 && app->settings.web_open, "... and what they name besides is taken");
+	post("/api/settings", "{}");
+	strcpy(sent_back, reply);
+	post("/api/settings", sent_back);
+	check(code == 200 && strcmp(reply, sent_back) == 0 && done.settings == 5, "a page may send back the settings it got: taken, and answered with the same text");
+	post("/api/settings", from_browser);
+	check(code == 200 && light() == 10 && app->settings.web_open && access_is_lasting(&app->access), "the settings as the page sends them name no web_open: taken, and the switch stays as it is");
+
+	// Every byte of the settings in the app is what was there and what the text names: the settings are read
+	// into a local first, and settings_t has a gap behind its last member - nothing that lay on the stack
+	// below the function may come into the app with it
+	{
+		static const unsigned char dirt[] = {0x00, 0x5a, 0xff};
+		static const char body[] = "{\"brightness\":40,\"cerbo\":\"1.2.3.4\"}";
+		settings_t wanted_bytes, got[COUNT(dirt)];
+		bool taken = true, same = true;
+
+		memset(&wanted_bytes, 0, sizeof(wanted_bytes));
+		wanted_bytes.brightness = 40;
+		wanted_bytes.night = 25;
+		wanted_bytes.standby_s = 60;
+		strcpy(wanted_bytes.cerbo, "1.2.3.4");
+		// The gap holds a byte that is none of the fills below. A copy of all bytes keeps it; a copy member
+		// for member loses it to whatever the local of the function held - on the stack, where the fill
+		// lies, or in the room a sanitizer gives its locals instead, where no fill arrives
+		((unsigned char *)&wanted_bytes)[sizeof(wanted_bytes) - 1] = 0xee;
+		for(int i = 0; i < COUNT(dirt); i++)
+		{
+			uint64_t at;
+
+			released();
+			at = given(now);
+			fresh_room();
+			((unsigned char *)&app->settings)[sizeof(app->settings) - 1] = 0xee;
+			// Nothing between the two calls: what is called in between would write over the fill
+			dirty_stack(dirt[i]);
+			code = app_web_settings(app, body, sizeof(body) - 1, reply, &reply_length, at);
+			if(code != 200) taken = false;
+			memcpy(&got[i], &app->settings, sizeof(got[i]));
+			if(memcmp(&got[i], &wanted_bytes, sizeof(wanted_bytes)) != 0) same = false;
+		}
+		check(sizeof(settings_t) == offsetof(settings_t, web_open) + sizeof(bool) + 1, "settings_t has a gap of one byte behind its last member: the check that follows looks at it");
+		check(taken && same, "settings taken over three different bytes on the stack leave the same bytes in the app: the members they name, zero where zero was, and in the gap the byte that was there");
+	}
+
+	// ... in neither direction: a device in the WiFi must not make a release of ten minutes one for good
+	released();
+	run_to(10000);
+	remember();
+	post("/api/settings", "{\"web_open\":true}");
+	check(!by_route && answered(400, "member_web_open") && only_time() && carried() == 0 && !app->settings.web_open && !access_is_lasting(&app->access),
+	      "settings that would release the web interface for good, sent under a release of ten minutes: 400 web_open, and nothing changes");
+	check(access_is_open(&app->access, 609999) && !access_is_open(&app->access, 610000), "that request has renewed the release of ten minutes as every refused change does, until 610000, and not beyond");
+	post("/api/settings", "{\"web_open\":false,\"brightness\":40}");
+	check(code == 200 && light() == 40 && !app->settings.web_open && strstr(reply, "\"web_open\":false}") != NULL, "under the release of ten minutes settings that name web_open as it is, false, are taken as before");
+	stride = 1000;
+	refused = 0;
+	for(int minute = 9; minute <= 36; minute += 9)
+	{
+		run_to((uint64_t)minute * 60000u);
+		post("/api/settings", "{\"web_open\":true}");
+		if(code == 400 && !by_route && strcmp(reply, "{\"error\":\"body\",\"member\":\"web_open\"}") == 0) refused++;
+		if(code == 403) locked++;
+	}
+	stride = STEP_MS;
+	check(refused == 3 && locked == 1 && !app->settings.web_open && !access_is_open(&app->access, now),
+	      "a device that asks for it every nine minutes is answered 400 web_open three times and, 36 minutes after the release was given, 403 locked: the release of ten minutes ended at its latest end");
+	drive();
+	post("/api/settings", "{\"web_open\":true}");
+	check(by_route && answered(403, "locked") && !app->settings.web_open, "with the switch off and no release given the request is refused as locked before its body is looked at");
+
+	// Turned at the display, the web interface follows at once
+	drive();
+	get("/api/info");
+	check(answered_with(200, CLOSED) && answered_with(200, "\"web_open\":false}}"), "the info of a display with the switch off and no release given: closed, not lasting, web_open false");
+	app_do(app, NAV_DO_WEB_OPEN_TOGGLE, now);
+	run(20);
+	get("/api/info");
+	check(answered_with(200, FOR_GOOD) && answered_with(200, "\"web_open\":true}}") && done.settings == 1, "the switch turned on at the display: the info says open and lasting, and web_open true in the settings");
+	post("/api/settings", "{\"night\":30}");
+	check(code == 200 && !by_route, "... and a change is taken at once");
+	post("/api/reset", "");
+	check(answered(202, "asked_1"), "the scene of a question asked under it");
+	app_do(app, NAV_DO_WEB_OPEN_TOGGLE, now);
+	run(20);
+	get("/api/ticket?id=1");
+	check(answered_text(200, "{\"ticket\":1,\"state\":\"refused\",\"left_s\":0}") && nothing_asked(), "the switch turned off at the display while a question waits: the ticket is refused");
+	get("/api/info");
+	check(answered_with(200, CLOSED) && answered_with(200, "\"web_open\":false}}"), "... the info says closed and web_open false");
+	post("/api/settings", "{\"night\":25}");
+	check(by_route && answered(403, "locked") && app->settings.night == 30, "... and a change is refused as locked");
+
+	// The last minutes of a release of ten minutes keep an upload away; the release for good does not
+	released();
+	stride = 1000;
+	for(int minute = 9; minute <= 27; minute += 9)
+	{
+		run_to((uint64_t)minute * 60000u);
+		post("/api/settings", "{}");
+	}
+	run_to(1600000);
+	stride = STEP_MS;
+	check(upload_begin("0.2.0") == 403 && !app->uploading && access_is_open(&app->access, now), "the scene of a release of ten minutes 202 s before its latest end: open, and too short for an upload");
+	app_do(app, NAV_DO_WEB_OPEN_TOGGLE, now);
+	check(upload_begin("0.2.0") == 0 && app->uploading, "the switch turned on at the display at that moment: the upload begins");
+
+	// What is stored decides at the start, also in safe mode
+	delivered();
+	post("/api/settings", "{\"brightness\":40}");
+	start();
+	run(2100);
+	get("/api/info");
+	check(answered_with(200, FOR_GOOD) && light() == 40, "after a restart the display that stored web_open true is released for good again, from its start");
+	drive();
+	start();
+	post("/api/layout/reset", "");
+	check(by_route && code == 403, "after a restart the display that has web_open false stored is closed again");
+	garage();
+	strcpy(flash.settings, "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}");
+	start();
+	run(2100);
+	get("/api/info");
+	check(answered_with(200, FOR_GOOD) && answered_with(200, "\"settings\":" DEFAULTS "}"), "a display that starts with the settings a firmware from before the switch stored: released for good, and web_open true in the settings it answers");
+	post("/api/settings", "{\"standby_s\":60}");
+	check(answered_text(200, DEFAULTS) && strcmp(flash.settings, DEFAULTS) == 0, "... and in the settings it stores from then on");
+	factory();
+	as_delivered();
+	machine.safe_mode = true;
+	machine.rolled_back = true;
+	machine.update_pending = true;
+	start();
+	run(100);
+	app_temperature(app, 90, true);
+	app_temperature(app, 20, false);
+	get("/api/info");
+	check(answered(200, "info_safe_for_good"), "app_web_info_safe_for_good.json: the info of a display as it comes in safe mode, without a network and too hot: released for good all the same");
+	post("/api/layout/reset", "");
+	check(!by_route && code == 200, "safe mode: a change is taken without anybody at the display - the web interface is the way out of it");
+	factory();
+	machine.safe_mode = true;
+	start();
+	run(100);
+	post("/api/layout/reset", "");
+	check(by_route && code == 403, "safe mode with web_open false stored: closed - the stored settings count there as well");
 }
 
 /* The second source: the Cerbo GX ------------------------------------------------------------------------ */
@@ -3528,7 +3809,7 @@ static void test_cerbo(void)
 	      "with the next rounds of its task the address is opened, without a wait, and the first bundle is taken");
 	get("/api/info");
 	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":6,\"ok\":1,\"refused\":0,\"connects\":1,\"boots\":1,\"lag_ms\":0},") &&
-	      answered_with(200, ",\"standby_s\":60,\"cerbo\":\"192.168.88.2\"}}"), "the info names the Cerbo and its address from then on");
+	      answered_with(200, ",\"standby_s\":60,\"cerbo\":\"192.168.88.2\",\"web_open\":false}}"), "the info names the Cerbo and its address from then on");
 
 	// The same address again, and settings that do not name it
 	run_to(20000);
@@ -3542,7 +3823,7 @@ static void test_cerbo(void)
 	access_write(&release, now);
 	remember();
 	post("/api/settings", "{\"night\":30}");
-	check(answered_with(200, "{\"brightness\":80,\"night\":30,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"192.168.88.2\"}") &&
+	check(answered_with(200, "{\"brightness\":80,\"night\":30,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"192.168.88.2\",\"web_open\":false}") &&
 	      nothing_but(MAY_CLOCK | MAY_SETTINGS, &release, 20000) && strcmp(app->settings.cerbo, GX_HOST) == 0,
 	      "settings that do not name the address keep it, and leave every byte of the source as it is");
 
@@ -3651,6 +3932,7 @@ static void test_cerbo(void)
 #define B_ASKING    "{\"error\":\"asking\"}"
 #define B_HOT       "{\"error\":\"hot\"}"
 #define B_BODY      "{\"error\":\"body\"}"
+#define B_WEB_OPEN  "{\"error\":\"body\",\"member\":\"web_open\"}"
 #define B_NOT_FOUND "{\"error\":\"not_found\"}"
 #define B_UPLOAD    "{\"error\":\"upload\"}"
 #define B_OK        "{\"ok\":true}"
@@ -3674,11 +3956,13 @@ enum
 	PROMISE_FRAME,      // a request that is accepted changes what app_web.h names for it, and nothing else
 	PROMISE_SOURCE,     // the second source is in the answers exactly while the display has its address, as the source is
 	PROMISE_APART,      // a round of the task of the second source touched the release, the fault memory, the poll or an event
+	PROMISE_FOR_GOOD,   // the web interface is not released for good exactly while the switch at the display says so, a request
+	                    // turned that switch, or one was refused as locked while it is on
 	PROMISES,
 };
 
 static const char *const PROMISE_NAMES[PROMISES] = {"answer", "closed", "refused", "reading", "asked", "knob", "events", "password", "dtc", "sound", "held", "memory", "frame",
-                                                    "source", "apart"};
+                                                    "source", "apart", "for good"};
 
 typedef enum
 {
@@ -3733,6 +4017,16 @@ typedef struct
 	long gx_rounds;             // rounds of the task of the source that were watched
 	long gx_bundles, gx_refused, gx_sessions, gx_closed;    // what the source did (gx_seen)
 	long gx_restarts;           // restarts and factory resets the browser asked for while a session with the Cerbo stood
+	// The release for good
+	long web_starts[2];         // starts with the switch "Dauerhaft frei" off, and on
+	long web_switched[2];       // times it was switched off, and on, at the display
+	long web_changes[2];        // changes asked for while it was off, and on
+	long web_late;              // ... of the latter those later than 1800 s after it was given, which were not refused as locked
+	long web_infos[2];          // answers to GET /api/info that said lasting false, and true
+	long web_same;              // settings accepted that named web_open as it is
+	long web_refused[2];        // settings refused for a web_open that would have switched it off, and on
+	long web_uploads;           // uploads that began while it was on
+	long web_asked;             // questions asked while it was on
 } walk_result_t;
 
 // The layouts the browser of the walk sends
@@ -3829,6 +4123,10 @@ typedef struct
 	bool previous;              // the other slot holds a version to go back to
 	bool upload;                // an upload began and its end was not told
 	char upload_version[40];
+	// The switch "Dauerhaft frei" as the test follows it: what the stored settings said at the start - on where
+	// they said nothing -, turned at the display alone
+	bool for_good;
+	uint64_t for_good_since;    // the time of the app at which the release for good was given: the start, or the turn
 } told_t;
 
 static told_t told;
@@ -3881,6 +4179,16 @@ static void swipe_anywhere(void)
 static void gather(uint32_t events)
 {
 	gathered |= events;
+}
+
+// The switch "Dauerhaft frei" has a die of its own as well: the browser and the driver roll the numbers they
+// always rolled
+static uint32_t web_dice;
+
+static int web_pick(int count)
+{
+	web_dice = web_dice * 1664525u + 1013904223u;
+	return (int)((web_dice >> 8) % (uint32_t)count);
 }
 
 static int gx_pick(int count)
@@ -4144,6 +4452,10 @@ static void told_start(void)
 	told.saved = told.flash_views != -1;
 	told.upload = false;
 	told.previous = machine.previous_firmware;
+	// The release for good is given at the start, or not at all
+	told.for_good = told.settings.web_open;
+	told.for_good_since = 0;
+	tally->web_starts[told.for_good]++;
 }
 
 // The very first start of a run: the test takes over what the flash was given
@@ -4179,6 +4491,15 @@ static void held(void)
 		broke(PROMISE_SOURCE, "the second source does not have the address that was sent, or is on without one or in safe mode");
 	}
 	if(app->knob.reverse != told.settings.reverse) broke(PROMISE_HELD, "the knob does not turn the way the settings say");
+	// The release for good: exactly while the switch is on, as the test followed it - open then, and without an end
+	if(app->settings.web_open != told.for_good || told.settings.web_open != told.for_good || access_is_lasting(&app->access) != told.for_good)
+	{
+		broke(PROMISE_FOR_GOOD, "the release is the one for good while the switch is off, or the other way round");
+	}
+	if(told.for_good && (!access_is_open(&app->access, app->clock_ms > now ? app->clock_ms : now) || access_seconds_left(&app->access, app->clock_ms > now ? app->clock_ms : now) != UINT32_MAX))
+	{
+		broke(PROMISE_FOR_GOOD, "a release for good that is closed, or has an end");
+	}
 
 	if(flash.has_layout != (flash_text != NULL) || (flash_text != NULL && strcmp(flash.layout, flash_text) != 0)) broke(PROMISE_HELD, "the layout in the flash is not the one that was saved last");
 	if(told.views >= 0)
@@ -4228,6 +4549,7 @@ typedef enum
 	DEED_PRESS,     // a short press of the knob: what confirms
 	DEED_TAP,       // a tap: it confirms nothing
 	DEED_OTHER,     // any other input, and what happens to the board
+	DEED_SWITCH,    // the switch "Dauerhaft frei" turned at the display
 } deed_t;
 
 // The state of the last ticket the browser got
@@ -4307,6 +4629,25 @@ static void judge(deed_t deed, const earlier_t *was, uint32_t by_web)
 		allowed |= APP_EVENT_STORE_SETTINGS;
 		if(events & APP_EVENT_STORE_SETTINGS) told.settings = app->settings;
 	}
+
+	// The switch "Dauerhaft frei" is turned at the display alone: by the deed that does that, or where a press
+	// or a tap of the driver meets its row on the web screen - never by a request, and never by time
+	if(app->settings.web_open != told.for_good)
+	{
+		bool at_row = (deed == DEED_PRESS && was->screen == NAV_WEB && was->row == 0) || (deed == DEED_TAP && was->screen == NAV_WEB);
+
+		if(deed != DEED_SWITCH && !at_row) broke(PROMISE_FOR_GOOD, "the switch Dauerhaft frei was turned by something else than a press or a tap on its row: a request, another input or time");
+		if(!(events & APP_EVENT_STORE_SETTINGS)) broke(PROMISE_FOR_GOOD, "the switch was turned and the settings are not to be stored");
+		told.for_good = app->settings.web_open;
+		told.for_good_since = app->clock_ms;
+		tally->web_switched[told.for_good]++;
+		// Switched off: closed at once, and no question waits any more
+		if(!told.for_good && (access_is_open(&app->access, app->clock_ms) || ticket_after == ACCESS_TICKET_WAITING || app->has_wifi_asked || app->ask_detail[0] != '\0'))
+		{
+			broke(PROMISE_FOR_GOOD, "the switch was turned off and the web interface is still open, or a question still waits");
+		}
+	}
+	else if(deed == DEED_SWITCH) broke(PROMISE_FOR_GOOD, "the switch Dauerhaft frei was to be turned at the display and was not");
 
 	if(events & ~allowed & APP_EVENT_INSTALL_FIRMWARE) broke(PROMISE_KNOB, "a firmware is installed that the knob did not confirm");
 	if(events & ~allowed & APP_EVENT_FACTORY_RESET) broke(PROMISE_KNOB, "a factory reset is carried out that the knob did not confirm");
@@ -4425,8 +4766,10 @@ static void request_deed(void)
 	uint32_t by_web = 0;
 	uint32_t ticket = 1 + (uint32_t)pick(4);
 	char ticket_target[40], version[40] = "", forgotten[NET_SSID_SIZE] = "";
-	char settings_body[160];
+	char settings_body[160], open_body[200];
 	const char *address = NULL;
+	// What a request for the settings says about web_open: nothing (0), the value in use (1) or the other one (2)
+	int web_member = 0;
 	const char *forget_name;
 	earlier_t was = earlier();
 	bool forgot = false;
@@ -4503,6 +4846,19 @@ static void request_deed(void)
 				snprintf(settings_body, sizeof(settings_body), "%.*s%s\"cerbo\":\"%s\"}", (int)(length - 1), body, length > 2 ? "," : "", address);
 				body = settings_body;
 			}
+			// web_open, by a die of its own: mostly not named, now and then as it is - a page that sends back what it
+			// got -, now and then the other way round - a device in the WiFi that tries to open or close the display.
+			// As one member more of a text that is an object.
+			web_member = web_pick(10) < 6 ? 0 : web_pick(2) + 1;
+			if(web_member != 0 && body[0] == '{')
+			{
+				size_t length = strlen(body);
+				bool named = web_member == 1 ? told.for_good : !told.for_good;
+
+				snprintf(open_body, sizeof(open_body), "%.*s%s\"web_open\":%s}", (int)(length - 1), body, length > 2 ? "," : "", named ? "true" : "false");
+				body = open_body;
+			}
+			else web_member = 0;
 			break;
 		case K_REBOOT:      target = "/api/reboot"; route = WEB_ROUTE_REBOOT; break;
 		case K_RESET:       target = "/api/reset"; route = WEB_ROUTE_RESET; break;
@@ -4607,6 +4963,28 @@ static void request_deed(void)
 	}
 	if(!discreet()) broke(PROMISE_PASSWORD, "an answer holds a password that is stored or asked for");
 	if((kind == K_INFO || kind == K_VALUES) && code == 200 && sound()) source_in_answer(kind, seen.time);
+	// GET /api/info tells which release it is: the one for good with nothing left to count, or not
+	if(kind == K_INFO && code == 200)
+	{
+		bool says = strstr(reply, ",\"lasting\":true},\"wifi\"") != NULL;
+
+		if(says != told.for_good || (strstr(reply, ",\"lasting\":false},\"wifi\"") != NULL) == told.for_good) broke(PROMISE_FOR_GOOD, "the info does not tell whether the release is the one for good");
+		if(told.for_good && strstr(reply, "\"release\":{\"open\":true,\"left_s\":0,\"lasting\":true}") == NULL) broke(PROMISE_FOR_GOOD, "the info of a release for good does not say open with 0 s left");
+		if(strstr(reply, told.for_good ? "\"web_open\":true}}" : "\"web_open\":false}}") == NULL) broke(PROMISE_FOR_GOOD, "the settings in the info do not end with web_open as the switch is");
+		tally->web_infos[told.for_good]++;
+	}
+	// A change under the release for good finds it open, however long ago it was given
+	if(!reads && kind != K_CHECK && kind != K_PROGRESS)
+	{
+		if(told.for_good && (!seen.open || seen.left_s != UINT32_MAX)) broke(PROMISE_FOR_GOOD, "a change found the web interface closed, or with an end, while the switch is on");
+		if(told.for_good && code == 403) broke(PROMISE_FOR_GOOD, "a change was refused as locked while the web interface is released for good");
+		tally->web_changes[told.for_good]++;
+		if(told.for_good && seen.time - told.for_good_since >= ACCESS_OPEN_MAX_MS) tally->web_late++;
+	}
+	if(kind == K_SETTINGS && code == 200 && web_member == 1) tally->web_same++;
+	if(kind == K_SETTINGS && code == 400 && web_member == 2 && strcmp(reply, B_WEB_OPEN) == 0) tally->web_refused[!told.for_good]++;
+	if(kind == K_BEGIN && code == 0 && told.for_good) tally->web_uploads++;
+	if(code == 202 && told.for_good) tally->web_asked++;
 	if(kind == K_SETTINGS && code == 400 && address != NULL && address[0] != '\0' && !settings_is_address(address)) tally->gx_bad++;
 	if((kind == K_REBOOT || kind == K_RESET) && code < 400 && app->cerbo.phase == CERBO_SESSION) tally->gx_restarts++;
 	if((app->poll.flow.phase != seen.phase && (app->poll.flow.phase == DTC_FLOW_READ_SENT || app->poll.flow.phase == DTC_FLOW_CLEAR_SENT)) ||
@@ -4654,7 +5032,11 @@ static void request_deed(void)
 			}
 			break;
 		case K_SETTINGS:
-			if(!closed(&seen, &answer)) answer = foretell(good ? 200 : 400, NULL);
+			if(closed(&seen, &answer)) break;
+			// A text that is good in every member and would turn the switch is refused for that member
+			if(!good) answer = foretell(400, NULL);
+			else if(web_member == 2) answer = foretell(400, B_WEB_OPEN);
+			else answer = foretell(200, NULL);
 			break;
 		case K_REBOOT:
 			if(closed(&seen, &answer)) break;
@@ -5010,12 +5392,55 @@ static void device_deed(void)
 	judge(deed, &was, 0);
 }
 
+// The owner and the switch "Dauerhaft frei", by their own die: he mostly wants it off - the display every run
+// was written for, on which a change needs the release of ten minutes - and switches it on now and then. A
+// factory reset switches it on as well, and so does a start as delivered.
+static void walk_switch(void)
+{
+	earlier_t was = earlier();
+	int turn_now = web_pick(100);
+
+	// Under the release for good the display is left alone now and then, for longer than a release of ten
+	// minutes lasts whatever renews it: what the browser asks for behind that is asked 32 minutes later
+	if(told.for_good && turn_now >= 90)
+	{
+		doing = "nobody at the display for 32 minutes";
+		gathered = 0;
+		stride = 1000;
+		run(ACCESS_OPEN_MAX_MS + 120000);
+		stride = STEP_MS;
+		tally->waits++;
+		judge(DEED_WAIT, &was, 0);
+		return;
+	}
+	if(turn_now >= (told.for_good ? 10 : 2)) return;
+
+	doing = "Dauerhaft frei";
+	gathered = 0;
+	app_do(app, NAV_DO_WEB_OPEN_TOGGLE, given(now));
+	carry_out();
+	tally->inputs++;
+	judge(DEED_SWITCH, &was, 0);
+}
+
+// The platform restarts when it has carried out what waits
+static void restart_if_asked(void)
+{
+	if(!(gathered & RESTARTS)) return;
+
+	doing = "restart";
+	done.last = gathered;
+	walk_restart();
+	held();
+}
+
 static void walk_run(uint32_t number)
 {
 	run_number = number;
 	deed_number = 0;
 	dice = number * 2654435761u + 40503u;
 	gx_dice = number * 2246822519u + 977u;
+	web_dice = number * 40503u + 2654435761u;
 	doing = "start";
 
 	if(chance(12)) factory();
@@ -5031,6 +5456,20 @@ static void walk_run(uint32_t number)
 		flash.has_settings = true;
 	}
 	watch_gx = walk_gx;
+	// One display in four is released for good: as it comes, with nothing stored, or with settings that say so
+	// as the display itself writes them
+	if(web_pick(4) == 0)
+	{
+		as_delivered();
+		if(flash.has_settings)
+		{
+			settings_t stored;
+
+			settings_defaults(&stored);
+			settings_from_json(&stored, flash.settings, strlen(flash.settings), NULL, 0, work, SETTINGS_TOKENS);
+			settings_to_json(&stored, flash.settings, sizeof(flash.settings));
+		}
+	}
 	if(chance(40))
 	{
 		strcpy(flash.profiles[flash.profile_count].ssid, "Camping");
@@ -5062,6 +5501,10 @@ static void walk_run(uint32_t number)
 	told_begin();
 	// The settings of the flash are the ones the test holds
 	if(flash.has_settings) settings_from_json(&told.settings, flash.settings, strlen(flash.settings), NULL, 0, work, SETTINGS_TOKENS);
+	// ... and the switch among them: told_begin() counted the start before it knew
+	tally->web_starts[told.for_good]--;
+	told.for_good = told.settings.web_open;
+	tally->web_starts[told.for_good]++;
 	run(2100);
 	held();
 
@@ -5074,17 +5517,13 @@ static void walk_run(uint32_t number)
 	for(deed_number = 1; deed_number <= RUN_DEEDS; deed_number++)
 	{
 		walk_cerbo();
+		walk_switch();
+		held();
+		restart_if_asked();
 		if(ask_next || upload_next || (!press_next && !tap_next && chance(62))) request_deed();
 		else device_deed();
 		held();
-		// The platform restarts when it has carried out what waits
-		if(gathered & RESTARTS)
-		{
-			doing = "restart";
-			done.last = gathered;
-			walk_restart();
-			held();
-		}
+		restart_if_asked();
 	}
 }
 
@@ -5111,6 +5550,9 @@ static void test_random_walk(void)
 		"and it sends nothing but CONNECT, SUBSCRIBE and PINGREQ",
 		"in every random run no round of the task of the second source changes the release, moves the fault memory flow, sends a request to the adapter, raises an event, counts as an "
 		"input, moves the time of the app or makes it busy",
+		"in every random run the web interface is released for good exactly while the switch Dauerhaft frei is on - as the stored settings left it at the start, on behind a factory "
+		"reset, turned at the display alone and never by a request -, GET /api/info says so with lasting and 0 s left, no change is refused as locked while it is on however "
+		"long ago it was given, settings that would turn it are answered 400 web_open and change nothing, and switched off the display is closed at once with no question waiting",
 	};
 	// What the runs have to reach, by kind and answer: at least this many times
 	static const struct
@@ -5242,6 +5684,17 @@ static void test_random_walk(void)
 	check(complete && result.gx_given >= 10 && result.gx_moved >= 5 && result.gx_taken_away >= 10 && result.gx_same >= 5 && result.gx_bad >= 5 && result.gx_rounds >= 100000 &&
 	      result.gx_bundles >= 2000 && result.gx_refused >= 100 && result.gx_sessions >= 100 && result.gx_closed >= 20 && result.gx_restarts >= 5,
 	      "the random runs give the address of the Cerbo, change it, take it away and send one that is none, while the Cerbo delivers, refuses, goes and comes back - and restart the display during its sessions");
+	printf("  random runs, the release for good: %ld starts with the switch on and %ld with it off; switched on %ld times and off %ld times at the display; %ld changes asked for "
+	       "while it was on, %ld of them later than 1800 s after it was given, and %ld while it was off; GET /api/info said lasting true %ld times and false %ld times; settings "
+	       "that named web_open as it is accepted %ld times, refused for one that would switch it on %ld times and off %ld times; %ld uploads begun and %ld questions asked while it was on\n",
+	       result.web_starts[1], result.web_starts[0], result.web_switched[1], result.web_switched[0], result.web_changes[1], result.web_late, result.web_changes[0],
+	       result.web_infos[1], result.web_infos[0], result.web_same, result.web_refused[1], result.web_refused[0], result.web_uploads, result.web_asked);
+	check(complete && result.web_starts[0] >= 100 && result.web_starts[1] >= 100 && result.web_switched[0] >= 50 && result.web_switched[1] >= 50 && result.web_changes[0] >= 2000 &&
+	      result.web_changes[1] >= 1000 && result.web_late >= 30 && result.web_infos[0] >= 100 && result.web_infos[1] >= 100 && result.web_same >= 20 && result.web_refused[0] >= 10 &&
+	      result.web_refused[1] >= 10 && result.web_uploads >= 10 && result.web_asked >= 20,
+	      "the random runs start with the web interface released for good and not, switch Dauerhaft frei on and off at the display, change things under both releases - also long after "
+	      "a release of ten minutes would have ended -, ask for the info under both, send settings that name web_open as it is and the other way round, and begin uploads and ask "
+	      "questions under the release for good");
 	check(complete && result.gx_endless[0] >= 20 && result.gx_endless[1] >= 20 && result.gx_claimed[0] >= 10 && result.gx_claimed[1] >= 10,
 	      "the random runs ask for the info and the values while the store of the Cerbo holds a number without end, and for the values of a vehicle that has a value under a key of the "
 	      "Cerbo, on displays without the address and with it");
@@ -5287,6 +5740,7 @@ int main(void)
 	test_last_millisecond();
 	test_time();
 	test_stories();
+	test_for_good();
 	test_cerbo();
 	test_random_walk();
 

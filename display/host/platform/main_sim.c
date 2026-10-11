@@ -955,6 +955,8 @@ static void test_first_start(void)
 	      !platform_app->rolled_back);
 	CHECK(strcmp(platform_app->version, "display-v0.1.0-3-g1a2b3c4") == 0);
 	CHECK(!platform_restarting());
+	// With nothing stored the web interface is released for good, from the first start on (settings.h)
+	CHECK(find(STORE_CFG, STORE_KEY_SETTINGS) == NULL && platform_app->settings.web_open && access_is_lasting(&platform_app->access));
 	snprintf(first_password, sizeof(first_password), "%s", net_password);
 
 	CHECK(boot(ESP_RST_SW, NULL) == OUT_IDLE);
@@ -967,12 +969,28 @@ static void step_night(void)
 	do_it(NAV_DO_NIGHT_TOGGLE);
 }
 
+// The row "Dauerhaft frei" of the screen Web-Zugriff
+static void step_switch(void)
+{
+	do_it(NAV_DO_WEB_OPEN_TOGGLE);
+}
+
 static void test_settings(void)
 {
 	CHECK(boot(ESP_RST_SW, step_night) == OUT_IDLE);
 	CHECK(platform_app->settings.night_mode);
 	CHECK(stored_has(STORE_CFG, STORE_KEY_SETTINGS, "\"night_mode\":true"));
 	CHECK(boot(ESP_RST_SW, NULL) == OUT_IDLE);
+	CHECK(platform_app->settings.night_mode);
+
+	// The switch of the web interface is a setting like the others: stored when it is turned at the display,
+	// and what is stored decides at the next start whether the release for good is given
+	CHECK(stored_has(STORE_CFG, STORE_KEY_SETTINGS, "\"web_open\":true}") && access_is_lasting(&platform_app->access));
+	CHECK(boot(ESP_RST_SW, step_switch) == OUT_IDLE);
+	CHECK(!platform_app->settings.web_open && !access_is_open(&platform_app->access, platform_now_ms()));
+	CHECK(stored_has(STORE_CFG, STORE_KEY_SETTINGS, "\"web_open\":false}"));
+	CHECK(boot(ESP_RST_SW, NULL) == OUT_IDLE);
+	CHECK(!platform_app->settings.web_open && !access_is_lasting(&platform_app->access) && !access_is_open(&platform_app->access, platform_now_ms()));
 	CHECK(platform_app->settings.night_mode);
 }
 
@@ -1210,6 +1228,8 @@ static void test_factory_reset(void)
 	CHECK(find(STORE_DATA, STORE_KEY_LAYOUT) != NULL);
 	CHECK(boot(ESP_RST_SW, NULL) == OUT_IDLE);
 	CHECK(!platform_app->settings.night_mode && strcmp(net_password, first_password) != 0 && strlen(net_password) == 10);
+	// The switch test_settings() turned off is on again with the default: released for good
+	CHECK(platform_app->settings.web_open && access_is_lasting(&platform_app->access) && access_is_open(&platform_app->access, platform_now_ms()));
 }
 
 static void step_take_fifth(void)

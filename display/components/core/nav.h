@@ -50,7 +50,7 @@
  *   NAV_DTC_FAILED   no rows: the reason; a short press acknowledges
  *   NAV_DTC_OLD      *0 .. lines-1 the lines of the list before the last clear, then Zurück
  *   NAV_BRIGHTNESS   no rows: turning changes the brightness
- *   NAV_WEB          *0 Freigabe an/aus, 1 Zurück
+ *   NAV_WEB          *0 Dauerhaft frei ja/nein, 1 Freigabe an/aus, 2 Zurück
  *   NAV_INFO         *0 .. lines-1 lines to scroll, no action
  *   NAV_SETTINGS     *0 Drehrichtung, 1 Hotspot, 2 Neustart, 3 Vorherige Version, 4 Werkseinstellungen,
  *                    5 Zurück
@@ -81,7 +81,7 @@
 
 #define NAV_MENU_ROWS           7
 #define NAV_DTC_ROWS            4
-#define NAV_WEB_ROWS            2
+#define NAV_WEB_ROWS            3
 #define NAV_SETTINGS_ROWS       6
 
 typedef enum
@@ -126,6 +126,7 @@ typedef enum
 	NAV_DO_AP_TOGGLE,           // own access point on / off
 	NAV_DO_RELEASE_ON,          // access_open()
 	NAV_DO_RELEASE_OFF,         // access_close()
+	NAV_DO_WEB_OPEN_TOGGLE,     // the setting web_open: the release that lasts on / off
 	NAV_DO_ASK_CONFIRM,         // access_confirm() and carry out what it returns
 	NAV_DO_ASK_REFUSE,          // access_refuse()
 	NAV_DO_UPDATE_OK,           // mark the running firmware as good
@@ -151,6 +152,8 @@ typedef struct
 	int info_lines;
 	access_ask_t asking;            // access_asking(); every value but ACCESS_ASK_NONE is a question
 	bool release_open;              // access_is_open()
+	bool release_lasting;           // access_is_lasting(): the release is the one that lasts, which "Freigabe"
+	                                // does not switch
 	bool update_pending;            // the running firmware waits for "Update in Ordnung?"
 	bool uploading;                 // a firmware upload runs
 	bool previous_firmware;         // the other slot holds a firmware that can be started
@@ -188,7 +191,8 @@ int nav_rows(const nav_t *nav, const nav_world_t *world);
 // (see the table below). This is not a second list of the rules: the rules of nav_short() are asked
 // themselves, on a copy of *nav, so the answer cannot say anything else than the press does. scene.h reports
 // a choice as enabled by it, and so the screen never draws a row as if it worked while a press on it is
-// ignored (Neustart while the own request is under way, Hotspot while the access point is kept on).
+// ignored (Neustart while the own request is under way, Hotspot while the access point is kept on, Freigabe
+// while the release is the one that lasts).
 // false for a row that does not exist - so for every row of a screen without rows - and for a row on which
 // a press does nothing: a line of a fault memory list, "Löschen" of the clear dialog (hold.h confirms there).
 // What lies over the screen is not looked at: it takes every input, and the screen below it is drawn as
@@ -252,7 +256,11 @@ bool nav_row_acts(const nav_t *nav, int row, const nav_world_t *world);
  *                 a turn" above) - reckoned in 64 bit, for every n an int holds, the smallest among them
  *   short, long   -> NAV_MENU (focus on row 1) and NAV_DO_SETTINGS_STORE
  * NAV_WEB
- *   short on      0 -> NAV_DO_RELEASE_OFF if release_open, else NAV_DO_RELEASE_ON;  1 -> NAV_MENU (row 3)
+ *   short on      0 -> NAV_DO_WEB_OPEN_TOGGLE, whatever the world says;
+ *                 1: unless release_lasting -> NAV_DO_RELEASE_OFF if release_open, else NAV_DO_RELEASE_ON; while
+ *                    release_lasting nothing (the release that lasts is given and taken back by row 0 alone,
+ *                    access.h: the switch of ten minutes would give less than there is, and must not end it);
+ *                 2 -> NAV_MENU (row 3)
  *   long          -> NAV_MENU (row 3)
  * NAV_INFO
  *   short, long   -> NAV_MENU (row 4)

@@ -314,14 +314,14 @@ static void model_info(const web_info_t *i)
 	         "{\"project\":\"wican-display\",\"version\":%s,\"git\":%s,\"slot\":%s,\"reset\":%s,\"up\":%lu,\"safe_mode\":%s,"
 	         "\"rolled_back\":%s,\"update_pending\":%s,\"heap\":%lu,\"heap_min\":%lu,\"psram\":%lu,\"psram_min\":%lu,"
 	         "\"heap_malloc\":%lu,\"heap_malloc_min\":%lu,\"heap_block\":%lu,\"temp_c\":%d,\"heat\":%s,"
-	         "\"release\":{\"open\":%s,\"left_s\":%lu},\"wifi\":{\"ssid\":%s,\"ip\":%s,\"rssi\":%d,\"ap\":%s,\"ap_ssid\":%s},"
+	         "\"release\":{\"open\":%s,\"left_s\":%lu,\"lasting\":%s},\"wifi\":{\"ssid\":%s,\"ip\":%s,\"rssi\":%d,\"ap\":%s,\"ap_ssid\":%s},"
 	         "\"wican\":{\"host\":%s,\"id\":%s,\"fw\":%s,\"view\":%s},%s\"layout\":{\"name\":%s,\"source\":%s},"
 	         "\"http\":{\"ok\":%lu,\"failed\":%lu,\"reconnects\":%lu},\"settings\":%s}",
 	         q(i->version), q(i->git), q(i->slot), q(i->reset), (unsigned long)i->up_s, b(i->safe_mode),
 	         b(i->rolled_back), b(i->update_pending), (unsigned long)i->heap, (unsigned long)i->heap_min, (unsigned long)i->psram,
 	         (unsigned long)i->psram_min, (unsigned long)i->heap_malloc, (unsigned long)i->heap_malloc_min, (unsigned long)i->heap_block,
 	         i->temp_c, q(i->heat),
-	         b(i->release_open), (unsigned long)i->release_left_s, q(i->ssid), q(i->ip), i->rssi, b(i->ap_on), q(i->ap_ssid),
+	         b(i->release_open), i->release_lasting ? 0ul : (unsigned long)i->release_left_s, b(i->release_lasting), q(i->ssid), q(i->ip), i->rssi, b(i->ap_on), q(i->ap_ssid),
 	         q(i->wican_host), q(i->wican_id), q(i->wican_fw), q(i->view), cerbo, q(i->layout_name), q(i->layout_source),
 	         (unsigned long)i->http_ok, (unsigned long)i->http_failed, (unsigned long)i->reconnects, embedded(i->settings));
 }
@@ -538,12 +538,26 @@ static const web_info_t typical_info = {
 	.safe_mode = false, .rolled_back = false, .update_pending = true,
 	.heap = 182340, .heap_min = 151200, .psram = 7340032, .psram_min = 7100416,
 	.heap_malloc = 149572, .heap_malloc_min = 118432, .heap_block = 94208, .temp_c = 47, .heat = "normal",
-	.release_open = true, .release_left_s = 540,
+	.release_open = true, .release_left_s = 540, .release_lasting = false,
 	.ssid = "Werkstatt", .ip = "192.168.1.77", .rssi = -61, .ap_on = false, .ap_ssid = "WiCAN-Display",
 	.wican_host = "192.168.1.50", .wican_id = "a1b2c3d4e5f6", .wican_fw = "4.21", .view = "live",
 	.layout_name = "W906 OM651 Standard", .layout_source = "stored",
 	.http_ok = 12345, .http_failed = 7, .reconnects = 2,
-	.settings = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}",
+	.settings = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":false}",
+};
+
+// The same display as it comes: its web interface released for good, which access.h tells with 2^32-1 seconds
+static const web_info_t lasting_info = {
+	.version = "0.1.0", .git = "display-v0.1.0-3-g1a2b3c4", .slot = "ota_0", .reset = "poweron", .up_s = 4711,
+	.safe_mode = false, .rolled_back = false, .update_pending = true,
+	.heap = 182340, .heap_min = 151200, .psram = 7340032, .psram_min = 7100416,
+	.heap_malloc = 149572, .heap_malloc_min = 118432, .heap_block = 94208, .temp_c = 47, .heat = "normal",
+	.release_open = true, .release_left_s = 4294967295u, .release_lasting = true,
+	.ssid = "Werkstatt", .ip = "192.168.1.77", .rssi = -61, .ap_on = false, .ap_ssid = "WiCAN-Display",
+	.wican_host = "192.168.1.50", .wican_id = "a1b2c3d4e5f6", .wican_fw = "4.21", .view = "live",
+	.layout_name = "W906 OM651 Standard", .layout_source = "stored",
+	.http_ok = 12345, .http_failed = 7, .reconnects = 2,
+	.settings = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":true}",
 };
 
 static const web_info_t safe_mode_info = {
@@ -564,7 +578,7 @@ static const char empty_info_text[] =
 	"{\"project\":\"wican-display\",\"version\":\"\",\"git\":\"\",\"slot\":\"\",\"reset\":\"\",\"up\":0,\"safe_mode\":false,"
 	"\"rolled_back\":false,\"update_pending\":false,\"heap\":0,\"heap_min\":0,\"psram\":0,\"psram_min\":0,"
 	"\"heap_malloc\":0,\"heap_malloc_min\":0,\"heap_block\":0,\"temp_c\":0,\"heat\":\"\","
-	"\"release\":{\"open\":false,\"left_s\":0},\"wifi\":{\"ssid\":\"\",\"ip\":\"\",\"rssi\":0,\"ap\":false,\"ap_ssid\":\"\"},"
+	"\"release\":{\"open\":false,\"left_s\":0,\"lasting\":false},\"wifi\":{\"ssid\":\"\",\"ip\":\"\",\"rssi\":0,\"ap\":false,\"ap_ssid\":\"\"},"
 	"\"wican\":{\"host\":\"\",\"id\":\"\",\"fw\":\"\",\"view\":\"\"},\"layout\":{\"name\":\"\",\"source\":\"\"},"
 	"\"http\":{\"ok\":0,\"failed\":0,\"reconnects\":0},\"settings\":null}";
 
@@ -605,7 +619,7 @@ static void test_info(void)
 		{offsetof(web_info_t, heap_malloc), "\"psram_min\":0,\"heap_malloc\":4294967295,\"heap_malloc_min\":0", "info: heap_malloc stands at its place with all 32 bit"},
 		{offsetof(web_info_t, heap_malloc_min), "\"heap_malloc\":0,\"heap_malloc_min\":4294967295,\"heap_block\":0", "info: heap_malloc_min stands at its place with all 32 bit"},
 		{offsetof(web_info_t, heap_block), "\"heap_malloc_min\":0,\"heap_block\":4294967295,\"temp_c\":0", "info: heap_block stands at its place with all 32 bit"},
-		{offsetof(web_info_t, release_left_s), "\"release\":{\"open\":false,\"left_s\":4294967295},\"wifi\"", "info: release.left_s stands at its place with all 32 bit"},
+		{offsetof(web_info_t, release_left_s), "\"release\":{\"open\":false,\"left_s\":4294967295,\"lasting\":false},\"wifi\"", "info: release.left_s stands at its place with all 32 bit"},
 		{offsetof(web_info_t, http_ok), "\"http\":{\"ok\":4294967295,\"failed\":0", "info: http.ok stands at its place with all 32 bit"},
 		{offsetof(web_info_t, http_failed), "\"ok\":0,\"failed\":4294967295,\"reconnects\":0", "info: http.failed stands at its place with all 32 bit"},
 		{offsetof(web_info_t, reconnects), "\"failed\":0,\"reconnects\":4294967295},\"settings\"", "info: http.reconnects stands at its place with all 32 bit"},
@@ -619,10 +633,12 @@ static void test_info(void)
 		{offsetof(web_info_t, safe_mode), "\"up\":0,\"safe_mode\":true,\"rolled_back\":false", "info: safe_mode alone is true at its place"},
 		{offsetof(web_info_t, rolled_back), "\"safe_mode\":false,\"rolled_back\":true,\"update_pending\":false", "info: rolled_back alone is true at its place"},
 		{offsetof(web_info_t, update_pending), "\"rolled_back\":false,\"update_pending\":true,\"heap\"", "info: update_pending alone is true at its place"},
-		{offsetof(web_info_t, release_open), "\"release\":{\"open\":true,\"left_s\"", "info: release.open alone is true at its place"},
+		{offsetof(web_info_t, release_open), "\"release\":{\"open\":true,\"left_s\":0,\"lasting\":false}", "info: release.open alone is true at its place"},
+		{offsetof(web_info_t, release_lasting), "\"release\":{\"open\":false,\"left_s\":0,\"lasting\":true},\"wifi\"", "info: release.lasting alone is true at its place, the last member of the release"},
 		{offsetof(web_info_t, ap_on), "\"rssi\":0,\"ap\":true,\"ap_ssid\"", "info: wifi.ap alone is true at its place"},
 	};
 	static const int ints[] = {0, 1, -1, 9, -9, 10, -10, 47, -61, 99, 100, -100, 125, 1000, -40, INT_MAX, INT_MIN, INT_MAX - 1, INT_MIN + 1};
+	static const uint32_t lefts[] = {0, 1, 600, 1800, 2147483648u, 4294967295u};
 	web_info_t info;
 	const char *mark = "a\"MARK";
 	uint32_t most = 4294967295u;
@@ -635,6 +651,9 @@ static void test_info(void)
 	info_now = &safe_mode_info;
 	check(gives_fixture(call_info, "fixtures/web_info_safe_mode.json"),
 	      "info: safe mode, no network, texts that are NULL, no settings give the fixture, with every room from 0 bytes on");
+	info_now = &lasting_info;
+	check(gives_fixture(call_info, "fixtures/web_info_lasting.json"),
+	      "info: the display as it comes, its release the one that lasts, gives the fixture, with every room from 0 bytes on: lasting true, and 0 seconds left for the 2^32-1 it was given");
 
 	memset(&info, 0, sizeof(info));
 	info_now = &info;
@@ -665,6 +684,40 @@ static void test_info(void)
 		check(strstr((char *)room, flags[i].where) != NULL && count_of((char *)room, "true") == 1 && strlen((char *)room) == strlen(empty_info_text) - 1,
 		      flags[i].what);
 	}
+
+	// A release that lasts has no seconds left to tell, whatever number comes with it
+	all = true;
+	for(i = 0; i < sizeof(lefts) / sizeof(lefts[0]); i++)
+	{
+		memset(&info, 0, sizeof(info));
+		info.release_open = true;
+		info.release_lasting = true;
+		info.release_left_s = lefts[i];
+		call_info((char *)room, ROOM_SIZE);
+		if(strstr((char *)room, "\"release\":{\"open\":true,\"left_s\":0,\"lasting\":true},\"wifi\"") == NULL || strlen((char *)room) != strlen(empty_info_text) - 2) all = false;
+		model_info(&info);
+		if(!gives(call_info, expected)) all = false;
+	}
+	check(all, "info: a release that lasts is written with left_s 0, given 0, 1, 600, 1800, 2^31 or 2^32-1 seconds");
+	all = true;
+	for(i = 0; i < sizeof(lefts) / sizeof(lefts[0]); i++)
+	{
+		char wanted[80];
+
+		memset(&info, 0, sizeof(info));
+		info.release_open = true;
+		info.release_left_s = lefts[i];
+		call_info((char *)room, ROOM_SIZE);
+		snprintf(wanted, sizeof(wanted), "\"release\":{\"open\":true,\"left_s\":%lu,\"lasting\":false},\"wifi\"", (unsigned long)lefts[i]);
+		if(strstr((char *)room, wanted) == NULL) all = false;
+	}
+	check(all, "info: a release that does not last is written with the seconds it was given, the same six numbers");
+	memset(&info, 0, sizeof(info));
+	info.release_lasting = true;
+	info.release_left_s = 77;
+	call_info((char *)room, ROOM_SIZE);
+	check(strstr((char *)room, "\"release\":{\"open\":false,\"left_s\":0,\"lasting\":true},\"wifi\"") != NULL,
+	      "info: lasting told of a release that is not open: open is written as it was given, false, and left_s 0");
 
 	// The two numbers with a sign
 	memset(&info, 0, sizeof(info));
@@ -3677,6 +3730,9 @@ static void test_random_info(void)
 		info.heat = random_text();
 		info.release_open = rnd(2) == 1;
 		info.release_left_s = random_number();
+		// Every third release lasts: its seconds are then not written, whatever they are. No roll: the infos
+		// stay the ones they were before there was such a release.
+		info.release_lasting = round % 3 == 0;
 		info.ssid = random_text();
 		info.ip = random_text();
 		info.rssi = random_int();
@@ -3726,7 +3782,7 @@ static void test_info_cerbo(void)
 		"{\"project\":\"wican-display\",\"version\":\"\",\"git\":\"\",\"slot\":\"\",\"reset\":\"\",\"up\":0,\"safe_mode\":false,"
 		"\"rolled_back\":false,\"update_pending\":false,\"heap\":0,\"heap_min\":0,\"psram\":0,\"psram_min\":0,"
 		"\"heap_malloc\":0,\"heap_malloc_min\":0,\"heap_block\":0,\"temp_c\":0,\"heat\":\"\","
-		"\"release\":{\"open\":false,\"left_s\":0},\"wifi\":{\"ssid\":\"\",\"ip\":\"\",\"rssi\":0,\"ap\":false,\"ap_ssid\":\"\"},"
+		"\"release\":{\"open\":false,\"left_s\":0,\"lasting\":false},\"wifi\":{\"ssid\":\"\",\"ip\":\"\",\"rssi\":0,\"ap\":false,\"ap_ssid\":\"\"},"
 		"\"wican\":{\"host\":\"\",\"id\":\"\",\"fw\":\"\",\"view\":\"\"},"
 		"\"cerbo\":{\"host\":\"h\",\"view\":\"\",\"values\":0,\"ok\":0,\"refused\":0,\"connects\":0,\"boots\":0,\"lag_ms\":0},"
 		"\"layout\":{\"name\":\"\",\"source\":\"\"},\"http\":{\"ok\":0,\"failed\":0,\"reconnects\":0},\"settings\":null}";
@@ -3746,7 +3802,7 @@ static void test_info_cerbo(void)
 	info.cerbo_connects = 31;
 	info.cerbo_boots = 1;
 	info.cerbo_lag_ms = 120;
-	info.settings = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"192.168.88.2\"}";
+	info.settings = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"192.168.88.2\",\"web_open\":false}";
 	info_now = &info;
 	check(gives_fixture(call_info, "fixtures/web_info_cerbo.json"), "info: a display with a Cerbo gives the fixture, with every room from 0 bytes on: the object cerbo behind wican");
 

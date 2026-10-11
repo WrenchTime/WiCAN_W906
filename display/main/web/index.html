@@ -380,7 +380,7 @@ function bar()
 	}
 	else if(seconds > 0)
 	{
-		message = "Web-Zugriff frei, noch " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0");
+		message = "Web-Zugriff frei" + (isFinite(seconds) ? ", noch " + Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0") : "");
 		kind = "bar free";
 	}
 	$("bar").textContent = message;
@@ -411,7 +411,10 @@ async function refresh()
 	if(S.linked)
 	{
 		S.info = info;
-		S.until = part(info, "release").open === true ? Date.now() + Number(part(info, "release").left_s) * 1000 : 0;
+		const release = part(info, "release");
+
+		// A release for good has no end to count down to
+		S.until = release.open !== true ? 0 : release.lasting === true ? Infinity : Date.now() + Number(release.left_s) * 1000;
 	}
 	bar();
 	gate();
@@ -1403,9 +1406,9 @@ async function reboot()
 {
 	let r;
 
-	if(!confirm("Das Display neu starten? Vorschau und Web-Zugriff enden damit.")) return;
+	if(!confirm("Das Display neu starten? Vorschau und zeitweilige Freigabe enden damit.")) return;
 	r = await api("POST", "/api/reboot");
-	if(r.status === 200) tell("rmsg", "Das Display startet neu. Die Seite findet es von selbst wieder; der Web-Zugriff ist danach neu freizugeben.", "ok");
+	if(r.status === 200) tell("rmsg", "Das Display startet neu. Die Seite findet es von selbst wieder; eine zeitweilige Freigabe ist danach neu zu geben.", "ok");
 	else refused("rmsg", r, true);
 }
 

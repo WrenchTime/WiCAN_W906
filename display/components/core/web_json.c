@@ -150,7 +150,11 @@ int web_info_json(const web_info_t *info, char *out, size_t size)
 	put(&writer, ",\"release\":{\"open\":");
 	put_bool(&writer, info->release_open);
 	put(&writer, ",\"left_s\":");
-	put_unsigned(&writer, info->release_left_s);
+	// A release that lasts has no end to count down to, whatever number came with it (access.h answers the
+	// largest one for it)
+	put_unsigned(&writer, info->release_lasting ? 0 : info->release_left_s);
+	put(&writer, ",\"lasting\":");
+	put_bool(&writer, info->release_lasting);
 
 	put(&writer, "},\"wifi\":{\"ssid\":");
 	put_string(&writer, info->ssid);

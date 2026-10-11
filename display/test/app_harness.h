@@ -21,6 +21,12 @@
  * profile, the values of tools/w906/fixtures/autopid_data_ignition_on.json). The first round is answered at
  * 0, the next ones every second. A read gets the number 42, the clear behind it 43.
  *
+ * The release of the web interface: every story begins with a display whose owner switched "Dauerhaft frei"
+ * off (factory() stores WEB_TIMED, the settings with web_open false), unless it says otherwise. That is the
+ * display every story was written for - a change through the web needs the release of ten minutes, given at
+ * the knob - and the stories go on telling of it, each as it did. The display as it comes, released for
+ * good, is the one of the stories that call as_delivered() behind factory() or garage().
+ *
  * A header with code, for one test program each: the Makefile does not name it, so a test is built anew
  * with "rm -f test_app test_app_web" after a change here.
  */
@@ -93,8 +99,13 @@ static void dirt(void)
 #define GX_BOOT     1836452071u         // the number of the run of its flow
 #define GX_AGE_MS   86400000u           // the flow started a day before the world of the test begins
 #define GX_WIRE     8192
+// What a story adds to the settings it stores, so that its display is the one of the stories: the web
+// interface not released for good (see the head)
+#define WEB_OFF     ",\"web_open\":false}"
+// The settings of a display on which nothing was set but that
+#define WEB_TIMED   "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60" WEB_OFF
 // The settings of a display that was given the address of the Cerbo and nothing else
-#define GX_SETTINGS "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"" GX_HOST "\"}"
+#define GX_SETTINGS "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"" GX_HOST "\"" WEB_OFF
 // What the flow of the stories publishes: a few of the values of the camper, numbers and switches
 #define GX_VALUES   "\"GX_BATT_SOC\":87.5,\"GX_BATT_V\":26.41,\"GX_BATT_I\":-6.2,\"GX_SW_B2B\":\"on\",\"GX_SW_VALVE\":\"off\",\"GX_TANK_FRESH\":77"
 
@@ -1421,6 +1432,9 @@ static void factory(void)
 	gx.boot_ms = epoch - GX_AGE_MS;
 	gx.values = GX_VALUES;
 	gx.read_max = CERBO_READ_MAX;
+	// The display of the stories: its owner switched "Dauerhaft frei" off, and nothing else is set
+	strcpy(flash.settings, WEB_TIMED);
+	flash.has_settings = true;
 	if(gx_everywhere)
 	{
 		// The display was given its address, and it sends what gx_script() says, five times a second
@@ -1431,6 +1445,23 @@ static void factory(void)
 		strcpy(flash.settings, GX_SETTINGS);
 		flash.has_settings = true;
 	}
+}
+
+// The display as it comes: its stored settings do not say whether the web interface is released for good, so
+// it is. Called behind factory() or garage(), before the start.
+static void as_delivered(void)
+{
+	char *member = strstr(flash.settings, WEB_OFF);
+
+	if(strcmp(flash.settings, WEB_TIMED) == 0)
+	{
+		// Nothing was ever set on it: nothing is stored
+		memset(flash.settings, 0, sizeof(flash.settings));
+		flash.has_settings = false;
+	}
+	// What else is stored stays - the address of a Cerbo -, without the member: the text of a firmware from
+	// before it
+	else if(member != NULL) strcpy(member, "}");
 }
 
 // A Cerbo whose flow publishes a bundle every second, and a display that was given its address. Called
@@ -1494,6 +1525,7 @@ static inline void app_harness_unused(void)
 	(void)gx_hears;
 	(void)gx_step;
 	(void)cerbo_there;
+	(void)as_delivered;
 	(void)work;
 	(void)flash;
 	(void)machine;

@@ -39,6 +39,11 @@ SAME_KEY = "\t\t\tif(strcmp(layout->pages[p].items[i].key, key) == 0) return tru
 UNKNOWN = "\t\t\t\tif(catalog_find(catalog, key) >= 0 || used_before(layout, p, i)) continue;"
 ITEMS = "\tfor(int p = 0; p < layout->page_count; p++) items += layout->pages[p].item_count;"
 LEFT = "\tput_unsigned(&writer, state == ACCESS_TICKET_WAITING ? left_s : 0);"
+# GET /api/info: a release that lasts is told with 0 seconds left and with the member "lasting"
+INFO_LEFT_COMMENT = ("\t// A release that lasts has no end to count down to, whatever number came with it (access.h answers the\n"
+                     "\t// largest one for it)\n")
+INFO_LEFT = "\tput_unsigned(&writer, info->release_lasting ? 0 : info->release_left_s);"
+INFO_LASTING = "\tput(&writer, \",\\\"lasting\\\":\");\n\tput_bool(&writer, info->release_lasting);\n"
 HAS_READ = "\tbool has_read = read != NULL && read[0] != '\\0';"
 AGE = "\tput_unsigned(&writer, has_read ? read_age_s : 0);"
 
@@ -170,9 +175,30 @@ MUTATIONS = [
     ("web_json_info_temp_never_below_zero", T, F, "\tput_int(&writer, info->temp_c);", "\tput_int(&writer, info->temp_c < 0 ? 0 : info->temp_c);"),
     ("web_json_info_heat_is_reset", T, F, "\tput_string(&writer, info->heat);", "\tput_string(&writer, info->reset);"),
     ("web_json_info_release_open_is_ap", T, F, "\tput_bool(&writer, info->release_open);", "\tput_bool(&writer, info->ap_on);"),
-    ("web_json_info_release_left_is_up", T, F, "\tput_unsigned(&writer, info->release_left_s);", "\tput_unsigned(&writer, info->up_s);"),
+    ("web_json_info_release_left_is_up", T, F, INFO_LEFT, INFO_LEFT.replace("info->release_left_s", "info->up_s")),
     ("web_json_info_release_left_zero_when_closed", T, F,
-     "\tput_unsigned(&writer, info->release_left_s);", "\tput_unsigned(&writer, info->release_open ? info->release_left_s : 0);"),
+     INFO_LEFT, INFO_LEFT.replace("info->release_lasting ? 0", "info->release_lasting || !info->release_open ? 0")),
+    # the release that lasts: the last member of the object, and no seconds left to tell
+    ("web_json_info_lasting_missing", T, F, INFO_LASTING, ""),
+    ("web_json_info_lasting_before_left", T, F,
+     "\tput(&writer, \",\\\"left_s\\\":\");\n" + INFO_LEFT_COMMENT + INFO_LEFT + "\n" + INFO_LASTING,
+     INFO_LASTING + "\tput(&writer, \",\\\"left_s\\\":\");\n" + INFO_LEFT + "\n"),
+    ("web_json_info_lasting_is_open", T, F, INFO_LASTING, INFO_LASTING.replace("info->release_lasting", "info->release_open")),
+    ("web_json_info_lasting_inverted", T, F, INFO_LASTING, INFO_LASTING.replace("info->release_lasting", "!info->release_lasting")),
+    ("web_json_info_lasting_never", T, F, INFO_LASTING, INFO_LASTING.replace("info->release_lasting", "false")),
+    ("web_json_info_lasting_only_while_open", T, F, INFO_LASTING, INFO_LASTING.replace("info->release_lasting", "info->release_lasting && info->release_open")),
+    ("web_json_info_lasting_as_a_number", T, F, INFO_LASTING, INFO_LASTING.replace("put_bool", "put_unsigned")),
+    ("web_json_info_lasting_under_another_name", T, F, INFO_LASTING, INFO_LASTING.replace("lasting\\\"", "forever\\\"")),
+    ("web_json_info_left_of_a_lasting_release_written", T, F, INFO_LEFT, "\tput_unsigned(&writer, info->release_left_s);"),
+    ("web_json_info_left_of_a_lasting_release_is_one", T, F, INFO_LEFT, INFO_LEFT.replace("? 0 :", "? 1 :")),
+    ("web_json_info_left_of_a_lasting_release_is_the_largest", T, F, INFO_LEFT, INFO_LEFT.replace("? 0 :", "? 4294967295u :")),
+    ("web_json_info_left_zero_only_for_an_open_lasting_release", T, F,
+     INFO_LEFT, INFO_LEFT.replace("info->release_lasting ? 0", "info->release_lasting && info->release_open ? 0")),
+    ("web_json_info_left_zero_only_for_the_largest_number", T, F,
+     INFO_LEFT, INFO_LEFT.replace("info->release_lasting ? 0", "info->release_lasting && info->release_left_s == 4294967295u ? 0")),
+    ("web_json_info_left_never_written", T, F, INFO_LEFT, INFO_LEFT.replace("info->release_lasting ? 0 : info->release_left_s", "0 * info->release_left_s")),
+    ("web_json_info_open_told_for_every_lasting_release", T, F,
+     "\tput_bool(&writer, info->release_open);", "\tput_bool(&writer, info->release_open || info->release_lasting);"),
     ("web_json_info_release_not_an_object", T, F, "\",\\\"release\\\":{\\\"open\\\":\"", "\",\\\"release\\\":[\\\"open\\\":\""),
     ("web_json_info_ssid_is_ap_ssid", T, F, "\tput_string(&writer, info->ssid);", "\tput_string(&writer, info->ap_ssid);"),
     ("web_json_info_ip_is_host", T, F, "\tput_string(&writer, info->ip);", "\tput_string(&writer, info->wican_host);"),

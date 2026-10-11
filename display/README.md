@@ -199,9 +199,24 @@ Slot noch ein zurückgenommenes Update, steht es danach wieder unter „Vorherig
 - Wird das Display zu heiß (85 °C am Chip), schaltet es das Licht ab. Offene Fragen und Dialoge sind dann
   beendet, ein gerade gehaltener Knopfdruck zählt nicht, und die Webseite bekommt für alles, was eine
   Bestätigung am Gerät braucht, die Antwort „hot".
-- Web-Zugriff: Menü → Web-Zugriff schaltet Änderungen über die Webseite frei (10 Minuten nach der letzten
-  Änderung, höchstens 30 Minuten). WLAN speichern, Firmware installieren und Werkseinstellungen brauchen
-  zusätzlich einen Knopfdruck am Gerät. Die Webseite kann den Fehlerspeicher weder lesen noch löschen.
+- Web-Zugriff: Ab Werk ist er dauerhaft frei. Jedes Gerät im selben WLAN kann über die Webseite Ansichten und
+  Einstellungen ändern, ein Netz vergessen, das Display neu starten und eine Firmware hochladen, ohne dass
+  jemand am Display war – vom Start an, auch nach jedem Neustart. WLAN speichern, Firmware installieren und
+  Werkseinstellungen brauchen weiterhin einen Knopfdruck am Gerät: die Frage steht auf dem Schirm, und wer
+  sie nicht gestellt hat, lehnt mit einem langen Druck ab. Aussperren oder ohne Knopfdruck umflashen kann
+  ein fremdes Gerät im WLAN das Display also nicht. Stören kann es: Ein Upload überschreibt die vorherige
+  Version im zweiten Speicherplatz, und solange er läuft, liegt sein Hinweis über jedem Schirm und Knopf
+  und Bildschirm bleiben ohne Wirkung; ein Neustart über die Webseite, bevor „Update in Ordnung?" bestätigt
+  ist, nimmt ein Update zurück. In einem WLAN mit Geräten, denen man das nicht zutraut, gehört „Dauerhaft
+  frei" auf nein. Die Webseite kann den Fehlerspeicher weder lesen noch löschen.
+- Wer das frühere Verhalten will, stellt unter Menü → Web-Zugriff die Zeile „Dauerhaft frei" auf nein. Dann
+  schaltet die Zeile „Freigabe" darunter Änderungen frei, 10 Minuten nach der letzten Änderung, höchstens 30
+  Minuten. Solange „Dauerhaft frei" auf ja steht, ist „Freigabe" grau und zeigt „dauerhaft". Der Schalter
+  lässt sich nur am Display umlegen, nicht über die Webseite. Er bleibt über Neustart und Update erhalten;
+  Werkseinstellungen stellen ihn zurück auf ja. Ein Display, das von einer Firmware ohne diesen Schalter
+  aktualisiert wird, ist danach dauerhaft frei – auch dann, wenn er schon einmal auf nein stand und man
+  zwischendurch zu einer solchen Firmware zurückgegangen ist („Vorherige Version") und dort eine Einstellung
+  geändert hat: sie speichert die Einstellungen ohne ihn.
 - Ohne gespeichertes WLAN öffnet das Display einen eigenen Hotspot; Name und Passwort stehen unter
   Menü → Web-Zugriff. Solange kein Netz gespeichert ist und im sicheren Modus lässt er sich nicht abschalten
   (die Zeile „Hotspot" in den Einstellungen ist dann grau).

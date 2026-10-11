@@ -12,6 +12,24 @@ BOOLEAN = "\tif(token->type != JSON_TRUE && token->type != JSON_FALSE) return fa
 OBJECT = "\tif(count < 0 || work[0].type != JSON_OBJECT) return false;"
 STANDBY = "\tif(settings->standby_s != 0 && !showing && idle_ms >= (uint64_t)settings->standby_s * 1000) return 0;"
 REFUSE = "\t\tif(!good)\n\t\t{\n\t\t\twrite_bad(bad, bad_size, names[member]);\n\t\t\treturn false;\n\t\t}\n"
+NAMES = "{\"brightness\", \"night\", \"night_mode\", \"reverse\", \"standby_s\", \"web_open\"}"
+KNOWN = "\twhile(member < MEMBERS && !json_text_is(json, name, names[member])) member++;"
+WEB_OPEN_READ = "\t\t\tcase WEB_OPEN:   good = read_boolean(value, &changed.web_open); break;\n"
+WEB_OPEN_WRITTEN = "\tput_name(&writer, WEB_OPEN);\n\tput_boolean(&writer, settings->web_open);\n"
+WEB_OPEN_DEFAULT = "\tsettings->web_open = true;\n"
+ADDRESS_WRITTEN = ("\tif(settings_is_address(settings->cerbo))\n\t{\n\t\tput(&writer, \",\\\"\" CERBO_NAME \"\\\":\\\"\");\n\t\tput(&writer, settings->cerbo);\n"
+                   "\t\tput_char(&writer, '\"');\n\t}\n")
+STANDBY_WRITTEN = "\tput_name(&writer, STANDBY_S);\n\tput_number(&writer, settings->standby_s);\n"
+ADDRESS_COMMENT = "\t// Only for a display that has the address of a Cerbo: every other text is the one without this member\n"
+# The settings are copied as bytes, into the local and back: the gap behind the last member stays what it was
+COPIED_IN = "\tmemcpy(&changed, settings, sizeof(changed));\n"
+COPIED_BACK = "\tmemcpy(settings, &changed, sizeof(changed));\n"
+MEMBERS_IN = ("\tchanged.brightness = settings->brightness;\n\tchanged.night = settings->night;\n\tchanged.night_mode = settings->night_mode;\n"
+              "\tchanged.reverse = settings->reverse;\n\tchanged.standby_s = settings->standby_s;\n"
+              "\tmemcpy(changed.cerbo, settings->cerbo, sizeof(changed.cerbo));\n\tchanged.web_open = settings->web_open;\n")
+MEMBERS_BACK = ("\tsettings->brightness = changed.brightness;\n\tsettings->night = changed.night;\n\tsettings->night_mode = changed.night_mode;\n"
+                "\tsettings->reverse = changed.reverse;\n\tsettings->standby_s = changed.standby_s;\n"
+                "\tmemcpy(settings->cerbo, changed.cerbo, sizeof(changed.cerbo));\n\tsettings->web_open = changed.web_open;\n")
 DIGITS = "\tdo\n\t{\n\t\tdigits[count++] = (char)('0' + number % 10);\n\t\tnumber /= 10;\n\t}\n\twhile(number != 0);"
 
 MUTATIONS = [
@@ -29,9 +47,9 @@ MUTATIONS = [
 
     # names of the members, for reading and writing
     ("settings_names_night_mode_and_reverse_swapped", T, F,
-     "{\"brightness\", \"night\", \"night_mode\", \"reverse\", \"standby_s\"}", "{\"brightness\", \"night\", \"reverse\", \"night_mode\", \"standby_s\"}"),
+     NAMES, NAMES.replace("\"night_mode\", \"reverse\"", "\"reverse\", \"night_mode\"")),
     ("settings_names_brightness_and_night_swapped", T, F,
-     "{\"brightness\", \"night\", \"night_mode\", \"reverse\", \"standby_s\"}", "{\"night\", \"brightness\", \"night_mode\", \"reverse\", \"standby_s\"}"),
+     NAMES, NAMES.replace("\"brightness\", \"night\"", "\"night\", \"brightness\"")),
     ("settings_name_compared_by_its_beginning", T, F,
      "!json_text_is(json, name, names[member])",
      "(name->type != JSON_STRING || strncmp(json + name->start, names[member], strlen(names[member])) != 0)"),
@@ -41,7 +59,7 @@ MUTATIONS = [
     ("settings_capital_first_letter_is_enough_for_a_name", T, F,
      "!json_text_is(json, name, names[member])",
      "!json_text_is(json, name, names[member]) && !(json[name->start] == 'B' && member == 0) && !(json[name->start] == 'S' && member == 4)"),
-    ("settings_standby_unknown", T, F, "\twhile(member < MEMBERS && !json_text_is", "\twhile(member < MEMBERS - 1 && !json_text_is"),
+    ("settings_standby_unknown", T, F, KNOWN, KNOWN.replace("!json_text_is(json, name, names[member])", "(member == STANDBY_S || !json_text_is(json, name, names[member]))")),
 
     # brightness and night
     ("settings_percent_min_not_checked", T, F, PERCENT_RANGE, "\tif(number > SETTINGS_BRIGHTNESS_MAX) return false;"),
@@ -177,10 +195,10 @@ MUTATIONS = [
     ("settings_steps_into_nested_members", T, F, "\t\tkey += 1 + value->skip;", "\t\tkey += 2;"),
     ("settings_refused_text_applied", T, F,
      "\t\t\twrite_bad(bad, bad_size, names[member]);\n\t\t\treturn false;",
-     "\t\t\twrite_bad(bad, bad_size, names[member]);\n\t\t\t*settings = changed;\n\t\t\treturn false;"),
-    ("settings_taken_text_not_applied", T, F, "\t*settings = changed;\n", ""),
+     "\t\t\twrite_bad(bad, bad_size, names[member]);\n\t\t\tmemcpy(settings, &changed, sizeof(changed));\n\t\t\treturn false;"),
+    ("settings_taken_text_not_applied", T, F, COPIED_BACK, ""),
     ("settings_missing_members_become_defaults", T, F,
-     "\tint key = 1;\n\n\twrite_bad(bad, bad_size, \"\");", "\tint key = 1;\n\n\tsettings_defaults(&changed);\n\twrite_bad(bad, bad_size, \"\");"),
+     COPIED_IN + "\twrite_bad(bad, bad_size, \"\");", COPIED_IN + "\tsettings_defaults(&changed);\n\twrite_bad(bad, bad_size, \"\");"),
     ("settings_first_brightness_counts", T, F,
      "good = read_percent(json, value, &changed.brightness); break;",
      "good = changed.brightness != settings->brightness || read_percent(json, value, &changed.brightness); break;"),
@@ -283,9 +301,9 @@ MUTATIONS = [
     ("settings_text_cut_at_600_bytes", T, F, "json_parse(json, length, work, work_count);", "json_parse(json, length > 600 ? 600 : length, work, work_count);"),
     ("settings_whitespace_in_front_refused", T, F, OBJECT, "\tif(count < 0 || work[0].type != JSON_OBJECT || work[0].start > 2) return false;"),
     ("settings_large_token_room_misread", T, F, "\tint key = 1;\n", "\tint key = 1 + (work_count > 300);\n"),
-    ("settings_missing_brightness_limited", T, F, "\t*settings = changed;\n", "\tif(changed.brightness > 100) changed.brightness = 100;\n\t*settings = changed;\n"),
-    ("settings_missing_night_raised", T, F, "\t*settings = changed;\n", "\tif(changed.night < 5) changed.night = 5;\n\t*settings = changed;\n"),
-    ("settings_missing_standby_limited", T, F, "\t*settings = changed;\n", "\tif(changed.standby_s > 3600) changed.standby_s = 3600;\n\t*settings = changed;\n"),
+    ("settings_missing_brightness_limited", T, F, COPIED_BACK, "\tif(changed.brightness > 100) changed.brightness = 100;\n\tmemcpy(settings, &changed, sizeof(changed));\n"),
+    ("settings_missing_night_raised", T, F, COPIED_BACK, "\tif(changed.night < 5) changed.night = 5;\n\tmemcpy(settings, &changed, sizeof(changed));\n"),
+    ("settings_missing_standby_limited", T, F, COPIED_BACK, "\tif(changed.standby_s > 3600) changed.standby_s = 3600;\n\tmemcpy(settings, &changed, sizeof(changed));\n"),
     ("settings_text_large_room_refused", T, F, "\tif(writer.length >= size)\n", "\tif(writer.length >= size || size > 200)\n"),
     ("settings_backlight_standby_255_never", T, F, "\tif(settings->standby_s != 0 && !showing", "\tif(settings->standby_s != 0 && settings->standby_s != 255 && !showing"),
     ("settings_backlight_70_is_71", T, F, "\treturn percent;\n}", "\treturn percent == 70 ? 71 : percent;\n}"),
@@ -299,8 +317,8 @@ MUTATIONS = [
     ("settings_text_cut_at_5000_bytes", T, F, "json_parse(json, length, work, work_count);", "json_parse(json, length > 5000 ? 5000 : length, work, work_count);"),
     ("settings_token_room_cut_at_1000", T, F, "json_parse(json, length, work, work_count);", "json_parse(json, length, work, work_count > 1000 ? 1000 : work_count);"),
     ("settings_night_mode_with_standby_77_ends_reverse", T, F,
-     "\t*settings = changed;\n", "\tif(changed.night_mode && !settings->night_mode && changed.standby_s == 77) changed.reverse = false;\n\t*settings = changed;\n"),
-    ("settings_empty_object_in_a_longer_text_refused", T, F, "\t*settings = changed;\n\treturn true;", "\t*settings = changed;\n\treturn work[0].size > 0 || length < 20;"),
+     COPIED_BACK, "\tif(changed.night_mode && !settings->night_mode && changed.standby_s == 77) changed.reverse = false;\n\tmemcpy(settings, &changed, sizeof(changed));\n"),
+    ("settings_empty_object_in_a_longer_text_refused", T, F, COPIED_BACK + "\treturn true;", COPIED_BACK + "\treturn work[0].size > 0 || length < 20;"),
     ("settings_text_without_zero_in_a_large_room", T, F, "\tout[writer.length] = '\\0';", "\tif(size < 5000) out[writer.length] = '\\0';"),
     ("settings_backlight_reversed_knob_dims_at_standby_61", T, F,
      "\treturn percent;\n}", "\treturn settings->reverse && percent == 80 && settings->standby_s == 61 ? 79 : percent;\n}"),
@@ -311,9 +329,9 @@ MUTATIONS = [
     ("settings_members_counted_in_8_bit", T, F, "\tfor(int i = 0; i < work[0].size; i++)", "\tfor(int i = 0; i < (uint8_t)work[0].size; i++)"),
     ("settings_bad_room_checked_in_16_bit", T, F, "\tif(bad == NULL || bad_size == 0) return;", "\tif(bad == NULL || (uint16_t)bad_size == 0) return;"),
     ("settings_standby_77_needs_a_brightness_member", T, F,
-     "\t*settings = changed;\n",
+     COPIED_BACK,
      "\tif(changed.brightness == settings->brightness && changed.standby_s == 77 && changed.night != settings->night) changed.standby_s = settings->standby_s;\n"
-     "\t*settings = changed;\n"),
+     + COPIED_BACK),
     ("settings_text_brightness_255_wrong_beside_night_254", T, F,
      "\tput_number(&writer, settings->brightness);", "\tput_number(&writer, settings->brightness == 255 && settings->night == 254 ? 25 : settings->brightness);"),
     ("settings_text_room_in_16_bit", T, F, "\twriter_t writer = {out, size, 0};", "\twriter_t writer = {out, (uint16_t)size, 0};"),
@@ -333,7 +351,7 @@ MUTATIONS = [
     ("settings_standby_max_lower", T, H, "#define SETTINGS_STANDBY_MAX    3600", "#define SETTINGS_STANDBY_MAX    3599"),
     ("settings_standby_max_higher", T, H, "#define SETTINGS_STANDBY_MAX    3600", "#define SETTINGS_STANDBY_MAX    3601"),
     # The room grew from 96 to 128 bytes with the address of the Cerbo: the longest text has 109 bytes now
-    ("settings_json_size_too_small", T, H, "#define SETTINGS_JSON_SIZE      128 ", "#define SETTINGS_JSON_SIZE      109 "),
+    ("settings_json_size_too_small", T, H, "#define SETTINGS_JSON_SIZE      128 ", "#define SETTINGS_JSON_SIZE      126 "),
     ("settings_json_size_changed", T, H, "#define SETTINGS_JSON_SIZE      128 ", "#define SETTINGS_JSON_SIZE      129 "),
     ("settings_tokens_fewer", T, H, "#define SETTINGS_TOKENS         32 ", "#define SETTINGS_TOKENS         31 "),
     ("settings_tokens_more", T, H, "#define SETTINGS_TOKENS         32 ", "#define SETTINGS_TOKENS         33 "),
@@ -420,12 +438,60 @@ MUTATIONS += [
     ("settings_text_address_not_quoted_at_its_end", T, F, "\t\tput(&writer, settings->cerbo);\n\t\tput_char(&writer, '\"');\n", "\t\tput(&writer, settings->cerbo);\n"),
     ("settings_text_address_empty", T, F, "\t\tput(&writer, settings->cerbo);\n", ""),
     ("settings_text_address_before_the_standby_time", T, F,
-     "\tput_name(&writer, STANDBY_S);\n\tput_number(&writer, settings->standby_s);\n\t// Only for a display that has the address of a Cerbo: every other text is the one of the five members\n"
-     "\tif(settings_is_address(settings->cerbo))\n\t{\n\t\tput(&writer, \",\\\"\" CERBO_NAME \"\\\":\\\"\");\n\t\tput(&writer, settings->cerbo);\n\t\tput_char(&writer, '\"');\n\t}\n",
-     "\tif(settings_is_address(settings->cerbo))\n\t{\n\t\tput(&writer, \",\\\"\" CERBO_NAME \"\\\":\\\"\");\n\t\tput(&writer, settings->cerbo);\n\t\tput_char(&writer, '\"');\n\t}\n"
-     "\tput_name(&writer, STANDBY_S);\n\tput_number(&writer, settings->standby_s);\n"),
+     "\tput_name(&writer, STANDBY_S);\n\tput_number(&writer, settings->standby_s);\n\t// Only for a display that has the address of a Cerbo: every other text is the one without this member\n"
+     + ADDRESS_WRITTEN,
+     ADDRESS_WRITTEN + "\tput_name(&writer, STANDBY_S);\n\tput_number(&writer, settings->standby_s);\n"),
 
     # the numbers of the header
     ("settings_address_field_one_byte_short", T, H, "#define SETTINGS_CERBO_SIZE     16 ", "#define SETTINGS_CERBO_SIZE     15 "),
     ("settings_address_field_one_byte_long", T, H, "#define SETTINGS_CERBO_SIZE     16 ", "#define SETTINGS_CERBO_SIZE     17 "),
+    # web_open: the web interface released for good, the default, the last member of every text
+    ("settings_default_web_open_off", T, F, WEB_OPEN_DEFAULT, "\tsettings->web_open = false;\n"),
+    ("settings_default_web_open_not_set", T, F, WEB_OPEN_DEFAULT, ""),
+    ("settings_web_open_unknown", T, F, KNOWN, KNOWN.replace("member < MEMBERS &&", "member < MEMBERS - 1 &&")),
+    ("settings_web_open_ignored", T, F, WEB_OPEN_READ, ""),
+    ("settings_web_open_read_into_reverse", T, F, WEB_OPEN_READ, WEB_OPEN_READ.replace("&changed.web_open", "&changed.reverse")),
+    ("settings_web_open_read_into_night_mode", T, F, WEB_OPEN_READ, WEB_OPEN_READ.replace("&changed.web_open", "&changed.night_mode")),
+    ("settings_web_open_only_opens", T, F, WEB_OPEN_READ,
+     WEB_OPEN_READ.replace(" break;\n", " if(good && !settings->web_open) changed.web_open = true; else changed.web_open = settings->web_open; break;\n")),
+    ("settings_web_open_only_closes", T, F, WEB_OPEN_READ,
+     WEB_OPEN_READ.replace(" break;\n", " if(settings->web_open && value->type == JSON_TRUE) changed.web_open = true; else if(!settings->web_open) changed.web_open = false; break;\n")),
+    ("settings_web_open_of_any_type_taken", T, F, WEB_OPEN_READ,
+     WEB_OPEN_READ.replace("good = read_boolean(value, &changed.web_open);", "good = true; changed.web_open = value->type == JSON_TRUE;")),
+    ("settings_web_open_number_taken", T, F, WEB_OPEN_READ,
+     WEB_OPEN_READ.replace("good = read_boolean(value, &changed.web_open);", "good = value->type == JSON_NUMBER || read_boolean(value, &changed.web_open);")),
+    ("settings_web_open_null_taken", T, F, WEB_OPEN_READ,
+     WEB_OPEN_READ.replace("good = read_boolean(value, &changed.web_open);", "good = value->type == JSON_NULL || read_boolean(value, &changed.web_open);")),
+    ("settings_web_open_text_taken", T, F, WEB_OPEN_READ,
+     WEB_OPEN_READ.replace("good = read_boolean(value, &changed.web_open);", "good = value->type == JSON_STRING || read_boolean(value, &changed.web_open);")),
+    ("settings_web_open_first_one_counts", T, F, WEB_OPEN_READ,
+     WEB_OPEN_READ.replace("good = read_boolean(value, &changed.web_open);",
+                           "{ bool first = changed.web_open; good = read_boolean(value, &changed.web_open); if(i > 0 && key > 5) changed.web_open = first; }")),
+    ("settings_web_open_taken_before_the_text_is_known_good", T, F, WEB_OPEN_READ,
+     WEB_OPEN_READ.replace("&changed.web_open", "&settings->web_open")),
+    ("settings_reverse_sets_web_open", T, F, "\t\t\tcase REVERSE:    good = read_boolean(value, &changed.reverse); break;\n",
+     "\t\t\tcase REVERSE:    good = read_boolean(value, &changed.reverse); changed.web_open = changed.reverse; break;\n"),
+    ("settings_text_web_open_missing", T, F, WEB_OPEN_WRITTEN, ""),
+    ("settings_text_web_open_only_when_it_is_not_the_default", T, F, WEB_OPEN_WRITTEN,
+     "\tif(!settings->web_open)\n\t{\n\t\tput_name(&writer, WEB_OPEN);\n\t\tput_boolean(&writer, settings->web_open);\n\t}\n"),
+    ("settings_text_web_open_only_when_it_is_true", T, F, WEB_OPEN_WRITTEN,
+     "\tif(settings->web_open)\n\t{\n\t\tput_name(&writer, WEB_OPEN);\n\t\tput_boolean(&writer, settings->web_open);\n\t}\n"),
+    ("settings_text_web_open_always_true", T, F, WEB_OPEN_WRITTEN, WEB_OPEN_WRITTEN.replace("settings->web_open", "true")),
+    ("settings_text_web_open_always_false", T, F, WEB_OPEN_WRITTEN, WEB_OPEN_WRITTEN.replace("settings->web_open", "false")),
+    ("settings_text_web_open_inverted", T, F, WEB_OPEN_WRITTEN, WEB_OPEN_WRITTEN.replace("settings->web_open", "!settings->web_open")),
+    ("settings_text_web_open_is_reverse", T, F, WEB_OPEN_WRITTEN, WEB_OPEN_WRITTEN.replace("settings->web_open", "settings->reverse")),
+    ("settings_text_web_open_is_night_mode", T, F, WEB_OPEN_WRITTEN, WEB_OPEN_WRITTEN.replace("settings->web_open", "settings->night_mode")),
+    ("settings_text_web_open_before_the_address", T, F,
+     "\t// Only for a display that has the address of a Cerbo: every other text is the one without this member\n" + ADDRESS_WRITTEN +
+     "\t// In every text, and the last of it\n" + WEB_OPEN_WRITTEN,
+     WEB_OPEN_WRITTEN + ADDRESS_WRITTEN),
+    ("settings_text_web_open_before_the_standby_time", T, F,
+     STANDBY_WRITTEN + ADDRESS_COMMENT + ADDRESS_WRITTEN + "\t// In every text, and the last of it\n" + WEB_OPEN_WRITTEN,
+     WEB_OPEN_WRITTEN + STANDBY_WRITTEN + ADDRESS_WRITTEN),
+    ("settings_text_web_open_twice", T, F, STANDBY_WRITTEN, WEB_OPEN_WRITTEN + STANDBY_WRITTEN),
+    ("settings_text_web_open_under_another_name", T, F, NAMES, NAMES.replace("\"web_open\"", "\"open\"")),
+    ("settings_text_web_open_as_a_number", T, F, WEB_OPEN_WRITTEN, WEB_OPEN_WRITTEN.replace("put_boolean(&writer, settings->web_open)", "put_number(&writer, settings->web_open)")),
+    # every byte of the settings: the gap behind the last member is no room for what lay on the stack
+    ("settings_gap_left_as_it_lay_on_the_stack", T, F, COPIED_IN, MEMBERS_IN),
+    ("settings_gap_zeroed", T, F, COPIED_BACK, "\tmemset(settings, 0, sizeof(*settings));\n" + MEMBERS_BACK),
 ]

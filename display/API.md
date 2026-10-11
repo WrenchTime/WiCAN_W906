@@ -17,15 +17,37 @@ device only and has not run anywhere yet.
 ## Who may do what
 
 - **Reading** is open to everybody in the same WiFi. No answer ever contains a WiFi password.
-- **Changing** needs the *release*: menu "Web-Zugriff" at the display, switched on by hand. It ends 10
-  minutes after it was given or after the last accepted change, at the latest 30 minutes after it was
+- **Changing** needs the *release*, and **by default the display is released for good**: everybody in the
+  same WiFi may change what the release alone allows - views, settings, forgetting a network, a restart,
+  the upload of a firmware - from the start of the display on, with nobody at the display, for as long as
+  it runs and after every restart. (The owner asked for that on 2026-10-10: he had to walk to the display
+  for every change.) `GET /api/info` tells it with `"release":{"open":true,"left_s":0,"lasting":true}`.
+  What that lets a device in the WiFi do without the knob, beyond views and settings: an upload overwrites
+  the previous version in the other slot, and while its blocks arrive its notice lies over every screen
+  and neither knob nor touch act; a restart before "Update in Ordnung?" was confirmed takes an update back.
+  It cannot install what it uploaded, store a network or reset the display: those still ask at the display.
+- **Who wants the display closed** switches "Dauerhaft frei" off at the display (menu "Web-Zugriff"); the
+  setting `web_open` is stored and outlasts restart and update, and a factory reset switches it on again.
+  It does not outlast a firmware from before this switch that stores the settings once (the previous
+  version, after going back to it): that one writes them without the member, and the next firmware with
+  the switch finds none and is released for good. The same holds for a stored text that is refused as a
+  whole: the defaults apply, and by default the display is open.
+  A change then needs the release of ten minutes, given by hand in the same menu (row "Freigabe"). It ends
+  10 minutes after it was given or after the last accepted change, at the latest 30 minutes after it was
   switched on, when it is switched off at the display, and with a restart. Without it: `403`
   `{"error":"locked","hint":"Am Display: Menü > Web-Zugriff freigeben"}`.
   "Accepted" means that the request found the release open: a request that is then refused for another
   reason (a body that cannot be read, `busy`, an unknown network, a refused firmware file) has renewed it as
   well. Only a question to the knob that is not asked (`busy`, `asking`, `hot`, `body`) renews nothing.
-- Three changes also need a **press of the knob**, because they can lock the owner out or replace the
-  firmware: storing a WiFi network, installing firmware, factory reset. The request is answered with
+  The release for good has no end and nothing to renew: no change shortens or lengthens it.
+- **The switch is at the display alone.** `POST /api/settings` cannot change `web_open`, in neither
+  direction (`400 {"error":"body","member":"web_open"}`): a device in the WiFi must not turn a release of
+  ten minutes into one for good - the 30 minutes are there so that somebody has to come back to the
+  display - and must not close the display to the others either.
+- Three changes also need a **press of the knob**, under both releases, because they can lock the owner
+  out or replace the firmware: storing a WiFi network, installing firmware, factory reset. So a device in
+  the WiFi cannot take the display from its owner, however long the web interface is open. The request is
+  answered with
   `202 {"ticket":17,"hint":"Am Display bestätigen: Knopf drücken"}`, the display shows the question for 60
   seconds, and `GET /api/ticket?id=17` tells what became of it. The knob alone answers: a short press
   says yes, a long press no. A touch on the screen does nothing to the question, wherever and whenever
@@ -37,7 +59,8 @@ device only and has not run anywhere yet.
 - The `Host` header has to be an IPv4 address or `wican-display.local` (optionally with a port). This keeps
   out pages whose name was bent to the address of the display.
 - There is no login and no TLS. Whoever is in the WiFi while the release is open can change what the
-  release allows. Keep the release closed when it is not needed.
+  release allows - and by default it is open for good. In a WiFi with devices that are not to be trusted
+  with that, switch "Dauerhaft frei" off at the display and keep the release closed when it is not needed.
 
 ## Requests
 
@@ -56,7 +79,7 @@ device only and has not run anywhere yet.
 | `GET /api/wifi` | stored and visible networks | | |
 | `POST /api/wifi` | store a network | yes | yes |
 | `POST /api/wifi/forget` | remove a stored network | yes | |
-| `POST /api/settings` | brightness, night mode, direction of the knob, standby, address of the Cerbo GX | yes | |
+| `POST /api/settings` | brightness, night mode, direction of the knob, standby, address of the Cerbo GX - not `web_open` | yes | |
 | `POST /api/reboot` | restart | yes | |
 | `POST /api/reset` | factory reset: WiFi, binding and settings; the views stay | yes | yes |
 | `POST /api/ota` | firmware upload | yes | yes, after the upload |
@@ -110,14 +133,14 @@ comes with the hint shown above, the `body` of the settings with the name of the
 | 405 | `method` | known path, other method |
 | 403 | `host` | `Host` missing or not allowed |
 | 403 | `header` | not a `GET` and `X-Display: 1` missing |
-| 403 | `locked` | the request changes something and the release is closed |
+| 403 | `locked` | the request changes something and the release is closed: "Dauerhaft frei" is switched off at the display, and no release of ten minutes is given |
 | 400 | `query` | query string too long (63 bytes), `mode` or `id` missing, doubled or malformed, or a query where none belongs |
 | 411 | `length` | not a `GET` and no `Content-Length` |
 | 413 | `too_large` | body above 16384 bytes (layout), above the app slot (firmware), above 512 bytes (everything else); an empty firmware |
 | 409 | `busy` | upload, restart or factory reset while the display reads or clears the fault memory, shows the clear dialog, or receives a firmware; a question to the knob while a firmware is received; storing or forgetting a WiFi network while the display reads or clears the fault memory |
 | 409 | `asking` | a question to the knob, or the begin of a firmware upload, while a question still waits |
 | 409 | `hot` | a question to the knob, or the begin of a firmware upload, while the heat keeps the backlight of the display off (`heat` is `off` in `GET /api/info`): nobody could see the question |
-| 400 | `body` | the body is not what the request expects; for settings with `"member":"<name>"` (empty if the body is no JSON object) |
+| 400 | `body` | the body is not what the request expects; for settings with `"member":"<name>"` (empty if the body is no JSON object; `web_open` also for a value that is good and is not the one in use) |
 | 404 | `not_found` | `POST /api/wifi/forget` for a network that is not stored |
 | 422 | see below | the firmware file is refused |
 | 500 | `too_large` | the answer has no room in the 20480 bytes the display has for it (a catalogue whose names are control characters), or the views in use have no text |
@@ -144,19 +167,28 @@ adapter is out of reach: its outcome is unknown from then on.
 
 Numbers, texts and their order are fixed; texts are UTF-8.
 
-### `GET /api/info` — `web_info.json`
+### `GET /api/info` — `web_info.json`, `web_info_lasting.json`
+
+The example is a display whose owner switched "Dauerhaft frei" off, 60 s into a release of ten minutes:
 
 ```json
 {"project":"wican-display","version":"0.1.0","git":"display-v0.1.0-3-g1a2b3c4","slot":"ota_0",
  "reset":"poweron","up":4711,"safe_mode":false,"rolled_back":false,"update_pending":true,
  "heap":182340,"heap_min":151200,"psram":7340032,"psram_min":7100416,
  "heap_malloc":149572,"heap_malloc_min":118432,"heap_block":94208,"temp_c":47,"heat":"normal",
- "release":{"open":true,"left_s":540},
+ "release":{"open":true,"left_s":540,"lasting":false},
  "wifi":{"ssid":"Werkstatt","ip":"192.168.1.77","rssi":-61,"ap":false,"ap_ssid":"WiCAN-Display"},
  "wican":{"host":"192.168.1.50","id":"a1b2c3d4e5f6","fw":"4.21","view":"live"},
  "layout":{"name":"W906 OM651 Standard","source":"stored"},
  "http":{"ok":12345,"failed":7,"reconnects":2},
- "settings":{"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60}}
+ "settings":{"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"web_open":false}}
+```
+
+**As it comes** — `web_info_lasting.json` — the display is released for good, and the same answer reads
+
+```json
+{...,"release":{"open":true,"left_s":0,"lasting":true},...,
+ "settings":{"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"web_open":true}}
 ```
 
 - `view`: what the display shows about the adapter: `live`, `no_wifi`, `connecting`, `no_answer`,
@@ -177,7 +209,10 @@ Numbers, texts and their order are fixed; texts are UTF-8.
   piece `malloc()` could get from the internal RAM at that moment. Each lowest stand is the sum of the
   lowest stands of the parts the memory is made of, which need not have been at their lowest together: it
   can be lower than what was free at any one moment, never higher.
-- `release.left_s`: seconds until the release ends, rounded up, 0 if it is closed.
+- `release.open`: a change is accepted. `release.lasting`: the release is the one for good, which has no
+  end - the last member of the object; a firmware from before this member does not name it. `release.left_s`:
+  seconds until the release ends, rounded up; 0 if it is closed, **and 0 while it is lasting**: there is no
+  end to count down to. A page must look at `lasting` before it makes a time of `left_s`.
 - `wican.fw` is empty until the adapter has answered. The password of the own access point is not part of
   the answer; it is shown on the screen of the display (menu "Web-Zugriff").
 
@@ -189,10 +224,10 @@ answer has one object more, behind `wican`, and the address in its settings:
 {...,"wican":{"host":"192.168.1.50","id":"a1b2c3d4e5f6","fw":"4.21","view":"live"},
  "cerbo":{"host":"192.168.88.2","view":"live","values":41,"ok":12345,"refused":7,"connects":31,"boots":1,"lag_ms":120},
  "layout":{...},"http":{...},
- "settings":{"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"cerbo":"192.168.88.2"}}
+ "settings":{"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"cerbo":"192.168.88.2","web_open":false}}
 ```
 
-**A display without that address answers the text further up, byte for byte**: no object `cerbo`, no member
+**A display without that address answers `web_info.json`, byte for byte**: no object `cerbo`, no member
 `cerbo` in the settings. A page has to cope with both.
 
 - `cerbo.host`: the address that is set. The port is 1883.
@@ -317,13 +352,23 @@ the order is the priority.
 ### `POST /api/settings` — `settings_*.json`
 
 ```json
-{"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60}
+{"brightness":80,"night":25,"night_mode":false,"reverse":false,"standby_s":60,"web_open":true}
 ```
 
 Every member is optional. `brightness` and `night` 5 to 100 percent, `standby_s` 0 to 3600 (0 = never):
 after that long without input the backlight goes dark while there is nothing to show. `reverse` turns the
 direction of the knob for pages and rows; the brightness screen does not follow it - there, clockwise is
 always brighter. Answer: the settings now in use.
+
+`web_open` — `settings_defaults.json`, `settings_web_closed.json` — tells whether the web interface is
+released for good ("Dauerhaft frei" at the display). It is the last member of every answer and of the
+settings in `GET /api/info`, `true` on a display as it comes. **A request cannot change it**: the value in
+use, or no `web_open` at all, is taken as every other text - a page may send back what it got -, the other
+value is answered `400 {"error":"body","member":"web_open"}` (`app_web_member_web_open.json`) and nothing
+of the request is taken, its other members neither. A `web_open` that is no boolean is answered the same
+way, as every member of the wrong type. Where another member of the text is refused, that member is named.
+A firmware from before this member stored and answered the five members alone: a display that is updated
+finds no `web_open` in what is stored and so is released for good from its first start on.
 
 `cerbo` — `settings_cerbo.json` — is the address of the MQTT broker of a Victron Cerbo GX, the second source
 of values: `{"cerbo":"192.168.88.2"}`. An IPv4 address in dotted form and nothing else - four numbers from 0
@@ -333,11 +378,11 @@ switches the source off. No name (it would have to be looked up), no port (it is
 the old one are gone with the answer. It needs the release and no press of the knob: a wrong address locks
 nobody out.
 
-The answer, and the settings in `GET /api/info`, name `cerbo` **only while an address is set**, behind the
-five members. Without one they are the text above, byte for byte - a display nobody gave an address stores
-and answers what it always did. As every member, `cerbo` keeps its value when a request does not name it. A
-firmware from before this member ignores it and stores its own five: after an update that was taken back the
-address has to be entered again. The factory reset removes it.
+The answer, and the settings in `GET /api/info`, name `cerbo` **only while an address is set**, behind
+`standby_s` and before `web_open`. Without one they are the text above, byte for byte - a display nobody
+gave an address stores and answers no member for it. As every member, `cerbo` keeps its value when a
+request does not name it. A firmware from before this member ignores it and stores its own five: after an
+update that was taken back the address has to be entered again. The factory reset removes it.
 
 ### Tickets — `web_ticket.json`, `web_asked.json`
 
@@ -345,8 +390,10 @@ address has to be entered again. The factory reset removes it.
 {"ticket":17,"state":"waiting","left_s":42}
 ```
 
-`state`: `waiting`, `confirmed`, `refused` (at the display by a long press, or the release ended, or the
-heat switched the screen off while the question waited), `expired` (nobody pressed the knob), `unknown`.
+`state`: `waiting`, `confirmed`, `refused` (at the display by a long press, or the release ended or was
+switched off - "Dauerhaft frei" as well -, or the heat switched the screen off while the question waited),
+`expired` (nobody pressed the knob), `unknown`. `left_s` are the 60 seconds of the question, cut short only
+by the end of a release of ten minutes; the release for good cuts nothing short.
 The numbers start again at 1 after a restart of the display. After a confirmed firmware installation or
 factory reset the display restarts and cannot answer any more.
 A press in the first 1.5 seconds after the question does not count, and a touch on the screen never does.
@@ -364,12 +411,13 @@ first start it asks "Update in Ordnung?" on the screen, and the knob alone says 
 does not work is not kept because its touch screen does); without an answer within 5 minutes, or after any
 restart before that, the version before it runs again.
 
-An upload begins only while the release lasts another 5 minutes. The upload itself renews it, so `403
-locked` is answered only in the last 5 minutes of the 30 after which somebody has to give the release
-again at the display. While a question waits no upload begins (`409 asking`), while one runs no second
-one (`409 busy`), and none while the running firmware still waits for "Update in Ordnung?" (`409 busy`:
-the other slot holds the version the display goes back to if nobody confirms), and none while the heat
-keeps the screen dark (`409 hot`: nobody could see the question at its end). If the release has ended
+An upload begins only while the release lasts another 5 minutes - the release for good always does. The
+upload itself renews a release of ten minutes, so `403 locked` is answered only in the last 5 minutes of
+the 30 after which somebody has to give that release again at the display. While a question waits no
+upload begins (`409 asking`), while one runs no second one (`409 busy`), and none while the running
+firmware still waits for "Update in Ordnung?" (`409 busy`: the other slot holds the version the display
+goes back to if nobody confirms), and none while the heat keeps the screen dark (`409 hot`: nobody could
+see the question at its end). If the release has ended
 when the upload is complete, the answer is `403 locked` and the file is not asked for; if the heat has
 switched the screen off by then, it is `409 hot`, and the file is not asked for either. From the begin of
 an upload on the display no longer offers "Vorherige Version": the other slot is being overwritten. It

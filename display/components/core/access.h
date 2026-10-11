@@ -16,22 +16,33 @@
 /*
  * Who may change something on the display through its web interface.
  *
- * Reading is open to everybody in the same WiFi. A change needs the release given at the device (menu
- * "Web-Zugriff freigeben"): somebody has to sit in front of the display. The release ends ACCESS_OPEN_MS
- * after it was given or after the last accepted change, whichever is later, when it is switched off at
- * the device, and with a restart (this struct is never stored). It never lasts longer than
- * ACCESS_OPEN_MAX_MS from the moment it was switched on at the device, whatever was changed since: a
- * device in the WiFi that writes again and again does not keep it open, somebody has to come back to the
- * display.
+ * Reading is open to everybody in the same WiFi. A change needs a release, and there are two of them.
  *
- * Three changes need more than the release, because they can lock the owner out or replace the firmware:
- * new WiFi data, installing firmware, and the factory reset. The browser asks, the display shows what is
- * asked, and only a press of the knob within ACCESS_CONFIRM_MS carries it out. A press in the first
- * ACCESS_ASK_SHOWN_MS does not count: it was meant for the screen the question appeared over. The browser
- * gets a ticket number and asks what became of it.
+ * The timed release is given at the device (menu "Web-Zugriff", row "Freigabe"): somebody has to sit in
+ * front of the display. It ends ACCESS_OPEN_MS after it was given or after the last accepted change,
+ * whichever is later, when it is switched off at the device, and with a restart (this struct is never
+ * stored). It never lasts longer than ACCESS_OPEN_MAX_MS from the moment it was switched on at the device,
+ * whatever was changed since: a device in the WiFi that writes again and again does not keep it open,
+ * somebody has to come back to the display.
+ *
+ * The lasting release (access_open_lasting()) has no end. The owner asked for it on 2026-10-10: he had to
+ * walk to the display for every change. The caller gives it at the start while the setting says so, which
+ * it does by default (settings.h: web_open; app.h), so that everybody in the WiFi may change what the
+ * release alone allows. Neither ACCESS_OPEN_MS nor ACCESS_OPEN_MAX_MS apply to it, a change neither
+ * shortens nor renews it, and it ends with access_close() alone - and with a restart, behind which the
+ * caller gives it again or not.
+ *
+ * Three changes need more than a release, whichever of the two it is, because they can lock the owner out
+ * or replace the firmware: new WiFi data, installing firmware, and the factory reset. The browser asks, the
+ * display shows what is asked, and only a press of the knob within ACCESS_CONFIRM_MS carries it out. A
+ * press in the first ACCESS_ASK_SHOWN_MS does not count: it was meant for the screen the question appeared
+ * over. The browser gets a ticket number and asks what became of it. So a device in the WiFi cannot take
+ * the display from its owner under a release that lasts either.
  *
  * Time is milliseconds since boot. A time before one passed earlier counts as no time passed. Nothing lasts
- * beyond the largest time, 2^64-1: what would end later ends there.
+ * beyond the largest time, 2^64-1: what would end later ends there. The lasting release is what has no end
+ * at all, so none that could lie there: it holds at the largest time as at every other one. A question
+ * asked under it ends there like every question.
  */
 
 #define ACCESS_OPEN_MS      (600u * 1000u)
@@ -53,6 +64,7 @@ typedef enum
 	ACCESS_TICKET_WAITING,
 	ACCESS_TICKET_CONFIRMED,
 	ACCESS_TICKET_REFUSED,      // refused at the device, or the release was switched off or ended while it waited
+	                            // (a lasting release does not end: under it only the switch-off does that)
 	ACCESS_TICKET_EXPIRED,      // nobody pressed the knob in time
 } access_ticket_t;
 
@@ -70,7 +82,10 @@ typedef enum
 typedef struct
 {
 	bool open;
-	uint64_t open_until_ms;     // the release ends here if no change renews it
+	bool lasting;               // the release is the lasting one: it has no end. Never set while `open` is not.
+	                            // The two times below are not looked at while it is set, and not written: they
+	                            // are what the last timed release left
+	uint64_t open_until_ms;     // the timed release ends here if no change renews it
 	uint64_t open_max_ms;       // and here whatever is changed: ACCESS_OPEN_MAX_MS after it was switched on.
 	                            // No call puts open_until_ms behind it
 	uint64_t clock_ms;          // the latest time seen: it follows the calls but never runs backwards. Every
@@ -88,27 +103,43 @@ typedef struct
 // Closed, nothing asked, no ticket
 void access_init(access_t *access);
 
-// The release was switched on at the device (again: both times start anew, the ACCESS_OPEN_MS and the
-// ACCESS_OPEN_MAX_MS)
+// The timed release was switched on at the device (again: both times start anew, the ACCESS_OPEN_MS and the
+// ACCESS_OPEN_MAX_MS). Under a lasting release it does nothing but take its time over: what has no end is
+// not given one by a switch that gives less - the lasting release ends with access_close() alone.
 void access_open(access_t *access, uint64_t now_ms);
 
-// The release was switched off at the device. A question that waits is refused.
+// The lasting release is given: open from now on, without an end. A timed release that holds becomes the
+// lasting one - its two ends are gone, also the latest one; one that has ended by now_ms has ended first,
+// with what that does to a question. A question that waits goes on waiting, with its ticket and its own
+// time, which is from now on the only end it has. Given again while it lasts: nothing but the time is
+// taken over.
+void access_open_lasting(access_t *access, uint64_t now_ms);
+
+// The release was switched off at the device, the timed one or the lasting one: closed, and what comes
+// next is given anew. A question that waits is refused.
 void access_close(access_t *access, uint64_t now_ms);
 
-// true while the release holds. It ends by itself at open_until_ms; a question that waits then expires
-// with it (ACCESS_TICKET_REFUSED: the release it was asked under is gone). A question whose own time is
-// over by then does not wait any more, also if both run out in the same millisecond: it stays
-// ACCESS_TICKET_EXPIRED. With the times above a question still waits when the release ends only if it was
-// asked less than ACCESS_CONFIRM_MS before the latest end of the release (ACCESS_OPEN_MAX_MS after it was
-// switched on): an accepted question renews the release, and only that end is not moved by it. The rule is
-// kept for other times.
+// true while the release holds. The lasting one holds at every time. The timed one ends by itself at
+// open_until_ms; a question that waits then expires with it (ACCESS_TICKET_REFUSED: the release it was
+// asked under is gone). A question whose own time is over by then does not wait any more, also if both run
+// out in the same millisecond: it stays ACCESS_TICKET_EXPIRED. With the times above a question still waits
+// when the release ends only if it was asked less than ACCESS_CONFIRM_MS before the latest end of the
+// release (ACCESS_OPEN_MAX_MS after it was switched on): an accepted question renews the release, and only
+// that end is not moved by it. The rule is kept for other times.
 bool access_is_open(const access_t *access, uint64_t now_ms);
 
-// Seconds until the release ends, rounded up, 0 if it is closed
+// true while the release is the lasting one: given by access_open_lasting() and not closed since. No time
+// is asked for: no time ends it. false for a timed release and for a closed one.
+bool access_is_lasting(const access_t *access);
+
+// Seconds until the release ends, rounded up, 0 if it is closed. UINT32_MAX for the lasting release, which
+// has no end: so every "is enough time left" of a caller holds under it without a rule of its own
+// (app_web.h asks that before an upload). Who shows the number asks access_is_lasting() first.
 uint32_t access_seconds_left(const access_t *access, uint64_t now_ms);
 
-// A change arrives. Returns true if it is allowed; the release then lasts ACCESS_OPEN_MS from now, but not
-// beyond its latest end, ACCESS_OPEN_MAX_MS after it was switched on at the device: no change moves that.
+// A change arrives. Returns true if it is allowed; the timed release then lasts ACCESS_OPEN_MS from now, but
+// not beyond its latest end, ACCESS_OPEN_MAX_MS after it was switched on at the device: no change moves that.
+// The lasting release is neither renewed nor shortened: true, and nothing changes but the time seen.
 // Returns false if the release is closed or has ended: nothing changes then, only the time is taken over
 // and what ran out by then is noted in the fields.
 bool access_write(access_t *access, uint64_t now_ms);
@@ -116,7 +147,8 @@ bool access_write(access_t *access, uint64_t now_ms);
 // A change that needs the knob arrives. Returns the ticket number (1 or more, counting up, never 0; after
 // 2^32-1 comes 1), or 0 if it is refused: the release is closed or has ended, `ask` is ACCESS_ASK_NONE or
 // no value of the enum, or another question still waits (the first one stays); access_may_ask() tells
-// which. An accepted question counts as a change: the release is renewed as by access_write().
+// which. An accepted question counts as a change: the release is renewed as by access_write() - the timed
+// one; the lasting one is left as it is.
 uint32_t access_ask(access_t *access, access_ask_t ask, uint64_t now_ms);
 
 // What access_ask() would do with this question at this time, without changing anything, not even the time
@@ -133,7 +165,8 @@ access_refusal_t access_may_ask(const access_t *access, access_ask_t ask, uint64
 access_ask_t access_asking(const access_t *access, uint64_t now_ms);
 
 // Seconds left to press the knob, rounded up, 0 if nothing waits. They end with the time of the question
-// or with the release, whichever ends first.
+// or with the release, whichever ends first. Under the lasting release the time of the question is the
+// only end there is.
 uint32_t access_ask_seconds_left(const access_t *access, uint64_t now_ms);
 
 // The knob was pressed while the question was shown. Returns the question that is confirmed by it, exactly

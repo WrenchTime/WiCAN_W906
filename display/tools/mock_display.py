@@ -24,7 +24,7 @@ In a test:
 
   display = mock_display.Display(clock=mock_display.SimulatedClock())
   status, kind, body, more = display.handle("GET", "/api/info", {"host": "192.168.1.77"}, lambda count: b"")
-  display.release(True); display.clock.advance(601)      no real waiting
+  display.lasting(False); display.release(True); display.clock.advance(601)      no real waiting
   server = mock_display.Server(display).start(); ...; server.close()
 
 Taken from the sources, read and written a second time here:
@@ -40,6 +40,12 @@ Taken from the sources, read and written a second time here:
   - the release and the question to the knob (access.c): 10 minutes after the last accepted change,
     30 minutes at most, 60 seconds for the knob, a press in the first 1.5 seconds does not count,
     known are the last ticket and the one before it
+  - the release for good (access.c, settings.c, app.c, app_web.c): the setting "web_open", on by
+    default as on the device - the mock starts with its web interface released, and so it does after
+    every restart and after a factory reset. It has no end, a change neither renews nor shortens it,
+    /api/info tells it with "lasting" and 0 seconds left, and the switch of the ten minutes does
+    nothing while it lasts. lasting() is the row "Dauerhaft frei" of the display; POST /api/settings
+    cannot turn it: a web_open that is another value than the one in use is answered 400
   - the check of a layout (layout.c): the same checks in the same order with the same paths and
     texts, so that the first problem named is the one the display would name
   - the check of the first bytes of a firmware (ota_check.c), the settings (settings.c), the WiFi
@@ -140,6 +146,7 @@ OUT_SIZE = 20480
 UPLOAD_LEFT_S = 300
 # access.h
 OPEN_MS = 600 * 1000
+ENDLESS_S = 2 ** 32 - 1         # what access.c answers for the seconds a release for good has left
 OPEN_MAX_MS = 1800 * 1000
 CONFIRM_MS = 60 * 1000
 ASK_SHOWN_MS = 1500
@@ -613,6 +620,7 @@ class Access:
 
     def __init__(self):
         self.open = False
+        self.lasting = False            # the release is the one for good: it has no end
         self.open_until = 0
         self.open_max = 0
         self.clock = 0
@@ -630,6 +638,11 @@ class Access:
 
     def _settle(self, now):
         self.clock = max(self.clock, now)
+        if self.lasting:
+            # No end, so none a question could end with: it has its own time alone
+            if self.clock >= self.asking_until:
+                self._end("expired")
+            return
         # A question whose own time was over when the release ended has expired; one that still waited
         # then was refused
         if self.clock >= self.asking_until and self.asking_until <= self.open_until:
@@ -639,18 +652,29 @@ class Access:
             self.open = False
 
     def _renew(self):
-        self.open_until = min(self.clock + OPEN_MS, self.open_max)
+        if not self.lasting:
+            self.open_until = min(self.clock + OPEN_MS, self.open_max)
 
     def switch_on(self, now):
         self._settle(now)
+        # Ten minutes are nothing to add to a release that has no end
+        if self.lasting:
+            return
         self.open = True
         self.open_max = self.clock + OPEN_MAX_MS
         self._renew()
+
+    def switch_on_for_good(self, now):
+        """access_open_lasting(): a question that waits goes on waiting"""
+        self._settle(now)
+        self.open = True
+        self.lasting = True
 
     def switch_off(self, now):
         self._settle(now)
         self._end("refused")
         self.open = False
+        self.lasting = False
 
     def is_open(self, now):
         self._settle(now)
@@ -658,6 +682,9 @@ class Access:
 
     def seconds_left(self, now):
         self._settle(now)
+        # No end: more seconds than anybody asks for (access_seconds_left())
+        if self.lasting:
+            return ENDLESS_S
         return (self.open_until - self.clock + 999) // 1000 if self.open else 0
 
     def write(self, now):
@@ -686,7 +713,7 @@ class Access:
 
     def ask_seconds_left(self, now):
         self._settle(now)
-        end = min(self.asking_until, self.open_until)
+        end = self.asking_until if self.lasting else min(self.asking_until, self.open_until)
         return (end - self.clock + 999) // 1000 if self.asking is not None else 0
 
     def confirm(self, now):
@@ -709,6 +736,10 @@ class Access:
         if ticket == (2 ** 32 - 1 if self.ticket == 1 else self.ticket - 1):
             return self.previous_end
         return "unknown"
+
+
+# settings_defaults(): the web interface is released for good unless that is switched off at the display
+DEFAULT_SETTINGS = {"brightness": 80, "night": 25, "night_mode": False, "reverse": False, "standby_s": 60, "cerbo": "", "web_open": True}
 
 
 def fixture(name):
@@ -751,7 +782,7 @@ class Display:
         # ssid, rssi, secure
         self.seen = [["Werkstatt", -52, True], ["WiCAN_a1b2c3d4e5f6", -40, True], ["Freifunk", -88, False],
                      [HOSTILE_NETWORKS[0], -70, False], [HOSTILE_NETWORKS[1], -75, True], ["Café ☕ 2,4 GHz", -81, True]]
-        self.settings = {"brightness": 80, "night": 25, "night_mode": False, "reverse": False, "standby_s": 60, "cerbo": ""}
+        self.settings = dict(DEFAULT_SETTINGS)
         # The Cerbo: "sends", "silent" or "unreachable"; the last bundle the display took and the end of
         # its last session (or the moment it was given the address), while the Cerbo does not send
         self.cerbo = "sends"
@@ -784,6 +815,7 @@ class Display:
         self.set_lists("read")
 
         self.access = Access()
+        self._release_as_set()
         self.reading = False            # stands for a read, a clear and the clear dialog
         self.hot = False                # the heat keeps the backlight off: nobody can see a question
         self.uploading = False
@@ -798,9 +830,30 @@ class Display:
         """Milliseconds since the start of the display"""
         return self.clock.now_ms() - self.boot_ms
 
+    def _release_as_set(self):
+        """app_init(): the release for good from the start if the setting says so"""
+        if self.settings["web_open"]:
+            self.access.switch_on_for_good(self.now())
+
     def release(self, on):
+        """The row "Freigabe": the release of ten minutes. It switches nothing while the release is the
+        one for good (nav.h)."""
+        if self.access.lasting:
+            return
         if on:
             self.access.switch_on(self.now())
+        else:
+            self.access.switch_off(self.now())
+            self.asked_network = None
+
+    def lasting(self, on):
+        """The row "Dauerhaft frei": the setting web_open, changed at the display alone. Switched off the
+        web interface is closed at once, and a question that waits is refused."""
+        if on == self.settings["web_open"]:
+            return
+        self.settings["web_open"] = on
+        if on:
+            self.access.switch_on_for_good(self.now())
         else:
             self.access.switch_off(self.now())
             self.asked_network = None
@@ -821,7 +874,7 @@ class Display:
         elif confirmed == "reset":
             self.profiles = []
             self.current = ""
-            self.settings = {"brightness": 80, "night": 25, "night_mode": False, "reverse": False, "standby_s": 60, "cerbo": ""}
+            self.settings = dict(DEFAULT_SETTINGS)
             self.wican_id = ""
             self.wican_host = ""
             self.restart("sw")
@@ -848,9 +901,9 @@ class Display:
             self.asked_network = None
 
     def restart(self, reason="sw"):
-        """The display starts anew: the release is closed, the tickets count from 1 again, a preview is
-        over, and a firmware nobody confirmed is taken back by the boot loader. For RESTART_MS it
-        answers nothing."""
+        """The display starts anew: a release of ten minutes is gone - the one for good is given again if
+        the setting says so -, the tickets count from 1 again, a preview is over, and a firmware nobody
+        confirmed is taken back by the boot loader. For RESTART_MS it answers nothing."""
         if self.update_pending:
             self.version, self.git, self.slot = self.previous
             self.update_pending = False
@@ -859,6 +912,7 @@ class Display:
         self.boot_ms = self.down_until_ms
         self.reset_reason = reason
         self.access = Access()
+        self._release_as_set()
         self.uploading = False
         self.reading = False
         self.asked_network = None
@@ -986,7 +1040,7 @@ class Display:
                 "\"safe_mode\":false,\"rolled_back\":%s,\"update_pending\":%s,"
                 "\"heap\":%d,\"heap_min\":%d,\"psram\":%d,\"psram_min\":%d,"
                 "\"heap_malloc\":%d,\"heap_malloc_min\":%d,\"heap_block\":%d,\"temp_c\":%d,\"heat\":\"%s\","
-                "\"release\":{\"open\":%s,\"left_s\":%d},"
+                "\"release\":{\"open\":%s,\"left_s\":%d,\"lasting\":%s},"
                 "\"wifi\":{\"ssid\":%s,\"ip\":%s,\"rssi\":%d,\"ap\":%s,\"ap_ssid\":%s},"
                 "\"wican\":{\"host\":%s,\"id\":%s,\"fw\":%s,\"view\":%s},%s"
                 "\"layout\":{\"name\":%s,\"source\":%s},"
@@ -995,7 +1049,9 @@ class Display:
                    boolean(self.rolled_back), boolean(self.update_pending),
                    self.numbers["heap"], self.numbers["heap_min"], self.numbers["psram"], self.numbers["psram_min"],
                    self.numbers["heap_malloc"], self.numbers["heap_malloc_min"], self.numbers["heap_block"],
-                   self.numbers["temp_c"], "off" if self.hot else "normal", boolean(release), self.access.seconds_left(now),
+                   self.numbers["temp_c"], "off" if self.hot else "normal", boolean(release),
+                   # A release for good has no seconds left to tell (web_info_json())
+                   0 if self.access.lasting else self.access.seconds_left(now), boolean(self.access.lasting),
                    quote(self.current), quote(self.ip if self.current else ""), self.rssi if self.current else 0,
                    boolean(not self.profiles), quote(self.ap_ssid),
                    quote(self.wican_host), quote(self.wican_id), quote(self.wican_fw), quote(self.view()), self.cerbo_json(now),
@@ -1014,11 +1070,13 @@ class Display:
                    1 if self.cerbo_numbers["ok"] > 0 else 0))
 
     def settings_json(self):
-        """settings_to_json(): the address of the Cerbo behind the five members, and only while it is set"""
-        return ("{\"brightness\":%d,\"night\":%d,\"night_mode\":%s,\"reverse\":%s,\"standby_s\":%d%s}"
+        """settings_to_json(): the address of the Cerbo behind the five members, and only while it is set;
+        web_open in every text, as its last member"""
+        return ("{\"brightness\":%d,\"night\":%d,\"night_mode\":%s,\"reverse\":%s,\"standby_s\":%d%s,\"web_open\":%s}"
                 % (self.settings["brightness"], self.settings["night"], boolean(self.settings["night_mode"]),
                    boolean(self.settings["reverse"]), self.settings["standby_s"],
-                   ",\"cerbo\":%s" % quote(self.settings["cerbo"]) if self.settings["cerbo"] != "" else ""))
+                   ",\"cerbo\":%s" % quote(self.settings["cerbo"]) if self.settings["cerbo"] != "" else "",
+                   boolean(self.settings["web_open"])))
 
     def view(self):
         return "live" if self.adapter else "no_answer"
@@ -1326,13 +1384,18 @@ class Display:
         for name, value in root:
             if name in ranges and is_integer(value, *ranges[name]):
                 changed[name] = int(value.literal)
-            elif name in ("night_mode", "reverse") and isinstance(value, bool):
+            elif name in ("night_mode", "reverse", "web_open") and isinstance(value, bool):
                 changed[name] = value
             # Empty, or an IPv4 address in dotted form and nothing else
             elif name == "cerbo" and isinstance(value, str) and (value == "" or ADDRESS.fullmatch(value) is not None):
                 changed[name] = value
             elif name in changed:
                 return 400, "{\"error\":\"body\",\"member\":\"%s\"}" % name
+        # Whether the web interface is released for good is set at the display alone (app_web_settings()): a
+        # text that is good in every member and would turn that switch is refused for it, and nothing of it
+        # is taken
+        if changed["web_open"] != self.settings["web_open"]:
+            return 400, "{\"error\":\"body\",\"member\":\"web_open\"}"
         if changed["cerbo"] != self.settings["cerbo"]:
             # Another address, or none: what another broker sent says nothing about this one. The counters stay.
             self._cerbo_settle(now if now is not None else self.now())
@@ -1406,6 +1469,7 @@ class Display:
                 return 403, JSON, error_body("header").encode("utf-8")
             actions = {
                 "/mock/release": lambda: self.release(query == "on"),
+                "/mock/lasting": lambda: self.lasting(query == "on"),
                 "/mock/press": self.press,
                 "/mock/refuse": self.press_long,
                 "/mock/busy": lambda: setattr(self, "reading", query == "on"),
@@ -1435,7 +1499,7 @@ class Display:
                     None: ""}[self.access.waiting(now)]
         return json.dumps({
             "down": self.clock.now_ms() < self.down_until_ms, "away": self.away,
-            "release": self.access.seconds_left(now), "question": question,
+            "release": self.access.seconds_left(now), "lasting": self.access.lasting, "question": question,
             "detail": self.asked_detail if question else "", "left": self.access.ask_seconds_left(now),
             "busy": self.reading, "hot": self.hot, "uploading": self.uploading, "adapter": self.adapter,
             "cerbo": self.cerbo if self.settings["cerbo"] != "" else "",
@@ -1504,6 +1568,7 @@ iframe { flex: 1; border: 0; width: 100%; }
 <script>
 "use strict";
 const BUTTONS = [
+	["Dauerhaft frei: ja", "lasting?on"], ["nein", "lasting?off"],
 	["Freigabe ein", "release?on"], ["Freigabe aus", "release?off"],
 	["Knopf drücken", "press"], ["Knopf lang (nein)", "refuse"],
 	["+1 min", "skip?60"], ["+9 min", "skip?540"],
@@ -1520,7 +1585,7 @@ function show(state)
 {
 	const parts = [];
 	parts.push(state.away ? "Display nicht erreichbar" : state.down ? "Display startet neu …" : "Display " + state.version);
-	parts.push(state.release > 0 ? "Web-Zugriff frei, noch " + state.release + " s" : "Web-Zugriff gesperrt");
+	parts.push(state.lasting ? "Web-Zugriff dauerhaft frei" : state.release > 0 ? "Web-Zugriff frei, noch " + state.release + " s" : "Web-Zugriff gesperrt");
 	if(state.question) parts.push("Bildschirm: " + state.question + " " + state.detail + " · Drücken = ja · lang = nein (" + state.left + " s)");
 	if(state.update_pending) parts.push("Bildschirm: Update in Ordnung? Knopf drücken");
 	if(state.busy) parts.push("liest den Fehlerspeicher");

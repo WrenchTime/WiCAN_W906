@@ -17,6 +17,18 @@ SOURCE_WORD = "(unsigned)app->source < sizeof(sources) / sizeof(sources[0]) ? so
 SHOWN_SCREEN = "\tif(app->nav.screen != NAV_PAGES || nav_overlay(world) != NAV_OVER_NONE) return true;"
 SHOWN_VIEW = "\tif(view == CONN_VIEW_LIVE || view == CONN_VIEW_SCAN) return true;"
 SHOWN_VALUE = "\t\tif(values_age(&values->items[i], now) != VALUE_AGE_GONE) return true;"
+# The release of the web interface: the one for good at the start while the setting says so, flipped with the
+# setting at the display, and not ended by the switch of the ten minutes
+START_OPEN = "\tif(app->settings.web_open) access_open_lasting(&app->access, now_ms);\n"
+RELEASE_OFF = "\t\t\tif(access_is_lasting(&app->access)) break;\n\t\t\taccess_close(&app->access, now);\n"
+SWITCH = "\t\t\tapp->settings.web_open = !app->settings.web_open;\n"
+SWITCH_ON = "\t\t\t\taccess_open_lasting(&app->access, now);\n"
+SWITCH_OFF = "\t\t\t\taccess_close(&app->access, now);\n\t\t\t\tdrop_asked(app);\n"
+SWITCH_STORED = "\t\t\t}\n\t\t\tapp->events |= APP_EVENT_STORE_SETTINGS;\n\t\t\tbreak;"
+WORLD_LASTING = "\tworld->release_lasting = access_is_lasting(&app->access);\n"
+NIGHT = "\t\t\tapp->settings.night_mode = !app->settings.night_mode;\n"
+REVERSE = "\t\t\tapp->settings.reverse = !app->settings.reverse;\n"
+DEFAULTS = "\tsettings_defaults(&app->settings);\n"
 PREVIEW = "\t\tif(settings.night_mode) settings.night = (uint8_t)app->brightness_preview;\n\t\telse settings.brightness = (uint8_t)app->brightness_preview;"
 LIGHT = "\treturn guard_brightness(app->heat, settings_backlight(&settings, showing(app, world, now), passed(now, app->last_input_ms)));"
 DARK = "\tbool dark = backlight(app, world, now) == 0;"
@@ -649,7 +661,7 @@ MUTATIONS = [
     ("app_do_release_not_given", T, F, "\t\t\taccess_open(&app->access, now);\n", ""),
     ("app_do_release_given_at_time_zero", T, F, "\t\t\taccess_open(&app->access, now);", "\t\t\taccess_open(&app->access, 0);"),
     ("app_do_release_given_again_drops_the_question", T, F, "\t\t\taccess_open(&app->access, now);\n", "\t\t\taccess_open(&app->access, now);\n\t\t\tdrop_asked(app);\n"),
-    ("app_do_release_not_taken_back", T, F, "\t\t\taccess_close(&app->access, now);\n", ""),
+    ("app_do_release_not_taken_back", T, F, RELEASE_OFF, RELEASE_OFF.replace("\t\t\taccess_close(&app->access, now);\n", "")),
     ("app_do_release_taken_back_keeps_what_was_asked", T, F, "\t\t\taccess_close(&app->access, now);\n\t\t\tdrop_asked(app);\n", "\t\t\taccess_close(&app->access, now);\n"),
     ("app_do_confirmed_network_not_stored", T, F, "\t\t\t\t\tstore_wifi(app, now);\n", "\t\t\t\t\tif(app->safe_mode) store_wifi(app, now);\n"),
     ("app_do_confirmed_firmware_not_installed", T, F, "\t\t\t\t\tapp->events |= APP_EVENT_INSTALL_FIRMWARE;\n", ""),
@@ -924,5 +936,55 @@ MUTATIONS += [
      "\tapp_world(app, &world, now);\n\tfollow_request(app, &world, now);\n",
      "\tapp_world(app, &world, now);\n\tif(app->cerbo.has_bundle && now - app->cerbo.bundle_ms < 1000) app->last_input_ms = now;\n\tfollow_request(app, &world, now);\n"),
     ("app_net_stores_when_the_source_delivers", T, F, CERBO_NET, CERBO_NET + "\n\tif(app->cerbo.bundles == 1) app->events |= APP_EVENT_STORE_SETTINGS;"),
+    # the web interface released for good: from the start while the setting says so, in safe mode as well
+    ("app_start_not_released_for_good", T, F, START_OPEN, ""),
+    ("app_start_released_whatever_is_stored", T, F, START_OPEN, "\taccess_open_lasting(&app->access, now_ms);\n"),
+    ("app_start_released_only_while_the_switch_is_off", T, F, START_OPEN, START_OPEN.replace("app->settings.web_open", "!app->settings.web_open")),
+    ("app_start_released_only_outside_safe_mode", T, F, START_OPEN, START_OPEN.replace("app->settings.web_open", "app->settings.web_open && !app->safe_mode")),
+    ("app_start_released_only_in_safe_mode", T, F, START_OPEN, START_OPEN.replace("app->settings.web_open", "app->settings.web_open && app->safe_mode")),
+    ("app_start_released_only_with_settings_stored", T, F, START_OPEN, START_OPEN.replace("app->settings.web_open", "app->settings.web_open && boot->settings_json != NULL")),
+    ("app_start_released_only_with_a_network_stored", T, F, START_OPEN, START_OPEN.replace("app->settings.web_open", "app->settings.web_open && app->profile_count > 0")),
+    ("app_start_released_only_without_an_update_to_confirm", T, F, START_OPEN, START_OPEN.replace("app->settings.web_open", "app->settings.web_open && !app->update_pending")),
+    ("app_start_gives_ten_minutes", T, F, START_OPEN, START_OPEN.replace("access_open_lasting", "access_open")),
+    ("app_start_switch_off_by_default", T, F, DEFAULTS, DEFAULTS + "\tapp->settings.web_open = false;\n"),
+    ("app_start_stored_switch_not_looked_at", T, F, START_OPEN, "\tapp->settings.web_open = true;\n" + START_OPEN),
+    ("app_start_stored_switch_read_as_off", T, F, START_OPEN, "\tif(boot->settings_json != NULL) app->settings.web_open = false;\n" + START_OPEN),
+    # the switch of the ten minutes does not end the release for good
+    ("app_do_release_for_good_taken_back_as_one_of_ten_minutes", T, F, RELEASE_OFF, "\t\t\taccess_close(&app->access, now);\n"),
+    ("app_do_release_taken_back_only_while_it_is_for_good", T, F, RELEASE_OFF, RELEASE_OFF.replace("access_is_lasting(&app->access)", "!access_is_lasting(&app->access)")),
+    ("app_do_release_for_good_kept_only_for_a_question", T, F,
+     RELEASE_OFF, RELEASE_OFF.replace("access_is_lasting(&app->access)", "access_is_lasting(&app->access) && access_asking(&app->access, now) != ACCESS_ASK_NONE")),
+    # the switch Dauerhaft frei
+    ("app_do_switch_not_turned", T, F, SWITCH, ""),
+    ("app_do_switch_only_turned_on", T, F, SWITCH, "\t\t\tapp->settings.web_open = true;\n"),
+    ("app_do_switch_only_turned_off", T, F, SWITCH, "\t\t\tapp->settings.web_open = false;\n"),
+    ("app_do_switch_turned_twice", T, F, SWITCH, SWITCH + "\t\t\tif(app->safe_mode) app->settings.web_open = !app->settings.web_open;\n"),
+    ("app_do_switch_on_gives_no_release", T, F, SWITCH_ON, ""),
+    ("app_do_switch_on_gives_ten_minutes", T, F, SWITCH_ON, SWITCH_ON.replace("access_open_lasting", "access_open")),
+    ("app_do_switch_on_drops_what_was_asked", T, F, SWITCH_ON, SWITCH_ON + "\t\t\t\tdrop_asked(app);\n"),
+    ("app_do_switch_on_refuses_the_question", T, F, SWITCH_ON, SWITCH_ON + "\t\t\t\taccess_refuse(&app->access, now);\n"),
+    ("app_do_switch_on_only_over_a_closed_release", T, F, SWITCH_ON, "\t\t\t\tif(!access_is_open(&app->access, now)) access_open_lasting(&app->access, now);\n"),
+    ("app_do_switch_off_leaves_it_open", T, F, SWITCH_OFF, "\t\t\t\tdrop_asked(app);\n"),
+    ("app_do_switch_off_only_refuses_the_question", T, F, SWITCH_OFF, SWITCH_OFF.replace("access_close", "access_refuse")),
+    ("app_do_switch_off_keeps_what_was_asked", T, F, SWITCH_OFF, "\t\t\t\taccess_close(&app->access, now);\n"),
+    ("app_do_switch_off_leaves_ten_minutes", T, F, SWITCH_OFF, SWITCH_OFF + "\t\t\t\taccess_open(&app->access, now);\n"),
+    ("app_do_switch_reversed", T, F, SWITCH + "\t\t\tif(app->settings.web_open)\n", SWITCH + "\t\t\tif(!app->settings.web_open)\n"),
+    ("app_do_switch_not_to_be_stored", T, F, SWITCH_STORED, "\t\t\t}\n\t\t\tbreak;"),
+    ("app_do_switch_stored_only_when_turned_on", T, F, SWITCH_STORED, "\t\t\t}\n\t\t\tif(app->settings.web_open) app->events |= APP_EVENT_STORE_SETTINGS;\n\t\t\tbreak;"),
+    ("app_do_switch_stored_only_when_turned_off", T, F, SWITCH_STORED, "\t\t\t}\n\t\t\tif(!app->settings.web_open) app->events |= APP_EVENT_STORE_SETTINGS;\n\t\t\tbreak;"),
+    ("app_do_switch_restarts", T, F, SWITCH_STORED, "\t\t\t}\n\t\t\tapp->events |= APP_EVENT_STORE_SETTINGS | APP_EVENT_REBOOT;\n\t\t\tbreak;"),
+    ("app_do_switch_turns_the_direction_too", T, F, SWITCH, SWITCH + "\t\t\tapp->settings.reverse = !app->settings.reverse;\n"),
+    ("app_do_night_mode_turns_the_switch", T, F, NIGHT, NIGHT + "\t\t\tapp->settings.web_open = !app->settings.web_open;\n"),
+    ("app_do_direction_turns_the_switch", T, F, REVERSE, REVERSE + "\t\t\tapp->settings.web_open = !app->settings.web_open;\n"),
+    ("app_do_brightness_stored_opens_the_web", T, F, "\t\t\tapp->brightness_preview = -1;\n\t\t\tapp->events |= APP_EVENT_STORE_SETTINGS;\n",
+     "\t\t\tapp->brightness_preview = -1;\n\t\t\tapp->settings.web_open = true;\n\t\t\tapp->events |= APP_EVENT_STORE_SETTINGS;\n"),
+    # nav is told whether the release is the one for good
+    ("app_world_release_never_for_good", T, F, WORLD_LASTING, ""),
+    ("app_world_release_always_for_good", T, F, WORLD_LASTING, "\tworld->release_lasting = true;\n"),
+    ("app_world_release_for_good_reversed", T, F, WORLD_LASTING, "\tworld->release_lasting = !access_is_lasting(&app->access);\n"),
+    ("app_world_release_for_good_while_it_is_open", T, F, WORLD_LASTING, "\tworld->release_lasting = world->release_open;\n"),
+    ("app_world_release_for_good_only_outside_safe_mode", T, F, WORLD_LASTING, "\tworld->release_lasting = access_is_lasting(&app->access) && !app->safe_mode;\n"),
+    ("app_world_release_for_good_only_without_a_question", T, F, WORLD_LASTING, "\tworld->release_lasting = access_is_lasting(&app->access) && world->asking == ACCESS_ASK_NONE;\n"),
+
 ]
 

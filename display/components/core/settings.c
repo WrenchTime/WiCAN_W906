@@ -10,7 +10,7 @@
 #include <string.h>
 #include "settings.h"
 
-// The members in the order of the stored text
+// The members every text has, in the order of the stored text
 enum
 {
 	BRIGHTNESS,
@@ -18,13 +18,14 @@ enum
 	NIGHT_MODE,
 	REVERSE,
 	STANDBY_S,
+	WEB_OPEN,
 	MEMBERS,
 };
 
-static const char *const names[MEMBERS] = {"brightness", "night", "night_mode", "reverse", "standby_s"};
+static const char *const names[MEMBERS] = {"brightness", "night", "night_mode", "reverse", "standby_s", "web_open"};
 
-// The sixth member is none of them: it is written only for a display that has a second source, behind the
-// five that every text has
+// One member is none of them: it is written only for a display that has a second source, behind standby_s
+// and before web_open, which stays the last member of every text
 #define CERBO_NAME  "cerbo"
 
 typedef struct
@@ -43,6 +44,8 @@ void settings_defaults(settings_t *settings)
 	settings->standby_s = 60;
 	// The whole field: the settings are compared and stored as bytes
 	memset(settings->cerbo, 0, sizeof(settings->cerbo));
+	// Open by default, as the owner asked for on 2026-10-10: a stored text from before has no such member
+	settings->web_open = true;
 }
 
 bool settings_is_address(const char *text)
@@ -143,10 +146,14 @@ bool settings_from_json(settings_t *settings, const char *json, size_t length, c
                         json_token_t *work, int work_count)
 {
 	// Nothing may change before the whole text is known to be good
-	settings_t changed = *settings;
+	settings_t changed;
 	int count = json_parse(json, length, work, work_count);
 	int key = 1;
 
+	// As bytes, here and back at the end: the struct has a gap behind its last member, and what lies there in
+	// the settings of the caller is to lie there afterwards. Copied member by member the gap of this local
+	// would hold what happened to lie on the stack, and carry it into the display (app.h).
+	memcpy(&changed, settings, sizeof(changed));
 	write_bad(bad, bad_size, "");
 	if(count < 0 || work[0].type != JSON_OBJECT) return false;
 
@@ -158,7 +165,7 @@ bool settings_from_json(settings_t *settings, const char *json, size_t length, c
 
 		key += 1 + value->skip;
 
-		// The member that is not one of the five (CERBO_NAME); `key` is behind its value by now
+		// The member that is not one of `names` (CERBO_NAME); `key` is behind its value by now
 		if(member == MEMBERS && json_text_is(json, value - 1, CERBO_NAME))
 		{
 			if(read_address(json, value, changed.cerbo)) continue;
@@ -174,6 +181,7 @@ bool settings_from_json(settings_t *settings, const char *json, size_t length, c
 			case NIGHT_MODE: good = read_boolean(value, &changed.night_mode); break;
 			case REVERSE:    good = read_boolean(value, &changed.reverse); break;
 			case STANDBY_S:  good = read_standby(json, value, &changed.standby_s); break;
+			case WEB_OPEN:   good = read_boolean(value, &changed.web_open); break;
 			default:         continue;
 		}
 		if(!good)
@@ -183,7 +191,7 @@ bool settings_from_json(settings_t *settings, const char *json, size_t length, c
 		}
 	}
 
-	*settings = changed;
+	memcpy(settings, &changed, sizeof(changed));
 	return true;
 }
 
@@ -241,13 +249,16 @@ int settings_to_json(const settings_t *settings, char *out, size_t size)
 	put_boolean(&writer, settings->reverse);
 	put_name(&writer, STANDBY_S);
 	put_number(&writer, settings->standby_s);
-	// Only for a display that has the address of a Cerbo: every other text is the one of the five members
+	// Only for a display that has the address of a Cerbo: every other text is the one without this member
 	if(settings_is_address(settings->cerbo))
 	{
 		put(&writer, ",\"" CERBO_NAME "\":\"");
 		put(&writer, settings->cerbo);
 		put_char(&writer, '"');
 	}
+	// In every text, and the last of it
+	put_name(&writer, WEB_OPEN);
+	put_boolean(&writer, settings->web_open);
 	put_char(&writer, '}');
 
 	if(size == 0) return -1;

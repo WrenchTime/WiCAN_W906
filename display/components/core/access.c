@@ -37,6 +37,14 @@ static void settle(access_t *access, uint64_t now_ms)
 {
 	if(now_ms > access->clock_ms) access->clock_ms = now_ms;
 
+	// The lasting release has no end, the largest time included: the two times of a timed one, which may
+	// still stand in the fields, are not even looked at. A question under it has its own time alone.
+	if(access->lasting)
+	{
+		if(access->clock_ms >= access->asking_until_ms) end_question(access, ACCESS_TICKET_EXPIRED);
+		return;
+	}
+
 	// A question whose own time was over when the release ended has expired, however late that is noticed.
 	// One that still waited then was refused, also if its own time is over by now as well.
 	if(access->clock_ms >= access->asking_until_ms && access->asking_until_ms <= access->open_until_ms)
@@ -60,10 +68,12 @@ static access_t at(const access_t *access, uint64_t now_ms)
 }
 
 // The release is given or renewed now. No renewal reaches beyond the latest end: who writes again and again
-// must not keep open what was released by somebody at the device.
+// must not keep open what was released by somebody at the device. The lasting release has no end to move.
 static void renew(access_t *access)
 {
 	uint64_t end = after(access->clock_ms, ACCESS_OPEN_MS);
+
+	if(access->lasting) return;
 
 	access->open_until_ms = end < access->open_max_ms ? end : access->open_max_ms;
 }
@@ -86,9 +96,20 @@ void access_init(access_t *access)
 void access_open(access_t *access, uint64_t now_ms)
 {
 	settle(access, now_ms);
+	// The switch that gives ten minutes takes nothing from a release that has no end
+	if(access->lasting) return;
+
 	access->open = true;
 	access->open_max_ms = after(access->clock_ms, ACCESS_OPEN_MAX_MS);
 	renew(access);
+}
+
+void access_open_lasting(access_t *access, uint64_t now_ms)
+{
+	// A timed release that has ended by now has ended before this one begins, and its question with it
+	settle(access, now_ms);
+	access->open = true;
+	access->lasting = true;
 }
 
 void access_close(access_t *access, uint64_t now_ms)
@@ -96,6 +117,7 @@ void access_close(access_t *access, uint64_t now_ms)
 	settle(access, now_ms);
 	end_question(access, ACCESS_TICKET_REFUSED);
 	access->open = false;
+	access->lasting = false;
 }
 
 bool access_is_open(const access_t *access, uint64_t now_ms)
@@ -103,10 +125,17 @@ bool access_is_open(const access_t *access, uint64_t now_ms)
 	return at(access, now_ms).open;
 }
 
+bool access_is_lasting(const access_t *access)
+{
+	return access->lasting;
+}
+
 uint32_t access_seconds_left(const access_t *access, uint64_t now_ms)
 {
 	access_t state = at(access, now_ms);
 
+	// No end: more seconds than any caller asks for
+	if(state.lasting) return UINT32_MAX;
 	return state.open ? seconds_rounded_up(state.open_until_ms - state.clock_ms) : 0;
 }
 
@@ -153,6 +182,8 @@ uint32_t access_ask_seconds_left(const access_t *access, uint64_t now_ms)
 	// The release may end before the time of the question is over, and the question with it
 	uint64_t end = state.asking_until_ms < state.open_until_ms ? state.asking_until_ms : state.open_until_ms;
 
+	// The lasting release does not end: the time of the question is the only one there is
+	if(state.lasting) end = state.asking_until_ms;
 	return state.asking != ACCESS_ASK_NONE ? seconds_rounded_up(end - state.clock_ms) : 0;
 }
 

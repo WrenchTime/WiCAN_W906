@@ -20,7 +20,9 @@ KINDS = "\tif(ask != ACCESS_ASK_WIFI && ask != ACCESS_ASK_FIRMWARE && ask != ACC
 WAITING = "\tif(access->asking != ACCESS_ASK_NONE) return ACCESS_ASKING;\n"
 INIT = "\tmemset(access, 0, sizeof(*access));"
 LATEST = "\taccess->open_max_ms = after(access->clock_ms, ACCESS_OPEN_MAX_MS);\n"
-OPEN = "\tsettle(access, now_ms);\n\taccess->open = true;\n" + LATEST + "\trenew(access);\n}"
+LASTING_STAYS = "\tif(access->lasting) return;\n\n\taccess->open = true;\n"
+OPEN = ("\tsettle(access, now_ms);\n\t// The switch that gives ten minutes takes nothing from a release that has no end\n" + LASTING_STAYS +
+        LATEST + "\trenew(access);\n}")
 CLOSE = "\tsettle(access, now_ms);\n\tend_question(access, ACCESS_TICKET_REFUSED);\n\taccess->open = false;\n"
 IS_OPEN = "\treturn at(access, now_ms).open;"
 SECONDS_LEFT = "\treturn state.open ? seconds_rounded_up(state.open_until_ms - state.clock_ms) : 0;"
@@ -56,6 +58,22 @@ NEARER = "if(access->open_max_ms > after(access->clock_ms, ACCESS_OPEN_MS)) acce
 MAX_H = "#define ACCESS_OPEN_MAX_MS  (1800u * 1000u)"
 SHOWN_H = "#define ACCESS_ASK_SHOWN_MS 1500u"
 
+# The lasting release
+LASTING_EXPIRES = "\t\tif(access->clock_ms >= access->asking_until_ms) end_question(access, ACCESS_TICKET_EXPIRED);\n"
+LASTING_SETTLE = "\tif(access->lasting)\n\t{\n" + LASTING_EXPIRES + "\t\treturn;\n\t}\n"
+LASTING_NOT_RENEWED = "\tif(access->lasting) return;\n\n\taccess->open_until_ms ="
+OPEN_LASTING = "\tsettle(access, now_ms);\n\taccess->open = true;\n\taccess->lasting = true;\n"
+CLOSE_LASTING = "\taccess->open = false;\n\taccess->lasting = false;\n"
+IS_LASTING = "\treturn access->lasting;"
+SECONDS_LASTING = "\tif(state.lasting) return UINT32_MAX;\n"
+ASK_END_LASTING = "\tif(state.lasting) end = state.asking_until_ms;\n"
+# The lasting release ends as a switch-off ends it
+LASTING_ENDS = "end_question(access, ACCESS_TICKET_REFUSED);\n\t\t\taccess->open = false;\n\t\t\taccess->lasting = false;\n"
+
+
+def lasting_ends_when(condition):
+    """The lasting release ends by itself under `condition`, looked at with every call."""
+    return LASTING_SETTLE.replace("\t\treturn;\n", "\t\tif(" + condition + ")\n\t\t{\n\t\t\t" + LASTING_ENDS + "\t\t}\n\t\treturn;\n")
 
 def too_soon(then):
     """The press that comes too soon does `then` before it returns."""
@@ -582,4 +600,60 @@ MUTATIONS = [
      EXPIRES.replace("\t\tend_question(access, ACCESS_TICKET_EXPIRED);\n",
                      "\t\tif(access->asking != ACCESS_ASK_NONE && access->open_max_ms > after(access->asking_until_ms, ACCESS_OPEN_MS)) "
                      "access->open_max_ms = after(access->asking_until_ms, ACCESS_OPEN_MS);\n\t\tend_question(access, ACCESS_TICKET_EXPIRED);\n")),
+    # the lasting release: given without anybody at the device, it has no end
+    ("access_lasting_release_ends_as_a_timed_one", T, F, LASTING_SETTLE, ""),
+    ("access_lasting_release_ends_after_600000_ms", T, F, LASTING_SETTLE,
+     LASTING_SETTLE.replace("\tif(access->lasting)\n", "\tif(access->lasting && access->clock_ms < 601000)\n")),
+    ("access_lasting_release_ends_where_the_timed_one_before_it_ended", T, F, LASTING_SETTLE,
+     lasting_ends_when("access->open_until_ms != 0 && access->clock_ms >= access->open_until_ms")),
+    ("access_lasting_release_ends_at_the_latest_end_of_the_timed_one_before_it", T, F, LASTING_SETTLE,
+     lasting_ends_when("access->open_max_ms != 0 && access->clock_ms >= access->open_max_ms")),
+    ("access_lasting_release_ends_at_the_largest_time", T, F, LASTING_SETTLE, lasting_ends_when("access->clock_ms == UINT64_MAX")),
+    ("access_lasting_release_ends_after_a_day", T, F, LASTING_SETTLE, lasting_ends_when("access->clock_ms >= 86400000")),
+    ("access_lasting_release_ends_with_a_question_that_expires", T, F, LASTING_SETTLE,
+     lasting_ends_when("access->ticket_end == ACCESS_TICKET_EXPIRED")),
+    ("access_question_under_lasting_never_expires", T, F, LASTING_EXPIRES, ""),
+    ("access_question_under_lasting_expires_1_ms_late", T, F, LASTING_EXPIRES, LASTING_EXPIRES.replace(">=", ">")),
+    ("access_question_under_lasting_expires_1_ms_early", T, F, LASTING_EXPIRES,
+     LASTING_EXPIRES.replace("access->clock_ms >= access->asking_until_ms", "access->clock_ms >= access->asking_until_ms - 1")),
+    ("access_question_under_lasting_ends_as_refused", T, F, LASTING_EXPIRES, LASTING_EXPIRES.replace("ACCESS_TICKET_EXPIRED", "ACCESS_TICKET_REFUSED")),
+    ("access_question_under_lasting_ends_where_the_timed_release_ended", T, F, LASTING_EXPIRES,
+     LASTING_EXPIRES.replace("if(access->clock_ms >= access->asking_until_ms)",
+                             "if(access->clock_ms >= access->asking_until_ms || (access->open_until_ms != 0 && access->clock_ms >= access->open_until_ms))")),
+    ("access_change_under_lasting_writes_an_end", T, F, LASTING_NOT_RENEWED, "\taccess->open_until_ms ="),
+    ("access_timed_release_given_under_lasting_writes_its_latest_end", T, F, LASTING_STAYS, "\taccess->open = true;\n"),
+    ("access_timed_release_given_under_lasting_takes_its_place", T, F, LASTING_STAYS, "\taccess->lasting = false;\n\n\taccess->open = true;\n"),
+    ("access_timed_release_given_under_lasting_ignores_its_time", T, F, OPEN,
+     OPEN.replace("\tsettle(access, now_ms);\n", "\tif(!access->lasting) settle(access, now_ms);\n")),
+    ("access_timed_release_given_under_lasting_refuses_the_question", T, F, LASTING_STAYS,
+     "\tif(access->lasting)\n\t{\n\t\tend_question(access, ACCESS_TICKET_REFUSED);\n\t\treturn;\n\t}\n\n\taccess->open = true;\n"),
+    ("access_open_lasting_ignores_its_time", T, F, OPEN_LASTING, OPEN_LASTING.replace("\tsettle(access, now_ms);\n", "\t(void)now_ms;\n")),
+    ("access_open_lasting_does_not_open", T, F, OPEN_LASTING, OPEN_LASTING.replace("\taccess->open = true;\n", "")),
+    ("access_open_lasting_gives_a_timed_release", T, F, OPEN_LASTING,
+     OPEN_LASTING.replace("\taccess->lasting = true;\n", "\taccess->open_max_ms = after(access->clock_ms, ACCESS_OPEN_MAX_MS);\n\t" + RENEW + "\n")),
+    ("access_open_lasting_does_not_say_lasting", T, F, OPEN_LASTING, OPEN_LASTING.replace("\taccess->lasting = true;\n", "")),
+    ("access_open_lasting_only_over_a_closed_release", T, F, OPEN_LASTING,
+     OPEN_LASTING.replace("\taccess->lasting = true;\n", "\tif(access->asking == ACCESS_ASK_NONE) access->lasting = true;\n")),
+    ("access_open_lasting_refuses_the_question", T, F, OPEN_LASTING, OPEN_LASTING + "\tend_question(access, ACCESS_TICKET_REFUSED);\n"),
+    ("access_open_lasting_gives_the_question_its_time_anew", T, F, OPEN_LASTING,
+     OPEN_LASTING + "\tif(access->asking != ACCESS_ASK_NONE) access->asking_until_ms = after(access->clock_ms, ACCESS_CONFIRM_MS);\n"),
+    ("access_open_lasting_lets_the_knob_count_at_once", T, F, OPEN_LASTING, OPEN_LASTING + "\taccess->asking_since_ms = 0;\n"),
+    ("access_open_lasting_saves_the_question_of_a_release_that_ended", T, F, OPEN_LASTING,
+     "\taccess->open = true;\n\taccess->lasting = true;\n\tsettle(access, now_ms);\n"),
+    ("access_open_lasting_writes_ends", T, F, OPEN_LASTING,
+     OPEN_LASTING + "\taccess->open_until_ms = UINT64_MAX;\n\taccess->open_max_ms = UINT64_MAX;\n"),
+    ("access_close_leaves_it_lasting", T, F, CLOSE_LASTING, "\taccess->open = false;\n"),
+    ("access_close_does_not_close_a_lasting_release", T, F, CLOSE_LASTING, "\tif(!access->lasting) access->open = false;\n"),
+    ("access_close_keeps_the_question_under_lasting", T, F, CLOSE,
+     CLOSE.replace("\tend_question(access, ACCESS_TICKET_REFUSED);\n", "\tif(!access->lasting) end_question(access, ACCESS_TICKET_REFUSED);\n")),
+    ("access_init_keeps_it_lasting", T, F, INIT,
+     "\tbool open = access->open;\n\tbool lasting = access->lasting;\n\n" + INIT + "\n\taccess->open = open;\n\taccess->lasting = lasting;"),
+    ("access_is_lasting_tells_open", T, F, IS_LASTING, "\treturn access->open;"),
+    ("access_is_lasting_never", T, F, IS_LASTING, "\treturn access->lasting && !access->open;"),
+    ("access_seconds_left_of_lasting_from_its_fields", T, F, SECONDS_LASTING, ""),
+    ("access_seconds_left_of_lasting_are_600", T, F, SECONDS_LASTING, SECONDS_LASTING.replace("UINT32_MAX", "ACCESS_OPEN_MS / 1000")),
+    ("access_seconds_left_of_lasting_are_one_less", T, F, SECONDS_LASTING, SECONDS_LASTING.replace("UINT32_MAX", "UINT32_MAX - 1")),
+    ("access_seconds_left_of_every_release_are_endless", T, F, SECONDS_LASTING, SECONDS_LASTING.replace("state.lasting", "state.open")),
+    ("access_ask_seconds_left_under_lasting_end_with_the_timed_release", T, F, ASK_END_LASTING, ""),
+    ("access_ask_seconds_left_of_every_question_are_its_own", T, F, ASK_END_LASTING, ASK_END_LASTING.replace("if(state.lasting) ", "")),
 ]

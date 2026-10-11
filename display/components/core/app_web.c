@@ -162,6 +162,7 @@ static int info_json(const app_t *app, char *out, uint64_t now)
 	info.heat = text_heat_word(app->heat);
 	info.release_open = access_is_open(&app->access, now);
 	info.release_left_s = access_seconds_left(&app->access, now);
+	info.release_lasting = access_is_lasting(&app->access);
 	info.ssid = app->ssid;
 	info.ip = app->ip;
 	info.rssi = app->rssi;
@@ -351,15 +352,31 @@ int app_web_settings(app_t *app, const char *body, size_t body_length, char *out
 {
 	// The longest name of a member is "brightness"
 	char member[16];
+	// What the text makes of the settings, looked at before it is taken
+	settings_t wanted;
+	bool taken;
 
 	if(!access_write(&app->access, advance(app, now_ms))) return refuse(403, "locked", out, length);
 
 	body = body_of(body, &body_length);
-	if(!settings_from_json(&app->settings, body, body_length, member, sizeof(member), app->work, app->work_count))
+	// As bytes, there and back: the struct has a gap, and nothing that only lay on the stack is to get into
+	// the app with it (app.h)
+	memcpy(&wanted, &app->settings, sizeof(wanted));
+	taken = settings_from_json(&wanted, body, body_length, member, sizeof(member), app->work, app->work_count);
+	// Whether the web interface is released for good is set at the display alone. A text that would change it
+	// is refused for that member, whatever else it sets: a device in the WiFi could otherwise make of a
+	// release of ten minutes one for good.
+	if(taken && wanted.web_open != app->settings.web_open)
+	{
+		taken = false;
+		strcpy(member, "web_open");
+	}
+	if(!taken)
 	{
 		// The name is one of settings.h, never text out of the request: it needs no escape
 		return answer(400, snprintf(out, APP_WEB_OUT_SIZE, "{\"error\":\"body\",\"member\":\"%s\"}", member), out, length);
 	}
+	memcpy(&app->settings, &wanted, sizeof(wanted));
 
 	knob_set_reverse(&app->knob, app->settings.reverse);
 	// The second source follows its address at once: another one, or none, forgets the values of the old one.

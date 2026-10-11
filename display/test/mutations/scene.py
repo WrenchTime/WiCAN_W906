@@ -141,6 +141,14 @@ LEVEL_TITLE = "\tset_title(scene, input->world->night_mode ? \"Helligkeit (Nacht
 LEVEL_BIG = "\tappend_percent(scene->big, sizeof(scene->big), input->nav->value);"
 RELEASE = "\tuint32_t seconds = access_seconds_left(input->access, input->now_ms);"
 RELEASE_ON = "\tif(seconds > 0)\n"
+# The release that lasts: the two rows tell it by access.h, and the row of the ten minutes shows no time
+LASTING = "\tbool lasting = access_is_lasting(input->access);"
+WEB_LASTING = "\t\t{\"Dauerhaft frei\", lasting ? \"ja\" : \"nein\"},\n"
+WEB_RELEASE = "\t\t{\"Freigabe\", release},\n"
+TIMED = "\t\trelease[0] = '\\0';\n\t\tappend(release, sizeof(release), \"an – noch \");\n"
+FOR_GOOD = "\tif(lasting)\n\t{\n\t\trelease[0] = '\\0';\n\t\tappend(release, sizeof(release), \"dauerhaft\");\n\t}\n"
+# The rule that keeps the row of the ten minutes from switching a release that lasts
+NAV_WEB_RELEASE = "\t\t\tif(!world->release_lasting) return world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON;\n\t\t\tbreak;"
 HAS_ADDRESS = "\tbool has_address = input->address != NULL && input->address[0] != '\\0';"
 ADDRESS = "\tif(has_address) add_text(scene, input->address);\n"
 NO_NETWORK = "\telse if(!input->ap_on) add_text(scene, \"Kein WLAN\");\n"
@@ -1102,7 +1110,45 @@ MUTATIONS = [
      "\t\tappend_time(release, sizeof(release), seconds);", "\t\tappend_time(release, sizeof(release), seconds > 600 ? 600 : seconds);"),
     ("scene_web_release_without_time", T, F, "\t\tappend_time(release, sizeof(release), seconds);\n", ""),
     ("scene_web_release_time_in_seconds", T, F, "\t\tappend_time(release, sizeof(release), seconds);", "\t\tappend_number(release, sizeof(release), seconds);"),
-    ("scene_web_release_off_kept_before_on", T, F, "\t\trelease[0] = '\\0';\n", ""),
+    ("scene_web_release_off_kept_before_on", T, F, TIMED, TIMED.replace("\t\trelease[0] = '\\0';\n", "")),
+    # the release that lasts
+    text("scene_text_web_lasting", "{\"Dauerhaft frei\", lasting", "{\"Dauerhaft\", lasting"),
+    text("scene_text_web_lasting_yes", "lasting ? \"ja\" : \"nein\"", "lasting ? \"an\" : \"nein\""),
+    text("scene_text_web_lasting_no", "lasting ? \"ja\" : \"nein\"", "lasting ? \"ja\" : \"aus\""),
+    text("scene_text_web_for_good", "append(release, sizeof(release), \"dauerhaft\");", "append(release, sizeof(release), \"immer\");"),
+    ("scene_web_lasting_swapped", T, F, WEB_LASTING, WEB_LASTING.replace("\"ja\" : \"nein\"", "\"nein\" : \"ja\"")),
+    ("scene_web_lasting_always_no", T, F, WEB_LASTING, "\t\t{\"Dauerhaft frei\", \"nein\"},\n"),
+    ("scene_web_lasting_without_detail", T, F, WEB_LASTING, "\t\t{\"Dauerhaft frei\", \"\"},\n"),
+    ("scene_web_lasting_row_missing", T, F, WEB_LASTING, ""),
+    ("scene_web_lasting_row_behind_the_release", T, F, WEB_LASTING + WEB_RELEASE, WEB_RELEASE + WEB_LASTING),
+    ("scene_web_lasting_row_last", T, F, WEB_LASTING + WEB_RELEASE + "\t\t{\"Zurück\", \"\"},\n", WEB_RELEASE + "\t\t{\"Zurück\", \"\"},\n" + WEB_LASTING),
+    ("scene_web_lasting_by_the_world", T, F, LASTING, "\tbool lasting = input->world->release_lasting;"),
+    ("scene_web_lasting_by_an_open_release", T, F, LASTING, "\tbool lasting = access_is_open(input->access, input->now_ms);"),
+    ("scene_web_lasting_by_the_open_world", T, F, LASTING, "\tbool lasting = input->world->release_open;"),
+    ("scene_web_lasting_only_where_the_world_agrees", T, F, LASTING, "\tbool lasting = access_is_lasting(input->access) && input->world->release_lasting;"),
+    ("scene_web_lasting_also_where_the_world_says_so", T, F, LASTING, "\tbool lasting = access_is_lasting(input->access) || input->world->release_lasting;"),
+    ("scene_web_lasting_never", T, F, LASTING, "\tbool lasting = false;"),
+    ("scene_web_lasting_always", T, F, LASTING, "\tbool lasting = true;"),
+    ("scene_web_for_good_shows_a_time", T, F, FOR_GOOD, ""),
+    ("scene_web_for_good_behind_the_time", T, F, FOR_GOOD, FOR_GOOD.replace("\t\trelease[0] = '\\0';\n", "")),
+    ("scene_web_for_good_also_for_ten_minutes", T, F, FOR_GOOD, FOR_GOOD.replace("\tif(lasting)\n", "\tif(lasting || seconds > 0)\n")),
+    ("scene_web_for_good_for_every_release", T, F, FOR_GOOD, FOR_GOOD.replace("\tif(lasting)\n", "\tif(seconds > 0)\n")),
+    ("scene_web_for_good_only_by_the_world", T, F, FOR_GOOD, FOR_GOOD.replace("\tif(lasting)\n", "\tif(input->world->release_lasting)\n")),
+    ("scene_web_for_good_only_after_ten_minutes", T, F, FOR_GOOD, FOR_GOOD.replace("\tif(lasting)\n", "\tif(lasting && input->access->clock_ms >= ACCESS_OPEN_MS)\n")),
+    ("scene_web_for_good_only_on_the_row", T, F, FOR_GOOD, FOR_GOOD.replace("\tif(lasting)\n", "\tif(lasting && input->nav->row == 1)\n")),
+    # the row of the ten minutes is enabled by what a press on it does (nav.h: not while the world says the release
+    # lasts), and the scene keeps no rule of its own - not by access.h, not by whether the release is open
+    instead("scene_web_release_enabled_while_it_lasts", "NAV_WEB", 1, "true"),
+    instead("scene_web_release_disabled_by_access", "NAV_WEB", 1, "!access_is_lasting(input->access)"),
+    instead("scene_web_release_disabled_only_where_access_agrees", "NAV_WEB", 1, "!(input->world->release_lasting && access_is_lasting(input->access))"),
+    instead("scene_web_release_disabled_only_while_open", "NAV_WEB", 1, "!(input->world->release_lasting && input->world->release_open)"),
+    instead("scene_web_release_disabled_while_open", "NAV_WEB", 1, "!input->world->release_open"),
+    instead("scene_web_lasting_row_disabled_while_it_lasts", "NAV_WEB", 0, "!input->world->release_lasting"),
+    ("scene_web_lasting_disables_every_row", T, F,
+     ENABLED, "\t\t\trow->enabled = !(nav->screen == NAV_WEB && input->world->release_lasting) && " + ASKED + ";"),
+    # the same rule where it lives, removed in nav.c
+    ("scene_web_release_acts_while_it_lasts", T, N, NAV_WEB_RELEASE, "\t\t\treturn world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON;"),
+    ("scene_web_lasting_row_does_nothing", T, N, "\t\tcase WEB_LASTING:\n\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;\n", ""),
     ("scene_web_address_null_is_read", T, F, HAS_ADDRESS, "\tbool has_address = input->address[0] != '\\0';"),
     ("scene_web_address_empty_is_shown", T, F, HAS_ADDRESS, "\tbool has_address = input->address != NULL;"),
     ("scene_web_address_never_shown", T, F, HAS_ADDRESS, "\tbool has_address = false;"),
@@ -1126,7 +1172,7 @@ MUTATIONS = [
      NO_NETWORK, "\telse add_text(scene, input->ap_on ? \"\" : \"Kein WLAN\");\n"),
     ("scene_web_no_network_also_with_address", T, F,
      NO_NETWORK, "\tif(!input->ap_on) add_text(scene, \"Kein WLAN\");\n"),
-    ("scene_web_no_network_only_with_focus_on_release", T, F, NO_NETWORK, "\telse if(!input->ap_on && input->nav->row == 0) add_text(scene, \"Kein WLAN\");\n"),
+    ("scene_web_no_network_only_with_focus_on_release", T, F, NO_NETWORK, "\telse if(!input->ap_on && input->nav->row == 1) add_text(scene, \"Kein WLAN\");\n"),
     ("scene_web_no_network_above_access_point_in_safe_mode", T, F, NO_NETWORK, "\telse if(!input->ap_on || input->safe_mode) add_text(scene, \"Kein WLAN\");\n"),
     ("scene_web_no_network_only_while_released", T, F, NO_NETWORK, "\telse if(!input->ap_on && seconds > 0) add_text(scene, \"Kein WLAN\");\n"),
     ("scene_web_no_network_behind_access_point", T, F,

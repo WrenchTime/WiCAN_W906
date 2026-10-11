@@ -34,6 +34,13 @@
  * app_web_get() and the check of a layout change nothing, not even that (the check reads the layout into the
  * room app->checked, which is nobody's between two calls).
  *
+ * The release (access.h, app.h): by default the web interface is released for good - everybody in the WiFi
+ * may change what the release alone allows, from the start of the display on and for as long as it runs.
+ * The owner can switch that off at the display (settings.web_open, the row "Dauerhaft frei"): a change then
+ * needs the release of ten minutes, given at the knob. Nothing below asks which of the two it is, but for
+ * two things: GET /api/info tells it, and POST /api/settings cannot change it. What needs the knob needs it
+ * under both.
+ *
  * Changes: a route that changes something calls access_write() first and answers 403 "locked" without it
  * (the release may have ended since web_route() looked). The release is renewed by that call, also when the
  * request is refused afterwards for another reason. A route that needs the knob asks access_may_ask()
@@ -90,6 +97,8 @@ void app_web_request(const app_t *app, web_request_t *request, uint64_t now_ms);
  *                       text_view_word(), the source "stored", "builtin", "generated" or "preview" (empty for
  *                       a value that is none of app_layout_source_t), settings settings_to_json(). The
  *                       password of the own access point is not part of it.
+ *                       The release: open access_is_open(), left_s access_seconds_left(), lasting
+ *                       access_is_lasting() - web_json.h writes left_s as 0 for a release that lasts.
  *                       While an address of the Cerbo is set (cerbo_host() is not empty; also in safe mode)
  *                       the object "cerbo": the address, text_cerbo_word() of cerbo_view(), cerbo_shown(),
  *                       the counters cerbo.bundles, cerbo_refused(), cerbo.sessions and cerbo.boots, and
@@ -170,12 +179,22 @@ int app_web_wifi(app_t *app, web_route_t route, const char *body, size_t body_le
                  size_t *length, uint64_t now_ms);
 
 // POST /api/settings: 403 "locked"; settings_from_json(); 400 {"error":"body","member":"<name>"} if it
-// refuses (the name is empty if the text as a whole is refused); else the settings are in use at once
+// refuses (the name is empty if the text as a whole is refused); 400 {"error":"body","member":"web_open"}
+// if it takes the text and web_open of it is another value than the one in use - see below; else the
+// settings are in use at once
 // (knob_set_reverse(), and cerbo_set_host() at the time of the request if the address they hold then is
 // another one than the second source has, or none: it forgets the values of the old address, cerbo.h; with
 // the same address nothing of the source changes), APP_EVENT_STORE_SETTINGS - also when the text changed nothing -, 200 with
 // settings_to_json(). The address of the Cerbo is set and taken away here alone, with the release and
 // without the knob: a wrong one locks nobody out.
+// web_open - whether the web interface is released for good - can only be changed at the display
+// (NAV_DO_WEB_OPEN_TOGGLE). A text that names the value in use, or does not name the member, is taken as every
+// other: a page may send back the settings it got. A text that names the other value changes nothing, not
+// its other members either, in whichever direction: a device in the WiFi must not turn a release of ten
+// minutes into one for good - that is what ACCESS_OPEN_MAX_MS is there to prevent for an owner who switched
+// the default off - and must not close the display to the others either. A text settings_from_json()
+// refuses is answered with the member it names, also when its web_open is the other value. As every request
+// that is refused behind access_write(), this one has renewed a release of ten minutes.
 int app_web_settings(app_t *app, const char *body, size_t body_length, char *out, size_t *length,
                      uint64_t now_ms);
 
@@ -195,7 +214,8 @@ int app_web_action(app_t *app, web_route_t route, char *out, size_t *length, uin
  *             are 300 s. The renewed release lasts ACCESS_OPEN_MS, so this only happens in the last minutes
  *             before its latest end, which no change moves; the question at the end of the upload needs the
  *             release, and nobody should send megabytes to be told so afterwards - the hint then says to give
- *             the release again);
+ *             the release again. A release that lasts has no end and so always time enough:
+ *             access_seconds_left() answers 2^32-1 for it);
  *             409 "busy" if app_busy(), which a running upload is as well, and while the running firmware
  *             still waits for "Update in Ordnung?" (update_pending: the other slot holds the version the boot
  *             loader goes back to if nobody confirms, and the upload would lie over that question for the

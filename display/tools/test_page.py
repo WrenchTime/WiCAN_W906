@@ -193,6 +193,28 @@ def external_problems(page):
     return found
 
 
+def release_problems(page):
+    """What keeps the page from following a release for good (API.md: "lasting" of /api/info). Such a
+    release has no end, and its left_s is 0: a page that makes an end of that locks its own buttons. The bar
+    and the buttons take the end of the release from one place, S.until, through left() - so that place has
+    to know the member, and the bar must not count down what has no end."""
+    found = []
+    code, strings = code_of(script_of(page))
+    ends = re.findall(r"\bS\.until = ([^;]*);", code)
+    if len(ends) != 1:
+        found.append("the end of the release is set in %d places, not in one" % len(ends))
+    else:
+        if not re.fullmatch(r"(\w+)\.open !== true \? 0 : \1\.lasting === true \? Infinity : Date\.now\(\) \+ Number\(\1\.left_s\) \* 1000", ends[0]):
+            found.append("the end of the release is not: none while it is closed, never while it lasts, else left_s from now")
+    if code.count("S.until") != 2 or "const left = () => Math.ceil((S.until - Date.now()) / 1000);" not in code:
+        found.append("the end of the release is read somewhere else than in left()")
+    if re.search(r"\(isFinite\(seconds\) \? \"\" \+ Math\.floor\(seconds / 60\) [^;:]* : \"\"\)", code) is None:
+        found.append("the bar counts down a release that has no end")
+    if "Web-Zugriff frei" not in strings or ", noch " not in strings:
+        found.append("the bar does not say that the web access is free without saying for how long")
+    return found
+
+
 def size_problems(data):
     return ["%d bytes, at most %d" % (len(data), SIZE_MAX - 1)] if len(data) >= SIZE_MAX else []
 
@@ -230,6 +252,9 @@ class Page(unittest.TestCase):
     def test_nothing_is_loaded_from_anywhere(self):
         self.assertEqual(external_problems(self.page), [])
 
+    def test_a_release_for_good_has_no_end_on_the_page(self):
+        self.assertEqual(release_problems(self.page), [])
+
     def test_size(self):
         # Of the page as it is: that is what lies in the flash, next to the compressed one, and what a
         # client gets that does not read gzip
@@ -264,6 +289,15 @@ class Api(unittest.TestCase):
     def setUp(self):
         self.clock = mock_display.SimulatedClock()
         self.display = self.display_class(clock=self.clock)
+        # The display of these tests is one whose owner switched "Dauerhaft frei" off: a change needs the
+        # release of ten minutes, as on every display before the web interface was released for good by
+        # default. The tests of the default say so (delivered()).
+        self.display.lasting(False)
+
+    def delivered(self):
+        """The display as it comes: its web interface released for good"""
+        self.display = self.display_class(clock=self.clock)
+        return self.display
 
     def call(self, method, target, body=None, host=HOST, header=True, length=True, read=None):
         """One request as a browser sends it: (status, body), or None without an answer"""
@@ -543,7 +577,7 @@ class Api(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(self.call("POST", "/api/settings", body), (400, fixture("app_web_member_%s.json" % member)))
         self.assertEqual(self.call("POST", "/api/settings", b"{\"standby_s\":3600,\"brightness\":5}")[1],
-                         "{\"brightness\":5,\"night\":10,\"night_mode\":true,\"reverse\":true,\"standby_s\":3600}")
+                         "{\"brightness\":5,\"night\":10,\"night_mode\":true,\"reverse\":true,\"standby_s\":3600,\"web_open\":false}")
 
     # ------------------------------------------------------------------------------------------------
     # The second source: the Cerbo GX
@@ -552,8 +586,8 @@ class Api(unittest.TestCase):
         display = self.display
         self.release()
         self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}"), (200, fixture("app_web_settings_cerbo.json")))
-        self.assertEqual(display.settings_json(), fixture("settings_cerbo.json"))
-        self.assertIn("\"settings\":" + fixture("settings_cerbo.json") + "}", self.call("GET", "/api/info")[1])
+        self.assertEqual(display.settings_json(), fixture("app_web_settings_cerbo.json"))
+        self.assertIn("\"settings\":" + fixture("app_web_settings_cerbo.json") + "}", self.call("GET", "/api/info")[1])
         # A member that is missing keeps its value, this one as the others
         self.assertEqual(self.call("POST", "/api/settings", b"{\"night\":25}"), (200, fixture("app_web_settings_cerbo.json")))
         refused = [b"{\"cerbo\":\"einstein\"}", b"{\"cerbo\":\"venus.local\"}", b"{\"cerbo\":\"192.168.88\"}", b"{\"cerbo\":\"192.168.88.2.1\"}",
@@ -566,11 +600,11 @@ class Api(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(self.call("POST", "/api/settings", body), (400, fixture("app_web_member_cerbo.json")))
         self.assertEqual(self.call("POST", "/api/settings", b"{\"night\":4,\"cerbo\":\"einstein\"}"), (400, fixture("app_web_member_night.json")))
-        self.assertEqual(display.settings_json(), fixture("settings_cerbo.json"))
+        self.assertEqual(display.settings_json(), fixture("app_web_settings_cerbo.json"))
         for address in ("0.0.0.0", "255.255.255.255", "10.0.0.138"):
             with self.subTest(address=address):
                 self.assertEqual(self.call("POST", "/api/settings", ("{\"cerbo\":\"%s\"}" % address).encode("ascii"))[1],
-                                 fixture("settings_cerbo.json").replace("192.168.88.2", address))
+                                 fixture("app_web_settings_cerbo.json").replace("192.168.88.2", address))
         self.assertEqual(self.call("POST", "/api/settings", fixture("settings_longest_cerbo.json").replace("255,", "100,").replace("65535", "3600").encode("ascii")),
                          (200, fixture("settings_longest_cerbo.json").replace("255,", "100,").replace("65535", "3600")))
         # The empty text takes it away: the answer of a display that never had one, byte for byte
@@ -741,6 +775,7 @@ class Api(unittest.TestCase):
             with self.subTest(cerbo=state):
                 display = self.display_class(clock=self.clock)
                 self.display = display
+                display.lasting(False)
                 display.set_cerbo(state)
                 display.access.switch_on(4651 * 1000)
                 display.update_pending = True
@@ -748,7 +783,7 @@ class Api(unittest.TestCase):
                 self.assertEqual(display.info_json(4711 * 1000), fixture("web_info.json"))
                 display.values = lambda now: [("ENGINE_RPM", 812.5, now), ("DPF_REGEN_STATUS", "on", now - 5000)]
                 self.assertEqual(self.call("GET", "/api/values"), (200, fixture("web_values.json")))
-                self.assertEqual(display.settings_json(), fixture("settings_defaults.json"))
+                self.assertEqual(display.settings_json(), fixture("settings_web_closed.json"))
                 self.release()
                 self.assertEqual(self.call("POST", "/api/settings", b"{}"), (200, fixture("app_web_settings_defaults.json")))
                 self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"\"}"), (200, fixture("app_web_settings_defaults.json")))
@@ -764,14 +799,14 @@ class Api(unittest.TestCase):
         for method, target in changes:
             with self.subTest(target):
                 self.assertEqual(self.call(method, target, b"{}"), locked)
-        self.assertEqual(self.call("GET", "/api/info")[1].count("\"release\":{\"open\":false,\"left_s\":0}"), 1)
+        self.assertEqual(self.call("GET", "/api/info")[1].count("\"release\":{\"open\":false,\"left_s\":0,\"lasting\":false}"), 1)
 
         # 10 minutes after it was given
         self.release()
         self.clock.advance(0.001)
-        self.assertIn("\"release\":{\"open\":true,\"left_s\":600}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":600,\"lasting\":false}", self.call("GET", "/api/info")[1])
         self.clock.advance(599.998)
-        self.assertIn("\"release\":{\"open\":true,\"left_s\":1}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":1,\"lasting\":false}", self.call("GET", "/api/info")[1])
         self.clock.advance(0.001)
         self.assertEqual(self.call("POST", "/api/settings", b"{}"), locked)
 
@@ -784,10 +819,10 @@ class Api(unittest.TestCase):
         self.clock.advance(599)
         # at the latest 30 minutes after it was switched on, whatever was changed since
         self.assertEqual(self.call("POST", "/api/settings", b"{}")[0], 200)
-        self.assertIn("\"release\":{\"open\":true,\"left_s\":102}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":102,\"lasting\":false}", self.call("GET", "/api/info")[1])
         self.clock.advance(101.999)
         self.assertEqual(self.call("GET", "/api/values")[0], 200)
-        self.assertIn("\"left_s\":1}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"left_s\":1,\"lasting\":false}", self.call("GET", "/api/info")[1])
         self.clock.advance(0.001)
         self.assertEqual(self.call("POST", "/api/settings", b"{}"), locked)
 
@@ -807,6 +842,119 @@ class Api(unittest.TestCase):
         self.display.restart()
         self.clock.advance(5)
         self.assertEqual(self.call("POST", "/api/settings", b"{}"), locked)
+
+    def test_release_for_good(self):
+        # The display as it comes: the example of API.md, and every change without anybody at its knob
+        display = self.delivered()
+        display.update_pending = True
+        display.source = "stored"
+        self.assertEqual(display.info_json(4711 * 1000), fixture("web_info_lasting.json"))
+        display.update_pending = False
+        display.source = "builtin"
+        lasting = "\"release\":{\"open\":true,\"left_s\":0,\"lasting\":true}"
+        self.assertIn(lasting, self.call("GET", "/api/info")[1])
+        self.assertEqual(display.settings_json(), fixture("settings_defaults.json"))
+        self.assertEqual(self.call("POST", "/api/settings", b"{}"), (200, fixture("settings_defaults.json")))
+        self.assertEqual(self.call("PUT", "/api/layout?mode=apply", fixture("app_layout_stored.json").encode("utf-8"))[0], 200)
+        self.assertEqual(self.call("POST", "/api/layout/reset")[0], 200)
+        # Hours and many changes later: a release of ten minutes would have ended with the fourth
+        for _ in range(66):
+            self.clock.advance(540)
+            self.assertEqual(self.call("POST", "/api/settings", b"{\"brightness\":41}")[0], 200)
+        self.clock.advance(7200)
+        self.assertIn(lasting, self.call("GET", "/api/info")[1])
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"brightness\":80}"), (200, fixture("settings_defaults.json")))
+        # The switch of the ten minutes does nothing to it, either way
+        display.release(False)
+        self.assertIn(lasting, self.call("GET", "/api/info")[1])
+        display.release(True)
+        self.clock.advance(1801)
+        self.assertIn(lasting, self.call("GET", "/api/info")[1])
+        self.assertEqual(self.call("POST", "/api/settings", b"{}")[0], 200)
+
+        # What needs the knob needs it all the same: the question waits its 60 s and no longer
+        self.assertEqual(self.ask_reset(), (202, fixture("app_web_asked_1.json")))
+        self.assertEqual(self.call("GET", "/api/ticket?id=1")[1], "{\"ticket\":1,\"state\":\"waiting\",\"left_s\":60}")
+        self.clock.advance(59.999)
+        self.assertEqual(self.call("GET", "/api/ticket?id=1")[1], "{\"ticket\":1,\"state\":\"waiting\",\"left_s\":1}")
+        self.clock.advance(0.001)
+        self.assertEqual(self.call("GET", "/api/ticket?id=1")[1], "{\"ticket\":1,\"state\":\"expired\",\"left_s\":0}")
+        self.assertIn(lasting, self.call("GET", "/api/info")[1])
+        # An upload begins whenever it comes: the release for good always has the 5 minutes it asks for
+        image = mock_display.firmware_image(version="0.2.0", size=300000)
+        self.assertEqual(self.call("POST", "/api/ota", image), (202, fixture("app_web_asked_2.json")))
+        display.press_long()
+        self.assertEqual(display.version, "0.1.0")
+
+        # Switched off at the display: closed at once, and a question that waits is refused
+        self.assertEqual(self.ask_reset()[1], fixture("app_web_asked_3.json"))
+        display.lasting(False)
+        self.assertEqual(self.call("GET", "/api/ticket?id=3")[1], "{\"ticket\":3,\"state\":\"refused\",\"left_s\":0}")
+        closed = "\"release\":{\"open\":false,\"left_s\":0,\"lasting\":false}"
+        self.assertIn(closed, self.call("GET", "/api/info")[1])
+        self.assertIn("\"settings\":" + fixture("settings_web_closed.json") + "}", self.call("GET", "/api/info")[1])
+        self.assertEqual(self.call("POST", "/api/settings", b"{}"), (403, fixture("app_web_locked.json")))
+        # Switched on over a release of ten minutes: its two ends are gone
+        display.release(True)
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":600,\"lasting\":false}", self.call("GET", "/api/info")[1])
+        display.lasting(True)
+        self.clock.advance(1801)
+        self.assertIn(lasting, self.call("GET", "/api/info")[1])
+        self.assertEqual(self.call("POST", "/api/settings", b"{}")[0], 200)
+        # ... and switched off again nothing of those ten minutes is left
+        display.lasting(False)
+        display.release(True)
+        display.lasting(True)
+        display.lasting(False)
+        self.assertIn(closed, self.call("GET", "/api/info")[1])
+
+        # What is stored decides at the start: a restart gives it again, or leaves the display closed
+        display.lasting(True)
+        display.restart()
+        self.clock.advance(5)
+        self.assertIn(lasting, self.call("GET", "/api/info")[1])
+        self.assertEqual(self.call("POST", "/api/settings", b"{}")[0], 200)
+        display.lasting(False)
+        display.restart()
+        self.clock.advance(5)
+        self.assertIn(closed, self.call("GET", "/api/info")[1])
+        self.assertEqual(self.call("POST", "/api/settings", b"{}"), (403, fixture("app_web_locked.json")))
+
+    def test_settings_cannot_turn_the_switch(self):
+        # The release for good is given and taken back at the display alone
+        display = self.delivered()
+        refused = (400, fixture("app_web_member_web_open.json"))
+        for body in (b"{\"web_open\":false}", b"{\"brightness\":50,\"web_open\":false}", b"{\"web_open\":false,\"cerbo\":\"192.168.88.2\"}",
+                     b"{\"web_open\":true,\"web_open\":false}", b"{\"web_open\":0}", b"{\"web_open\":\"false\"}", b"{\"web_open\":null}"):
+            with self.subTest(body=body):
+                self.assertEqual(self.call("POST", "/api/settings", body), refused)
+                self.assertEqual(display.settings_json(), fixture("settings_defaults.json"))
+                self.assertIn("\"release\":{\"open\":true,\"left_s\":0,\"lasting\":true}", self.call("GET", "/api/info")[1])
+        # A text that is refused for another member is answered with that one
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"web_open\":false,\"brightness\":4}"), (400, fixture("app_web_member_brightness.json")))
+        # Named as it is, or not at all, the text is taken as before: a page may send back what it got
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"web_open\":true}"), (200, fixture("settings_defaults.json")))
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"web_open\":false,\"web_open\":true}"), (200, fixture("settings_defaults.json")))
+        self.assertEqual(self.call("POST", "/api/settings", fixture("settings_defaults.json").encode("utf-8")), (200, fixture("settings_defaults.json")))
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"web_open\":true,\"brightness\":40}")[1],
+                         fixture("settings_defaults.json").replace("\"brightness\":80", "\"brightness\":40"))
+
+        # ... in neither direction: a device in the WiFi does not make a release of ten minutes one for good
+        display.lasting(False)
+        display.release(True)
+        self.clock.advance(100)
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"web_open\":true}"), refused)
+        self.assertEqual(display.settings["web_open"], False)
+        # The refused request renewed the release of ten minutes, as every refused change, and no more
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":600,\"lasting\":false}", self.call("GET", "/api/info")[1])
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"web_open\":false,\"brightness\":80}"), (200, fixture("settings_web_closed.json")))
+        # Asked for again and again it is refused until the release ends, 30 minutes after it was given
+        for _ in range(2):
+            self.clock.advance(590)
+            self.assertEqual(self.call("POST", "/api/settings", b"{\"web_open\":true}"), refused)
+        self.clock.advance(590)
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"web_open\":true}"), (403, fixture("app_web_locked.json")))
+        self.assertEqual(display.settings["web_open"], False)
 
     def test_tickets(self):
         display = self.display
@@ -847,6 +995,11 @@ class Api(unittest.TestCase):
         # The numbers start again at 1 after a restart; WiFi and settings are gone, the views stay
         self.assertEqual(self.call("GET", "/api/ticket?id=1")[1], fixture("app_web_ticket_unknown.json").replace("7", "1"))
         self.assertEqual(self.call("GET", "/api/wifi")[1][:27], "{\"current\":\"\",\"profiles\":[]")
+        # ... and with the settings the switch "Dauerhaft frei": the display is as it came, released for good.
+        # Its owner switches that off again.
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":0,\"lasting\":true}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"settings\":" + fixture("settings_defaults.json") + "}", self.call("GET", "/api/info")[1])
+        display.lasting(False)
 
         # Refused at the display, also at once; the release goes on
         self.release()
@@ -964,7 +1117,7 @@ class Api(unittest.TestCase):
         display.press_long()
         self.clock.advance(0.999)
         self.assertEqual(self.call("POST", "/api/ota", image), (403, fixture("app_web_locked.json")))
-        self.assertIn("\"release\":{\"open\":true,\"left_s\":299}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":299,\"lasting\":false}", self.call("GET", "/api/info")[1])
         self.release()
         self.assertEqual(self.call("POST", "/api/ota", image)[0], 202)
         # While a question waits no upload begins, while one runs no second one
@@ -1147,12 +1300,12 @@ class Api(unittest.TestCase):
         self.assertEqual([profile[0] for profile in display.profiles], ["Werkstatt", "Camping"])
         self.assertIn("\"current\":\"Werkstatt\"", self.call("GET", "/api/wifi")[1])
         # The request found the release open and has renewed it, as every change that is refused as busy
-        self.assertIn("\"release\":{\"open\":true,\"left_s\":600}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":600,\"lasting\":false}", self.call("GET", "/api/info")[1])
         self.clock.advance(100)
         for body in (b"{\"ssid\":\"Neu\",\"password\":\"12345678\"}", b"{\"ssid\":\"Werkstatt\",\"host\":\"10.0.0.9\"}", b"no network"):
             self.assertEqual(self.call("POST", "/api/wifi", body), busy, body)
         # A question that is not asked renews nothing, and there is no ticket
-        self.assertIn("\"release\":{\"open\":true,\"left_s\":500}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"release\":{\"open\":true,\"left_s\":500,\"lasting\":false}", self.call("GET", "/api/info")[1])
         self.assertEqual(self.call("GET", "/api/ticket?id=1")[1], "{\"ticket\":1,\"state\":\"unknown\",\"left_s\":0}")
         self.assertIsNone(display.press())
         # What leaves the network alone goes on
@@ -1198,9 +1351,9 @@ class Api(unittest.TestCase):
         self.clock.advance(100)
         self.assertEqual(self.call("POST", "/api/reset"), hot)
         self.assertEqual(self.call("POST", "/api/wifi", questions[0][1]), hot)
-        self.assertIn("\"left_s\":500}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"left_s\":500,\"lasting\":false}", self.call("GET", "/api/info")[1])
         self.assertEqual(self.call("POST", "/api/ota", image), hot)
-        self.assertIn("\"left_s\":600}", self.call("GET", "/api/info")[1])
+        self.assertIn("\"left_s\":600,\"lasting\":false}", self.call("GET", "/api/info")[1])
         # What asks nothing at the display goes on
         self.assertEqual(self.call("POST", "/api/settings", b"{}")[0], 200)
         self.assertEqual(self.call("POST", "/api/wifi/forget", b"{\"ssid\":\"Nirgends\"}")[0], 404)
@@ -1395,6 +1548,16 @@ PAGE_MUTATIONS = {
         "an address without a scheme": ("const SETTINGS = ", "const HELP = \"//example.org/x\";\nconst SETTINGS = "),
         "a link that leads away": ("href: URL.createObjectURL(new Blob([json], {type: \"application/json\"}))", "href: S.view"),
     },
+    "release_problems": {
+        "a release for good with the end its 0 seconds give": ("release.lasting === true ? Infinity : ", ""),
+        "lasting taken for true whatever it is": ("release.lasting === true ? Infinity", "release.lasting ? Infinity"),
+        "a release for good that ends after a day": ("release.lasting === true ? Infinity", "release.lasting === true ? Date.now() + 86400000"),
+        "a closed release that lasts": ("release.open !== true ? 0 : release.lasting === true ? Infinity", "release.lasting === true ? Infinity : release.open !== true ? 0"),
+        "a countdown of what has no end": ("(isFinite(seconds) ? \", noch \"", "(seconds ? \", noch \""),
+        "the bar always with a time": ("\"Web-Zugriff frei\" + (isFinite(seconds) ? \", noch \" + ", "\"Web-Zugriff frei, noch \" + (isFinite(seconds) ? "),
+        "a second place that sets the end": ("poll();\n</script>", "S.until = 0;\npoll();\n</script>"),
+        "the buttons with a time of their own": ("left() <= 0 ? \"erst am Display", "S.until <= Date.now() ? \"erst am Display"),
+    },
     "size_problems": {
         "one byte too many": lambda page: page + " " * (SIZE_MAX - len(page.encode("utf-8"))),
     },
@@ -1537,6 +1700,84 @@ class KeepsTheValuesOfTheOldAddress(mock_display.Display):
         if self.settings["cerbo"] != "":
             self.cerbo_seen_ms = seen
         return answer
+
+
+class ClosedAsItComes(mock_display.Display):
+    """The display starts closed whatever its setting says"""
+
+    def _release_as_set(self):
+        pass
+
+
+class CountsTheReleaseForGoodDown(mock_display.Display):
+    def info_json(self, now):
+        return super().info_json(now).replace("\"left_s\":0,\"lasting\":true", "\"left_s\":%d,\"lasting\":true" % mock_display.ENDLESS_S)
+
+
+class EndsTheReleaseForGoodAtTheSwitchOfTenMinutes(mock_display.Display):
+    def release(self, on):
+        if not on:
+            self.access.switch_off(self.now())
+        else:
+            super().release(on)
+
+
+class RestartsClosed(mock_display.Display):
+    """Gives the release for good at its very first start alone"""
+
+    def restart(self, reason="sw"):
+        super().restart(reason)
+        self.access.switch_off(self.now())
+
+
+class KeepsTheReleaseForGoodWhenSwitchedOff(mock_display.Display):
+    """Switched off the setting says so, and the web interface stays open until the next start"""
+
+    def lasting(self, on):
+        if on:
+            super().lasting(on)
+        else:
+            self.settings["web_open"] = False
+
+
+class LeavesTenMinutesBelowTheReleaseForGood(mock_display.Display):
+    def lasting(self, on):
+        was_open = self.access.open and not self.access.lasting
+        super().lasting(on)
+        if on and was_open:
+            self.was_timed = True
+        if not on and getattr(self, "was_timed", False):
+            self.access.switch_on(self.now())
+
+
+class TurnsTheSwitchThroughTheWeb(mock_display.Display):
+    """POST /api/settings gives the release for good and takes it back"""
+
+    def _settings(self, data, now=None):
+        status, body = super()._settings(data, now)
+        if body == "{\"error\":\"body\",\"member\":\"web_open\"}":
+            self.settings["web_open"] = not self.settings["web_open"]
+            if self.settings["web_open"]:
+                self.access.switch_on_for_good(self.now())
+            else:
+                self.access.switch_off(self.now())
+            return 200, self.settings_json()
+        return status, body
+
+
+class RefusesTheSwitchNamedAsItIs(mock_display.Display):
+    def _settings(self, data, now=None):
+        if b"web_open" in data:
+            return 400, "{\"error\":\"body\",\"member\":\"web_open\"}"
+        return super()._settings(data, now)
+
+
+class TakesTheRestOfATextThatTurnsTheSwitch(mock_display.Display):
+    def _settings(self, data, now=None):
+        status, body = super()._settings(data, now)
+        if body == "{\"error\":\"body\",\"member\":\"web_open\"}" and b"brightness" in data:
+            self.settings["brightness"] = 50
+        return status, body
 
 
 class StoresAtOnce(mock_display.Display):
@@ -1763,6 +2004,8 @@ API_MUTATIONS = {
     "test_cerbo_counts_what_it_names": CountsTheWholeStore,
     "test_no_cerbo_without_an_address": NamesTheCerboAlways,
     "test_release": ("OPEN_MAX_MS", 1801 * 1000),
+    "test_release_for_good": ClosedAsItComes,
+    "test_settings_cannot_turn_the_switch": TurnsTheSwitchThroughTheWeb,
     "test_tickets": ("CONFIRM_MS", 61 * 1000),
     "test_ticket_ends": ("ASK_SHOWN_MS", 1499),
     "test_ota": NoRollback,
@@ -1790,6 +2033,9 @@ API_MUTATIONS_MORE = {
     "test_heat": [UploadsInTheDark, KeepsTheQuestionInTheDark, NamesNoHeat],
     "test_refusals": [("BODY_SMALL_MAX", 513), ("OUT_SIZE", 60000), AsksForBrokenUploads],
     "test_release": [("OPEN_MS", 601 * 1000)],
+    "test_release_for_good": [CountsTheReleaseForGoodDown, EndsTheReleaseForGoodAtTheSwitchOfTenMinutes,
+                              LeavesTenMinutesBelowTheReleaseForGood, RestartsClosed, KeepsTheReleaseForGoodWhenSwitchedOff, ("ENDLESS_S", 299), ("CONFIRM_MS", 61 * 1000)],
+    "test_settings_cannot_turn_the_switch": [RefusesTheSwitchNamedAsItIs, TakesTheRestOfATextThatTurnsTheSwitch, ("OPEN_MS", 601 * 1000)],
     "test_ota_that_breaks_or_comes_late": [AsksForBrokenUploads],
     "test_the_page_compressed": [("accepts_gzip", lambda value: value is not None and "gzip" in value),
                                  ("accepts_gzip", lambda value: False), ("CODINGS_ROOM", 80), ("CODINGS_ROOM", 63),
@@ -1815,7 +2061,7 @@ def failures(name, mutation):
 
 class CounterCheck(unittest.TestCase):
     def test_every_check_of_the_page_is_broken_once(self):
-        checks = {"request_problems", "construct_problems", "external_problems", "size_problems", "compressed_problems"}
+        checks = {"request_problems", "construct_problems", "external_problems", "release_problems", "size_problems", "compressed_problems"}
         self.assertEqual(set(PAGE_MUTATIONS), checks)
         self.assertEqual({name for name in globals() if name.endswith("_problems")}, checks)
 
@@ -1829,6 +2075,7 @@ class CounterCheck(unittest.TestCase):
                     found = {"request_problems": lambda: request_problems(broken, api_text),
                              "construct_problems": lambda: construct_problems(broken),
                              "external_problems": lambda: external_problems(broken),
+                             "release_problems": lambda: release_problems(broken),
                              "size_problems": lambda: size_problems(broken.encode("utf-8")),
                              "compressed_problems": lambda: compressed_problems(broken.encode("utf-8"))}[check]()
                     self.assertNotEqual(found, [])

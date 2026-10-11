@@ -72,8 +72,15 @@ PRESS_CLEARED = "\t\t\tif(nav->row != lines_of(world->cleared_lines)) break;\n\t
 PRESS_FAILED = "\t\tcase NAV_DTC_FAILED:\n\t\t\tenter(nav, NAV_DTC, 0);\n\t\t\treturn NAV_DO_DISMISS;"
 PRESS_OLD = "\t\t\tif(nav->row == lines_of(world->old_lines)) return back(nav, world);"
 PRESS_PLAIN = "\t\tcase NAV_BRIGHTNESS:\n\t\tcase NAV_INFO:\n\t\t\treturn back(nav, world);"
-PRESS_WEB = ("\t\t\tif(nav->row != WEB_RELEASE) return back(nav, world);\n"
-             "\t\t\treturn world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON;")
+# The web access: Dauerhaft frei flips the setting, Freigabe switches the release of ten minutes unless the
+# release is the one that lasts, Zurück leads back
+WEB_ROWS = "\tWEB_LASTING, WEB_RELEASE, WEB_BACK,"
+WEB_SWITCH = "\tswitch(nav->row)\n\t{\n\t\tcase WEB_LASTING:"
+WEB_FLIP = "\t\tcase WEB_LASTING:\n\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;\n"
+SWITCHED = "world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON"
+PRESS_WEB = "\t\t\tif(!world->release_lasting) return " + SWITCHED + ";\n\t\t\tbreak;"
+WEB_BACK = "\t\tcase WEB_BACK:\n\t\t\treturn back(nav, world);"
+LASTING_ROW = "nav->screen == NAV_WEB && nav->row == WEB_RELEASE && world->release_lasting"
 PRESS_ASK = "\t\t\tif(nav->row == CHOICE_CANCEL) return back(nav, world);\n\t\t\tenter(nav, NAV_PAGES, 0);\n\t\t\treturn asked;"
 OVER_ASK = "\tif(overlay == NAV_OVER_ASK) return NAV_DO_ASK_CONFIRM;\n"
 OVER_UPDATE = "\tif(overlay == NAV_OVER_UPDATE) return NAV_DO_UPDATE_OK;\n"
@@ -217,7 +224,7 @@ MUTATIONS = [
     ("nav_rows_dtc_one_more", T, F, "return NAV_DTC_ROWS;", "return NAV_DTC_ROWS + 1;"),
     ("nav_rows_dtc_changed", T, H, "#define NAV_DTC_ROWS            4", "#define NAV_DTC_ROWS            3"),
     ("nav_rows_web_one_more", T, F, "return NAV_WEB_ROWS;", "return NAV_WEB_ROWS + 1;"),
-    ("nav_rows_web_changed", T, H, "#define NAV_WEB_ROWS            2", "#define NAV_WEB_ROWS            1"),
+    ("nav_rows_web_changed", T, H, "#define NAV_WEB_ROWS            3", "#define NAV_WEB_ROWS            2"),
     ("nav_rows_settings_one_less", T, F, "return NAV_SETTINGS_ROWS;", "return NAV_SETTINGS_ROWS - 1;"),
     ("nav_rows_settings_changed", T, H, "#define NAV_SETTINGS_ROWS       6", "#define NAV_SETTINGS_ROWS       7"),
     ("nav_rows_list_without_lines", T, F, ROWS_LIST, ROWS_LIST.replace("lines_of(world->list_lines) + ", "")),
@@ -356,7 +363,9 @@ MUTATIONS = [
     ("nav_menu_night_not_toggled", T, F, "\t\t\treturn NAV_DO_NIGHT_TOGGLE;", "\t\t\tbreak;"),
     ("nav_menu_night_leaves_menu", T, F, "\t\t\treturn NAV_DO_NIGHT_TOGGLE;", "\t\t\tenter(nav, NAV_PAGES, 0);\n\t\t\treturn NAV_DO_NIGHT_TOGGLE;"),
     ("nav_menu_web_not_opened", T, F, "\t\t\tenter(nav, NAV_WEB, 0);\n", ""),
-    ("nav_menu_web_focus_on_back", T, F, "\t\t\tenter(nav, NAV_WEB, 0);\n", "\t\t\tenter(nav, NAV_WEB, 1);\n"),
+    ("nav_menu_web_focus_on_back", T, F, "\t\t\tenter(nav, NAV_WEB, 0);\n", "\t\t\tenter(nav, NAV_WEB, 2);\n"),
+    ("nav_menu_web_focus_on_the_release", T, F, "\t\t\tenter(nav, NAV_WEB, 0);\n", "\t\t\tenter(nav, NAV_WEB, 1);\n"),
+    ("nav_menu_web_flips_the_setting", T, F, "\t\t\tenter(nav, NAV_WEB, 0);\n\t\t\tbreak;", "\t\t\tenter(nav, NAV_WEB, 0);\n\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;"),
     ("nav_menu_web_opens_release", T, F, "\t\t\tenter(nav, NAV_WEB, 0);\n\t\t\tbreak;", "\t\t\tenter(nav, NAV_WEB, 0);\n\t\t\treturn NAV_DO_RELEASE_ON;"),
     ("nav_menu_info_not_opened", T, F, "\t\t\tenter(nav, NAV_INFO, 0);\n", ""),
     ("nav_menu_settings_not_opened", T, F, "\t\t\tenter(nav, NAV_SETTINGS, 0);\n", ""),
@@ -503,13 +512,56 @@ MUTATIONS = [
     ("nav_web_back_focus_on_first_row", T, F, BACK_WEB, BACK_WEB.replace("MENU_WEB", "MENU_DTC")),
     ("nav_web_back_to_pages", T, F, BACK_WEB, "\t\t\tenter(nav, NAV_PAGES, 0);"),
     ("nav_web_long_closes_release", T, F, BACK_WEB + "\n\t\t\tbreak;", BACK_WEB + "\n\t\t\treturn NAV_DO_RELEASE_OFF;"),
-    ("nav_web_release_on_every_row", T, F, PRESS_WEB, PRESS_WEB.replace("\t\t\tif(nav->row != WEB_RELEASE) return back(nav, world);\n", "")),
-    ("nav_web_rows_swapped", T, F, "#define WEB_RELEASE     0", "#define WEB_RELEASE     1"),
+    ("nav_web_release_on_every_row", T, F, WEB_SWITCH, WEB_SWITCH.replace("switch(nav->row)", "switch(nav->row * 0 + WEB_RELEASE)")),
+    ("nav_web_rows_swapped", T, F, WEB_ROWS, "\tWEB_RELEASE, WEB_LASTING, WEB_BACK,"),
+    ("nav_web_rows_release_and_back_swapped", T, F, WEB_ROWS, "\tWEB_LASTING, WEB_BACK, WEB_RELEASE,"),
+    ("nav_web_rows_lasting_and_back_swapped", T, F, WEB_ROWS, "\tWEB_BACK, WEB_RELEASE, WEB_LASTING,"),
     ("nav_web_release_reversed", T, F, PRESS_WEB, PRESS_WEB.replace("NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON", "NAV_DO_RELEASE_ON : NAV_DO_RELEASE_OFF")),
-    ("nav_web_release_only_opened", T, F, PRESS_WEB, PRESS_WEB.replace("world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON", "world->release_open ? NAV_DO_RELEASE_ON : NAV_DO_RELEASE_ON")),
-    ("nav_web_release_only_closed", T, F, PRESS_WEB, PRESS_WEB.replace("world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON", "world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_OFF")),
+    ("nav_web_release_only_opened", T, F, PRESS_WEB, PRESS_WEB.replace(SWITCHED, "world->release_open ? NAV_DO_RELEASE_ON : NAV_DO_RELEASE_ON")),
+    ("nav_web_release_only_closed", T, F, PRESS_WEB, PRESS_WEB.replace(SWITCHED, "world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_OFF")),
     ("nav_web_release_by_night_mode", T, F, PRESS_WEB, PRESS_WEB.replace("world->release_open", "world->night_mode")),
-    ("nav_web_release_leaves", T, F, PRESS_WEB, PRESS_WEB.replace("\t\t\treturn world", "\t\t\tenter(nav, NAV_MENU, MENU_WEB);\n\t\t\treturn world")),
+    ("nav_web_release_leaves", T, F, PRESS_WEB,
+     "\t\t\tif(!world->release_lasting)\n\t\t\t{\n\t\t\t\tenter(nav, NAV_MENU, MENU_WEB);\n\t\t\t\treturn " + SWITCHED + ";\n\t\t\t}\n\t\t\tbreak;"),
+    # Dauerhaft frei: the first row flips the setting, whatever the world says
+    ("nav_web_lasting_row_does_nothing", T, F, WEB_FLIP, ""),
+    ("nav_web_lasting_row_switches_the_release", T, F, WEB_FLIP, WEB_FLIP.replace("NAV_DO_WEB_OPEN_TOGGLE", SWITCHED)),
+    ("nav_web_lasting_row_opens_the_release", T, F, WEB_FLIP, WEB_FLIP.replace("NAV_DO_WEB_OPEN_TOGGLE", "NAV_DO_RELEASE_ON")),
+    ("nav_web_lasting_row_leads_back", T, F, WEB_FLIP, WEB_FLIP.replace("return NAV_DO_WEB_OPEN_TOGGLE;", "return back(nav, world);")),
+    ("nav_web_lasting_row_leaves", T, F, WEB_FLIP, WEB_FLIP.replace("\t\t\treturn", "\t\t\tenter(nav, NAV_MENU, MENU_WEB);\n\t\t\treturn")),
+    ("nav_web_lasting_flipped_only_while_closed", T, F, WEB_FLIP,
+     WEB_FLIP.replace("\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;\n", "\t\t\tif(!world->release_open) return NAV_DO_WEB_OPEN_TOGGLE;\n\t\t\tbreak;\n")),
+    ("nav_web_lasting_flipped_only_while_open", T, F, WEB_FLIP,
+     WEB_FLIP.replace("\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;\n", "\t\t\tif(world->release_open) return NAV_DO_WEB_OPEN_TOGGLE;\n\t\t\tbreak;\n")),
+    ("nav_web_lasting_only_given", T, F, WEB_FLIP,
+     WEB_FLIP.replace("\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;\n", "\t\t\tif(!world->release_lasting) return NAV_DO_WEB_OPEN_TOGGLE;\n\t\t\tbreak;\n")),
+    ("nav_web_lasting_only_taken_back", T, F, WEB_FLIP,
+     WEB_FLIP.replace("\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;\n", "\t\t\tif(world->release_lasting) return NAV_DO_WEB_OPEN_TOGGLE;\n\t\t\tbreak;\n")),
+    ("nav_web_lasting_taken_back_as_a_release_of_ten_minutes", T, F, WEB_FLIP,
+     WEB_FLIP.replace("return NAV_DO_WEB_OPEN_TOGGLE;", "return world->release_lasting ? NAV_DO_RELEASE_OFF : NAV_DO_WEB_OPEN_TOGGLE;")),
+    ("nav_web_long_flips_the_setting", T, F, BACK_WEB + "\n\t\t\tbreak;", BACK_WEB + "\n\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;"),
+    # a release that lasts is not switched by the row of the ten minutes: the row does nothing then
+    ("nav_web_release_switched_while_it_lasts", T, F, PRESS_WEB, "\t\t\treturn " + SWITCHED + ";"),
+    ("nav_web_release_switched_only_while_it_lasts", T, F, PRESS_WEB, PRESS_WEB.replace("!world->release_lasting", "world->release_lasting")),
+    ("nav_web_release_kept_only_while_it_is_open", T, F, PRESS_WEB, PRESS_WEB.replace("!world->release_lasting", "!world->release_lasting || !world->release_open")),
+    ("nav_web_release_kept_by_the_access_point", T, F, PRESS_WEB, PRESS_WEB.replace("!world->release_lasting", "!world->ap_kept")),
+    ("nav_web_release_kept_while_it_is_open", T, F, PRESS_WEB, PRESS_WEB.replace("!world->release_lasting", "!world->release_open")),
+    ("nav_web_release_kept_only_while_no_request_is_under_way", T, F, PRESS_WEB, PRESS_WEB.replace("!world->release_lasting", "!world->release_lasting || under_way(world->flow)")),
+    ("nav_web_release_that_lasts_is_closed", T, F, PRESS_WEB, PRESS_WEB.replace("\t\t\tbreak;", "\t\t\treturn NAV_DO_RELEASE_OFF;")),
+    ("nav_web_release_that_lasts_flips_the_setting", T, F, PRESS_WEB, PRESS_WEB.replace("\t\t\tbreak;", "\t\t\treturn NAV_DO_WEB_OPEN_TOGGLE;")),
+    ("nav_web_release_that_lasts_leads_back", T, F, PRESS_WEB, PRESS_WEB.replace("\t\t\tbreak;", "\t\t\treturn back(nav, world);")),
+    ("nav_web_lasting_keeps_the_way_back_too", T, F, WEB_BACK, WEB_BACK.replace("\t\t\treturn", "\t\t\tif(world->release_lasting) break;\n\t\t\treturn")),
+    ("nav_web_back_does_nothing", T, F, WEB_BACK, "\t\tcase WEB_BACK:\n\t\t\tbreak;"),
+    ("nav_web_back_flips_the_setting", T, F, WEB_BACK, WEB_BACK.replace("return back(nav, world);", "return NAV_DO_WEB_OPEN_TOGGLE;")),
+    ("nav_web_lasting_press_is_no_input", T, F,
+     SHORT, SHORT.replace("\tnote_input(nav, now_ms);\n", "\tif(!(" + LASTING_ROW + ")) note_input(nav, now_ms);\n")),
+    ("nav_web_lasting_press_takes_the_time_but_is_no_input", T, F,
+     SHORT, SHORT.replace("\tnote_input(nav, now_ms);\n", "\tif(" + LASTING_ROW + ") advance(nav, now_ms);\n\telse note_input(nav, now_ms);\n")),
+    ("nav_web_lasting_tap_moves_no_focus", T, F,
+     TAP_FOCUS, "\t\tif(nav->screen == NAV_WEB && row == WEB_RELEASE && world->release_lasting) return NAV_DO_NOTHING;\n" + TAP_FOCUS),
+    ("nav_web_lasting_for_the_knob_alone", T, F,
+     TAP_FOCUS, TAP_FOCUS.replace("\treturn press(nav, world);",
+                                  "\tif(" + LASTING_ROW + ") return NAV_DO_RELEASE_OFF;\n\treturn press(nav, world);")),
+    ("nav_settings_hotspot_kept_while_the_release_lasts", T, F, SET_AP, SET_AP.replace("!world->ap_kept", "!world->ap_kept && !world->release_lasting")),
     ("nav_info_back_focus_on_first_row", T, F, BACK_INFO, BACK_INFO.replace("MENU_INFO", "MENU_DTC")),
     ("nav_info_back_to_pages", T, F, BACK_INFO, "\t\t\tenter(nav, NAV_PAGES, 0);"),
 
@@ -807,4 +859,11 @@ MUTATIONS = [
     ("nav_acts_kept_hotspot_under_an_overlay", T, F,
      ACTS, ACTS.replace(";", " || (nav->screen == NAV_SETTINGS && row == SETTINGS_AP && nav_overlay(world) != NAV_OVER_NONE);")),
     ("nav_acts_no_row_of_the_settings_while_kept", T, F, ACTS_ROW, ACTS_ROW + "\tif(nav->screen == NAV_SETTINGS && world->ap_kept) return false;\n"),
+    # the row Freigabe acts by what the press does as well
+    ("nav_acts_release_also_while_it_lasts", T, F, ACTS, ACTS.replace(";", " || (nav->screen == NAV_WEB && row == WEB_RELEASE);")),
+    ("nav_acts_release_never", T, F, ACTS_ROW, ACTS_ROW + "\tif(nav->screen == NAV_WEB && row == WEB_RELEASE) return false;\n"),
+    ("nav_acts_lasting_release_under_an_overlay", T, F,
+     ACTS, ACTS.replace(";", " || (nav->screen == NAV_WEB && row == WEB_RELEASE && nav_overlay(world) != NAV_OVER_NONE);")),
+    ("nav_acts_no_row_of_the_web_access_while_it_lasts", T, F, ACTS_ROW, ACTS_ROW + "\tif(nav->screen == NAV_WEB && world->release_lasting) return false;\n"),
+    ("nav_acts_lasting_row_only_while_closed", T, F, ACTS_ROW, ACTS_ROW + "\tif(nav->screen == NAV_WEB && row == WEB_LASTING && world->release_open) return false;\n"),
 ]

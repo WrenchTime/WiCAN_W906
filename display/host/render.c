@@ -679,10 +679,12 @@ static void list_old(scene_t *scene)
 static void list_web(scene_t *scene)
 {
 	fresh(scene, SCENE_LIST, "Web-Zugriff");
-	window(scene, 0, 2);
+	// Three rows since the release can be given for good: here it is not, and the one of ten minutes runs
+	window(scene, 0, 3);
 	line(scene, "http://192.168.4.1");
 	line(scene, "WLAN: WiCAN-Display");
 	line(scene, "Passwort: geheim1234");
+	row(scene, SCENE_ROW_ACTION, "Dauerhaft frei", "nein", true, false);
 	row(scene, SCENE_ROW_ACTION, "Freigabe", "an – noch 9:12", true, true);
 	row(scene, SCENE_ROW_ACTION, "Zurück", "", true, false);
 }
@@ -691,7 +693,7 @@ static void list_web(scene_t *scene)
 static void list_web_begun(scene_t *scene)
 {
 	list_web(scene);
-	PUT(scene->rows[0].detail, "an – noch 10:00");
+	PUT(scene->rows[1].detail, "an – noch 10:00");
 }
 
 // Lines without a detail that are too long for one line

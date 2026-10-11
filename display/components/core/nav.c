@@ -38,7 +38,11 @@ enum
 	LIST_READ, LIST_CLEAR, LIST_BACK, LIST_ROWS,
 };
 
-#define WEB_RELEASE     0
+enum
+{
+	WEB_LASTING, WEB_RELEASE, WEB_BACK,
+};
+
 #define END_ROWS        1   // NAV_DTC_CLEARED: Fertig, NAV_DTC_OLD: Zurück
 
 // More lines than this would leave the rows behind them without a number
@@ -317,6 +321,23 @@ static nav_do_t press_settings(nav_t *nav, const nav_world_t *world)
 	return NAV_DO_NOTHING;
 }
 
+static nav_do_t press_web(nav_t *nav, const nav_world_t *world)
+{
+	switch(nav->row)
+	{
+		case WEB_LASTING:
+			return NAV_DO_WEB_OPEN_TOGGLE;
+		case WEB_RELEASE:
+			// The release that lasts is given and taken back by the row above alone: ten minutes are nothing to
+			// add to it, and the switch for them must not end it
+			if(!world->release_lasting) return world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON;
+			break;
+		case WEB_BACK:
+			return back(nav, world);
+	}
+	return NAV_DO_NOTHING;
+}
+
 // A short press on the screen itself, with nothing lying over it
 static nav_do_t press(nav_t *nav, const nav_world_t *world)
 {
@@ -355,8 +376,7 @@ static nav_do_t press(nav_t *nav, const nav_world_t *world)
 		case NAV_INFO:
 			return back(nav, world);
 		case NAV_WEB:
-			if(nav->row != WEB_RELEASE) return back(nav, world);
-			return world->release_open ? NAV_DO_RELEASE_OFF : NAV_DO_RELEASE_ON;
+			return press_web(nav, world);
 		case NAV_SETTINGS:
 			return press_settings(nav, world);
 		case NAV_CONFIRM:

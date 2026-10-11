@@ -55,7 +55,8 @@ typedef struct
 	int temp_c;                 // of the chip
 	const char *heat;           // "normal", "dim" or "off"
 	bool release_open;
-	uint32_t release_left_s;
+	uint32_t release_left_s;    // seconds until the release ends; not looked at while release_lasting
+	bool release_lasting;       // the release is the one that has no end (access.h): left_s is then written as 0
 	const char *ssid;           // network the display is in, empty if in none
 	const char *ip;
 	int rssi;
@@ -85,9 +86,13 @@ typedef struct
 // {"project":"wican-display","version":"..","git":"..","slot":"..","reset":"..","up":N,"safe_mode":B,
 //  "rolled_back":B,"update_pending":B,"heap":N,"heap_min":N,"psram":N,"psram_min":N,"heap_malloc":N,
 //  "heap_malloc_min":N,"heap_block":N,"temp_c":N,"heat":"..",
-//  "release":{"open":B,"left_s":N},"wifi":{"ssid":"..","ip":"..","rssi":N,"ap":B,"ap_ssid":".."},
+//  "release":{"open":B,"left_s":N,"lasting":B},
+//  "wifi":{"ssid":"..","ip":"..","rssi":N,"ap":B,"ap_ssid":".."},
 //  "wican":{"host":"..","id":"..","fw":"..","view":".."},"layout":{"name":"..","source":".."},
 //  "http":{"ok":N,"failed":N,"reconnects":N},"settings":{...}}
+// "left_s" is release_left_s, and 0 while release_lasting is set, whatever release_left_s holds: a release
+// that lasts has no end to count down to, and a page that reads the number must not take the 2^32-1 seconds
+// access.h answers for it for a time. "open" is release_open as it is given.
 // With a cerbo_host that is not empty, behind "wican" and before "layout":
 //  "cerbo":{"host":"..","view":"..","values":N,"ok":N,"refused":N,"connects":N,"boots":N,"lag_ms":N},
 int web_info_json(const web_info_t *info, char *out, size_t size);

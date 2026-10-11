@@ -60,7 +60,18 @@ static void address(const char *text)
 	memcpy(box.settings.cerbo, held_address, sizeof(held_address));
 }
 
-// Settings without an address of a Cerbo: the display of before
+// Whether the web interface is released for good, as the test last put it there or as the text it reads
+// next says: what a call that does not name web_open has to leave
+static bool held_open;
+
+static void web_open(bool open)
+{
+	held_open = open;
+	box.settings.web_open = open;
+}
+
+// Settings without an address of a Cerbo, the web interface released for good: the display nobody set anything
+// on but the five members
 static void set(int brightness, int night, bool night_mode, bool reverse, int standby_s)
 {
 	memset(&box, GUARD, sizeof(box));
@@ -70,6 +81,7 @@ static void set(int brightness, int night, bool night_mode, bool reverse, int st
 	box.settings.reverse = reverse;
 	box.settings.standby_s = (uint16_t)standby_s;
 	address("");
+	web_open(true);
 }
 
 // Settings in which every member differs from the defaults and the two booleans from each other
@@ -77,14 +89,15 @@ static void other(void)
 {
 	set(33, 7, true, false, 1234);
 	address("10.20.30.40");
+	web_open(false);
 }
 
-// The five members are these, and the address is the one the test put there, byte for byte
+// The five members are these, and the address and web_open are what the test put there, byte for byte
 static bool is(int brightness, int night, bool night_mode, bool reverse, int standby_s)
 {
 	return box.settings.brightness == brightness && box.settings.night == night && box.settings.night_mode == night_mode &&
 	       box.settings.reverse == reverse && box.settings.standby_s == standby_s &&
-	       memcmp(box.settings.cerbo, held_address, sizeof(held_address)) == 0 && guards_intact();
+	       memcmp(box.settings.cerbo, held_address, sizeof(held_address)) == 0 && box.settings.web_open == held_open && guards_intact();
 }
 
 // The address is this text, with nothing but zeros behind it in its field
@@ -169,11 +182,11 @@ static void test_ordinary(void)
 	set(255, 255, true, true, 65535);
 	settings_defaults(&box.settings);
 	check(is(80, 25, false, false, 60), "ordinary input: defaults");
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 78 &&
-	      strcmp(out, "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}") == 0, "ordinary input: the defaults as text");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 94 &&
+	      strcmp(out, "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":true}") == 0, "ordinary input: the defaults as text");
 	set(100, 100, true, true, 3600);
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 80 &&
-	      strcmp(out, "{\"brightness\":100,\"night\":100,\"night_mode\":true,\"reverse\":true,\"standby_s\":3600}") == 0, "ordinary input: the largest settings as text");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 96 &&
+	      strcmp(out, "{\"brightness\":100,\"night\":100,\"night_mode\":true,\"reverse\":true,\"standby_s\":3600,\"web_open\":true}") == 0, "ordinary input: the largest settings as text");
 	check(settings_to_json(&box.settings, out, 40) == -1 && out[0] == '\0', "ordinary input: a room that is too small for the text");
 	other();
 	check(take("{\"later\":{\"a\":[1,2]},\"brightness\":40,\"night\":10,\"night_mode\":false,\"reverse\":true,\"standby_s\":300,\"language\":\"de\"}") &&
@@ -185,9 +198,11 @@ static void test_ordinary(void)
 	check(settings_is_address("192.168.88.2") && !settings_is_address("192.168.88") && !settings_is_address("") && !settings_is_address(NULL),
 	      "ordinary input: an address, three numbers, no text and no pointer");
 	other();
-	check(take("{\"cerbo\":\"192.168.88.2\"}") && address_is("192.168.88.2") && settings_to_json(&box.settings, out, sizeof(out)) == 101 &&
-	      strcmp(out, "{\"brightness\":33,\"night\":7,\"night_mode\":true,\"reverse\":false,\"standby_s\":1234,\"cerbo\":\"192.168.88.2\"}") == 0,
+	check(take("{\"cerbo\":\"192.168.88.2\"}") && address_is("192.168.88.2") && settings_to_json(&box.settings, out, sizeof(out)) == 118 &&
+	      strcmp(out, "{\"brightness\":33,\"night\":7,\"night_mode\":true,\"reverse\":false,\"standby_s\":1234,\"cerbo\":\"192.168.88.2\",\"web_open\":false}") == 0,
 	      "ordinary input: the address of a Cerbo is read and written");
+	check(take("{\"web_open\":true}") && box.settings.web_open && !take("{\"web_open\":1}") && strcmp(bad, "web_open") == 0,
+	      "ordinary input: web_open is read, and refused where it is no boolean");
 }
 
 static void test_constants(void)
@@ -258,17 +273,17 @@ static void test_defaults(void)
 	check(address_is(""), "defaults: nothing is left behind the zero of a field that began with one");
 }
 
-// A text of settings written a second time, with printf
+// A text of settings written a second time, with printf: those of set(), the web interface released for good
 static void expected_text(char *to, size_t size, int brightness, int night, bool night_mode, bool reverse, int standby_s)
 {
-	snprintf(to, size, "{\"brightness\":%d,\"night\":%d,\"night_mode\":%s,\"reverse\":%s,\"standby_s\":%d}",
+	snprintf(to, size, "{\"brightness\":%d,\"night\":%d,\"night_mode\":%s,\"reverse\":%s,\"standby_s\":%d,\"web_open\":true}",
 	         brightness, night, night_mode ? "true" : "false", reverse ? "true" : "false", standby_s);
 }
 
 static void test_to_json(void)
 {
-	static const char stored[] = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}";
-	static const char longest[] = "{\"brightness\":255,\"night\":255,\"night_mode\":false,\"reverse\":false,\"standby_s\":65535}";
+	static const char stored[] = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":true}";
+	static const char longest[] = "{\"brightness\":255,\"night\":255,\"night_mode\":false,\"reverse\":false,\"standby_s\":65535,\"web_open\":false}";
 	// The text between guard bytes, 16 of them behind the largest room that is tried
 	unsigned char room[SETTINGS_JSON_SIZE + 16];
 	char out[SETTINGS_JSON_SIZE];
@@ -279,41 +294,42 @@ static void test_to_json(void)
 	int value, count;
 
 	settings_defaults(&box.settings);
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 78 && strcmp(out, stored) == 0,
-	      "to_json: the defaults give the text of the header, 78 bytes");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 94 && strcmp(out, stored) == 0,
+	      "to_json: the defaults give the text of the header, 94 bytes");
 	check(read_fixture("fixtures/settings_defaults.json", fixture, sizeof(fixture)) && strcmp(out, fixture) == 0,
 	      "to_json: the defaults give the fixture, byte for byte");
 
 	set(5, 100, true, true, 0);
 	remember();
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 75 && read_fixture("fixtures/settings_night.json", fixture, sizeof(fixture)) &&
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 91 && read_fixture("fixtures/settings_night.json", fixture, sizeof(fixture)) &&
 	      strcmp(out, fixture) == 0, "to_json: the smallest brightness, night mode, reversed knob, no standby give the fixture");
 	check(unchanged(), "to_json: the settings are only read");
 
 	set(80, 25, true, false, 60);
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 77 &&
-	      strcmp(out, "{\"brightness\":80,\"night\":25,\"night_mode\":true,\"reverse\":false,\"standby_s\":60}") == 0,
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 93 &&
+	      strcmp(out, "{\"brightness\":80,\"night\":25,\"night_mode\":true,\"reverse\":false,\"standby_s\":60,\"web_open\":true}") == 0,
 	      "to_json: night mode alone is true under its own name");
 	set(80, 25, false, true, 60);
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 77 &&
-	      strcmp(out, "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60}") == 0,
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 93 &&
+	      strcmp(out, "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60,\"web_open\":true}") == 0,
 	      "to_json: the reversed knob alone is true under its own name");
 	set(41, 9, false, false, 3600);
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 79 &&
-	      strcmp(out, "{\"brightness\":41,\"night\":9,\"night_mode\":false,\"reverse\":false,\"standby_s\":3600}") == 0,
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 95 &&
+	      strcmp(out, "{\"brightness\":41,\"night\":9,\"night_mode\":false,\"reverse\":false,\"standby_s\":3600,\"web_open\":true}") == 0,
 	      "to_json: brightness and night stand under their own names, 3600 s are written completely");
 	set(100, 100, false, false, 1000);
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 82 &&
-	      strcmp(out, "{\"brightness\":100,\"night\":100,\"night_mode\":false,\"reverse\":false,\"standby_s\":1000}") == 0,
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 98 &&
+	      strcmp(out, "{\"brightness\":100,\"night\":100,\"night_mode\":false,\"reverse\":false,\"standby_s\":1000,\"web_open\":true}") == 0,
 	      "to_json: numbers that end in zeros keep them");
 
 	// What a settings_t can hold at most
 	set(255, 255, false, false, 65535);
-	check(strlen(longest) == 83 && read_fixture("fixtures/settings_longest.json", fixture, sizeof(fixture)) && strcmp(longest, fixture) == 0,
-	      "the longest text has 83 bytes and is the fixture");
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 83 && strcmp(out, longest) == 0,
+	web_open(false);
+	check(strlen(longest) == 100 && read_fixture("fixtures/settings_longest.json", fixture, sizeof(fixture)) && strcmp(longest, fixture) == 0,
+	      "the longest text has 100 bytes and is the fixture");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 100 && strcmp(out, longest) == 0,
 	      "to_json: the largest numbers and the longer of the two words give the longest text");
-	check(SETTINGS_JSON_SIZE >= 83 + 1, "SETTINGS_JSON_SIZE is enough for the longest text and its zero");
+	check(SETTINGS_JSON_SIZE >= 100 + 1, "SETTINGS_JSON_SIZE is enough for the longest text and its zero");
 
 	// Every room from none to more than enough
 	fits = true;
@@ -325,9 +341,9 @@ static void test_to_json(void)
 
 		memset(room, GUARD, sizeof(room));
 		length = settings_to_json(&box.settings, (char *)room, size);
-		if(size >= 84)
+		if(size >= 101)
 		{
-			if(length != 83 || memcmp(room, longest, 84) != 0) fits = false;
+			if(length != 100 || memcmp(room, longest, 101) != 0) fits = false;
 		}
 		else if(length != -1 || (size > 0 && room[0] != '\0')) empty = false;
 
@@ -336,20 +352,20 @@ static void test_to_json(void)
 			if(room[i] != GUARD) behind = false;
 		}
 	}
-	check(fits, "to_json: with 84 bytes and more the text of 83 bytes is written with its zero and its length returned");
-	check(empty, "to_json: with every room below 84 bytes the answer is -1 and an empty string");
+	check(fits, "to_json: with 101 bytes and more the text of 100 bytes is written with its zero and its length returned");
+	check(empty, "to_json: with every room below 101 bytes the answer is -1 and an empty string");
 	check(behind, "to_json: nothing is written behind the room, with size 0 nothing at all");
 	memset(room, GUARD, sizeof(room));
-	check(settings_to_json(&box.settings, (char *)room, 83) == -1 && room[0] == '\0' && room[83] == GUARD,
+	check(settings_to_json(&box.settings, (char *)room, 100) == -1 && room[0] == '\0' && room[100] == GUARD,
 	      "to_json: one byte too few for the zero is too few");
 	memset(long_text, GUARD, sizeof(long_text));
-	check(settings_to_json(&box.settings, long_text, sizeof(long_text)) == 83 && memcmp(long_text, longest, 84) == 0,
+	check(settings_to_json(&box.settings, long_text, sizeof(long_text)) == 100 && memcmp(long_text, longest, 101) == 0,
 	      "to_json: a room of 8192 bytes holds the same text with its zero");
 	memset(huge_text, GUARD, sizeof(huge_text));
-	check(settings_to_json(&box.settings, huge_text, 65536) == 83 && memcmp(huge_text, longest, 84) == 0 && (unsigned char)huge_text[65536] == GUARD,
+	check(settings_to_json(&box.settings, huge_text, 65536) == 100 && memcmp(huge_text, longest, 101) == 0 && (unsigned char)huge_text[65536] == GUARD,
 	      "to_json: a room of 65536 bytes holds the same text with its zero");
 	memset(huge_text, GUARD, sizeof(huge_text));
-	check(settings_to_json(&box.settings, huge_text, 69999) == 83 && memcmp(huge_text, longest, 84) == 0 && (unsigned char)huge_text[69999] == GUARD,
+	check(settings_to_json(&box.settings, huge_text, 69999) == 100 && memcmp(huge_text, longest, 101) == 0 && (unsigned char)huge_text[69999] == GUARD,
 	      "to_json: a room of 69999 bytes holds the same text with its zero");
 
 	// Every number a member can hold
@@ -387,7 +403,8 @@ static void test_to_json(void)
 	settings_defaults(&box.settings);
 	settings_to_json(&box.settings, out, sizeof(out));
 	count = json_parse(out, strlen(out), large_work, 256);
-	check(count == 11 && large_work[0].type == JSON_OBJECT && large_work[0].size == 5, "to_json: the text is a JSON object of five members, 11 tokens");
+	check(count == 13 && large_work[0].type == JSON_OBJECT && large_work[0].size == 6 && json_text_is(out, &large_work[11], "web_open") &&
+	      large_work[12].type == JSON_TRUE, "to_json: the text is a JSON object of six members, 13 tokens, web_open the last of them");
 	check(strchr(out, ' ') == NULL && strchr(out, '\n') == NULL, "to_json: the text has no whitespace");
 }
 
@@ -426,14 +443,18 @@ static void test_from_json_members(void)
 	check(taken("{\"brightness\":40,\"night\":10,\"night_mode\":false,\"reverse\":true,\"standby_s\":300}", 40, 10, false, true, 300),
 	      "from_json: a text with every member sets every member");
 	other();
+	// The two stored texts name web_open, as true
+	held_open = true;
 	check(read_fixture("fixtures/settings_defaults.json", fixture, sizeof(fixture)) && take(fixture) && is(80, 25, false, false, 60),
 	      "from_json: the stored text of the header gives the defaults");
 	other();
+	held_open = true;
 	check(read_fixture("fixtures/settings_night.json", fixture, sizeof(fixture)) && take(fixture) && is(5, 100, true, true, 0),
 	      "from_json: the fixture with night mode is read");
 	settings_defaults(&box.settings);
-	// The defaults hold no address, and the text names none
+	// The defaults hold no address and the web interface released for good, and the text names neither
 	address("");
+	held_open = true;
 	check(read_fixture("fixtures/settings_from_browser.json", fixture, sizeof(fixture)) && take(fixture) && is(40, 10, true, true, 300) && bad[0] == '\0',
 	      "from_json: a text with whitespace, line breaks and a member of a later firmware is read");
 
@@ -1420,9 +1441,9 @@ static void test_from_json_address(void)
 
 static void test_to_json_address(void)
 {
-	static const char stored[] = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}";
-	static const char with_cerbo[] = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"192.168.88.2\"}";
-	static const char longest[] = "{\"brightness\":255,\"night\":255,\"night_mode\":false,\"reverse\":false,\"standby_s\":65535,\"cerbo\":\"255.255.255.255\"}";
+	static const char stored[] = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":true}";
+	static const char with_cerbo[] = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"192.168.88.2\",\"web_open\":true}";
+	static const char longest[] = "{\"brightness\":255,\"night\":255,\"night_mode\":false,\"reverse\":false,\"standby_s\":65535,\"cerbo\":\"255.255.255.255\",\"web_open\":false}";
 	static const struct
 	{
 		const char *field;      // the 16 bytes of the field
@@ -1450,35 +1471,36 @@ static void test_to_json_address(void)
 	settings_defaults(&box.settings);
 	address("192.168.88.2");
 	remember();
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 101 && strcmp(out, with_cerbo) == 0,
-	      "to_json: the defaults with the address of a Cerbo give the second text of the header, 101 bytes: the sixth member behind the five");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 117 && strcmp(out, with_cerbo) == 0,
+	      "to_json: the defaults with the address of a Cerbo give the second text of the header, 117 bytes: the address behind the five, web_open behind it");
 	check(read_fixture("fixtures/settings_cerbo.json", fixture, sizeof(fixture)) && strcmp(out, fixture) == 0, "to_json: the defaults with an address give the fixture, byte for byte");
 	check(unchanged(), "to_json: settings with an address are only read");
 	address("");
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 78 && strcmp(out, stored) == 0 && strstr(out, "cerbo") == NULL,
-	      "to_json: without an address the text is the one of five members, byte for byte: the sixth is not written, not as an empty one either");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 94 && strcmp(out, stored) == 0 && strstr(out, "cerbo") == NULL,
+	      "to_json: without an address the text is the first one of the header, byte for byte: the address is not written, not as an empty one either");
 	address("1.2.3.4");
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 96 &&
-	      strcmp(out, "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"1.2.3.4\"}") == 0,
-	      "to_json: a short address is written whole and nothing behind it");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 112 &&
+	      strcmp(out, "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"cerbo\":\"1.2.3.4\",\"web_open\":true}") == 0,
+	      "to_json: a short address is written whole and nothing behind it but web_open");
 	address("0.0.0.0");
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 96 && strstr(out, ",\"cerbo\":\"0.0.0.0\"}") != NULL, "to_json: 0.0.0.0 is written as an address");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 112 && strstr(out, ",\"cerbo\":\"0.0.0.0\",\"web_open\":true}") != NULL, "to_json: 0.0.0.0 is written as an address");
 
 	// What does not come from settings_from_json(): only an address is ever written
 	for(i = 0; i < sizeof(none) / sizeof(none[0]); i++)
 	{
 		settings_defaults(&box.settings);
 		memcpy(box.settings.cerbo, none[i].field, SETTINGS_CERBO_SIZE);
-		check(settings_to_json(&box.settings, out, sizeof(out)) == 78 && strcmp(out, stored) == 0 && guards_intact(), none[i].what);
+		check(settings_to_json(&box.settings, out, sizeof(out)) == 94 && strcmp(out, stored) == 0 && guards_intact(), none[i].what);
 	}
 
 	// The longest text there is
 	set(255, 255, false, false, 65535);
 	address("255.255.255.255");
-	check(strlen(longest) == 109 && read_fixture("fixtures/settings_longest_cerbo.json", fixture, sizeof(fixture)) && strcmp(longest, fixture) == 0,
-	      "the longest text with an address has 109 bytes and is the fixture");
-	check(settings_to_json(&box.settings, out, sizeof(out)) == 109 && strcmp(out, longest) == 0, "to_json: the largest numbers and the longest address give the longest text");
-	check(SETTINGS_JSON_SIZE >= 109 + 1, "SETTINGS_JSON_SIZE is enough for the longest text with an address and its zero");
+	web_open(false);
+	check(strlen(longest) == 126 && read_fixture("fixtures/settings_longest_cerbo.json", fixture, sizeof(fixture)) && strcmp(longest, fixture) == 0,
+	      "the longest text with an address has 126 bytes and is the fixture");
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 126 && strcmp(out, longest) == 0, "to_json: the largest numbers, the longest address and the longer of the two words give the longest text");
+	check(SETTINGS_JSON_SIZE >= 126 + 1, "SETTINGS_JSON_SIZE is enough for the longest text with an address and its zero");
 	fits = true;
 	empty = true;
 	behind = true;
@@ -1488,9 +1510,9 @@ static void test_to_json_address(void)
 
 		memset(room, GUARD, sizeof(room));
 		length = settings_to_json(&box.settings, (char *)room, size);
-		if(size >= 110)
+		if(size >= 127)
 		{
-			if(length != 109 || memcmp(room, longest, 110) != 0) fits = false;
+			if(length != 126 || memcmp(room, longest, 127) != 0) fits = false;
 		}
 		else if(length != -1 || (size > 0 && room[0] != '\0')) empty = false;
 
@@ -1499,8 +1521,8 @@ static void test_to_json_address(void)
 			if(room[i] != GUARD) behind = false;
 		}
 	}
-	check(fits, "to_json: with 110 bytes and more the text of 109 bytes is written with its zero and its length returned");
-	check(empty, "to_json: with every room below 110 bytes the answer is -1 and an empty string, also where the five members alone would fit");
+	check(fits, "to_json: with 127 bytes and more the text of 126 bytes is written with its zero and its length returned");
+	check(empty, "to_json: with every room below 127 bytes the answer is -1 and an empty string, also where the text without the address would fit");
 	check(behind, "to_json: nothing is written behind the room of a text with an address");
 
 	// The reader of the project agrees that it is JSON
@@ -1508,8 +1530,9 @@ static void test_to_json_address(void)
 	address("192.168.88.2");
 	settings_to_json(&box.settings, out, sizeof(out));
 	count = json_parse(out, strlen(out), large_work, 256);
-	check(count == 13 && large_work[0].type == JSON_OBJECT && large_work[0].size == 6 && json_text_is(out, &large_work[12], "192.168.88.2"),
-	      "to_json: the text with an address is a JSON object of six members, 13 tokens, the address the last of them");
+	check(count == 15 && large_work[0].type == JSON_OBJECT && large_work[0].size == 7 && json_text_is(out, &large_work[12], "192.168.88.2") &&
+	      json_text_is(out, &large_work[13], "web_open") && large_work[14].type == JSON_TRUE,
+	      "to_json: the text with an address is a JSON object of seven members, 15 tokens, the address the sixth of them and web_open the last");
 	check(strchr(out, ' ') == NULL && strchr(out, '\n') == NULL, "to_json: the text with an address has no whitespace");
 }
 
@@ -1548,6 +1571,194 @@ static void test_round_trip_address(void)
 		}
 	}
 	check(all, "round trip: 1764 settings with and without an address are written and read back unchanged - a text without an address leaves the one that was there");
+}
+
+/* The web interface released for good ------------------------------------------------------------------- */
+
+// From the other settings with web_open `before`: the text is taken, web_open is `after`, nothing else changed
+static bool open_taken(const char *json, bool before, bool after)
+{
+	other();
+	web_open(before);
+	held_open = after;
+	return take(json) && is(33, 7, true, false, 1234) && bad[0] == '\0';
+}
+
+static void test_web_open(void)
+{
+	static const char closed[] = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60,\"web_open\":false}";
+	static const char older[] = "{\"brightness\":80,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}";
+	static const struct
+	{
+		const char *json;
+		const char *what;
+	} wrong[] = {
+		{"{\"web_open\":0}", "web_open 0: refused"},
+		{"{\"web_open\":1}", "web_open 1: refused"},
+		{"{\"web_open\":\"true\"}", "web_open as the text true: refused"},
+		{"{\"web_open\":\"false\"}", "web_open as the text false: refused"},
+		{"{\"web_open\":\"\"}", "web_open as an empty text: refused"},
+		{"{\"web_open\":null}", "web_open null: refused"},
+		{"{\"web_open\":[true]}", "web_open as an array: refused"},
+		{"{\"web_open\":{}}", "web_open as an object: refused"},
+		{"{\"web_open\":1.0}", "web_open with a fraction: refused"},
+		{"{\"brightness\":50,\"web_open\":0,\"night\":0}", "web_open and night bad, web_open first: web_open is named"},
+	};
+	char out[SETTINGS_JSON_SIZE];
+	char fixture[256];
+	bool all = true;
+	size_t i;
+	int count, flags;
+
+	// The default
+	set(255, 255, true, true, 65535);
+	web_open(false);
+	settings_defaults(&box.settings);
+	check(box.settings.web_open && guards_intact(), "defaults: the web interface is released for good, from settings in which it was not");
+	memset(&box.settings, 0, sizeof(box.settings));
+	settings_defaults(&box.settings);
+	check(box.settings.web_open && guards_intact(), "defaults: the web interface is released for good, from settings that were zero in every byte");
+
+	// Written: in every text, as its last member
+	settings_defaults(&box.settings);
+	box.settings.web_open = false;
+	remember();
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 95 && strcmp(out, closed) == 0 && unchanged(),
+	      "to_json: the defaults with the web interface not released for good: web_open false as the last member, 95 bytes");
+	check(read_fixture("fixtures/settings_web_closed.json", fixture, sizeof(fixture)) && strcmp(out, fixture) == 0, "to_json: that text is the fixture, byte for byte");
+	count = json_parse(out, strlen(out), large_work, 256);
+	check(count == 13 && large_work[0].size == 6 && json_text_is(out, &large_work[11], "web_open") && large_work[12].type == JSON_FALSE,
+	      "to_json: the text with web_open false is a JSON object of six members, the last of them web_open, a boolean");
+	other();
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 117 &&
+	      strcmp(out, "{\"brightness\":33,\"night\":7,\"night_mode\":true,\"reverse\":false,\"standby_s\":1234,\"cerbo\":\"10.20.30.40\",\"web_open\":false}") == 0,
+	      "to_json: web_open false stands behind the address of a Cerbo, 117 bytes");
+	web_open(true);
+	check(settings_to_json(&box.settings, out, sizeof(out)) == 116 &&
+	      strcmp(out, "{\"brightness\":33,\"night\":7,\"night_mode\":true,\"reverse\":false,\"standby_s\":1234,\"cerbo\":\"10.20.30.40\",\"web_open\":true}") == 0,
+	      "to_json: web_open true stands behind the address of a Cerbo, 116 bytes");
+
+	// Read: a boolean like the two others
+	check(open_taken("{\"web_open\":true}", false, true) && open_taken("{\"web_open\":false}", true, false),
+	      "from_json: web_open alone changes only web_open, to true and to false");
+	check(open_taken("{\"web_open\":true}", true, true) && open_taken("{\"web_open\":false}", false, false), "from_json: web_open with the value it has is taken and changes nothing");
+	check(open_taken("{}", true, true) && open_taken("{}", false, false) && open_taken("{\"later\":1}", true, true) && open_taken("{\"later\":1}", false, false),
+	      "from_json: a text that does not name web_open leaves it as it was, true or false");
+	check(open_taken("{\"web_open\":false,\"web_open\":true}", false, true) && open_taken("{\"web_open\":true,\"web_open\":false}", true, false),
+	      "from_json: of two web_open members the last counts");
+	check(open_taken(" {\n\t\"web_open\" :\r\n true } ", false, true), "from_json: whitespace around web_open is allowed");
+	check(open_taken("{\"web\\u005fopen\":true}", false, true), "from_json: web_open written with an escape is that member");
+	check(open_taken("{\"web_ope\":true,\"web_open2\":true,\"Web_Open\":true,\"webopen\":true,\"web_open \":true,\"WEB_OPEN\":true,\"open\":true,\"web\":true}", false, false) &&
+	      open_taken("{\"web_ope\":0,\"web_open2\":0,\"Web_Open\":0,\"webopen\":0,\"web_open \":0,\"WEB_OPEN\":0,\"open\":0,\"web\":0}", true, true),
+	      "from_json: names that only look like web_open are unknown");
+	check(open_taken("{\"later\":{\"web_open\":true},\"list\":[{\"web_open\":true}]}", false, false), "from_json: a web_open inside an unknown member is not the member");
+	other();
+	held_open = true;
+	check(take("{\"web_open\":true,\"brightness\":50,\"night\":51,\"night_mode\":false,\"reverse\":true,\"standby_s\":52}") && is(50, 51, false, true, 52),
+	      "from_json: web_open before the five members: all six are read");
+	other();
+	held_open = true;
+	check(take("{\"brightness\":50,\"night\":51,\"night_mode\":false,\"web_open\":true,\"reverse\":true,\"standby_s\":52}") && is(50, 51, false, true, 52),
+	      "from_json: web_open between the five members: all six are read");
+	other();
+	held_open = true;
+	check(take("{\"cerbo\":\"192.168.88.2\",\"web_open\":true}") && address_is("192.168.88.2") && box.settings.web_open,
+	      "from_json: web_open behind the address of a Cerbo: both are read");
+	other();
+	check(take("{\"night_mode\":false,\"reverse\":true}") && is(33, 7, false, true, 1234), "from_json: the two other booleans do not change web_open");
+
+	for(i = 0; i < sizeof(wrong) / sizeof(wrong[0]); i++) check(refused(wrong[i].json, "web_open"), wrong[i].what);
+	check(refused("{\"web_open\":0,\"web_open\":true}", "web_open") && refused("{\"web_open\":true,\"web_open\":0}", "web_open"),
+	      "from_json: a web_open that is no boolean is not healed by a good one before or behind it");
+	check(refused("{\"brightness\":0,\"web_open\":1}", "brightness"), "from_json: brightness and web_open bad, brightness first: brightness is named");
+	check(refused("{\"web_open\":true,\"standby_s\":3601}", "standby_s") && refused("{\"web_open\":true,\"cerbo\":\"einstein\"}", "cerbo"),
+	      "from_json: a good web_open before a bad member: web_open is not taken either");
+	other();
+	web_open(true);
+	remember();
+	check(!take("{\"web_open\":false,\"night\":0}") && unchanged() && strcmp(bad, "night") == 0, "from_json: web_open false before a bad member leaves the web interface released");
+
+	// What is stored: the text of a firmware that did not know the member, read into the defaults as the app does
+	set(1, 1, true, true, 1);
+	settings_defaults(&box.settings);
+	address("");
+	held_open = true;
+	check(read_fixture("fixtures/settings_before_web_open.json", fixture, sizeof(fixture)) && strcmp(fixture, older) == 0 && strlen(older) == 78 &&
+	      take(fixture) && is(80, 25, false, false, 60) && box.settings.web_open,
+	      "from_json: the text a firmware without the member stored, read into the defaults: the web interface is released for good");
+	settings_defaults(&box.settings);
+	check(take("{\"brightness\":40,\"night\":10,\"night_mode\":true,\"reverse\":true,\"standby_s\":300}") && is(40, 10, true, true, 300) && box.settings.web_open,
+	      "from_json: another text without the member, read into the defaults: its five members, and the web interface released for good");
+	settings_defaults(&box.settings);
+	held_open = false;
+	check(read_fixture("fixtures/settings_web_closed.json", fixture, sizeof(fixture)) && take(fixture) && is(80, 25, false, false, 60) && !box.settings.web_open,
+	      "from_json: the stored text with web_open false, read into the defaults: the web interface is not released for good");
+
+	// Written and read back, into settings that say the opposite
+	for(flags = 0; flags < 16; flags++)
+	{
+		bool open = (flags & 1) != 0;
+
+		set(5 + flags, 100 - flags, (flags & 2) != 0, (flags & 4) != 0, 60 * flags);
+		if(flags & 8) address("192.168.88.2");
+		web_open(open);
+		if(settings_to_json(&box.settings, out, sizeof(out)) < 0 || strstr(out, open ? ",\"web_open\":true}" : ",\"web_open\":false}") == NULL) all = false;
+		set(50, 50, (flags & 2) == 0, (flags & 4) == 0, 7);
+		if(flags & 8) address("192.168.88.2");
+		web_open(!open);
+		held_open = open;
+		if(!take(out) || !is(5 + flags, 100 - flags, (flags & 2) != 0, (flags & 4) != 0, 60 * flags)) all = false;
+	}
+	check(all, "round trip: 16 settings with web_open true and false, with and without an address, are written with web_open as the last member and read back unchanged");
+}
+
+/*
+ * Every byte of the settings. settings_t has a gap - a byte that belongs to no member, behind web_open, since
+ * that member came - and the app holds its settings between two tellings of one story that are compared byte
+ * for byte (test_app.c). A text that is taken must leave in the gap what lay there, whatever lies on the
+ * stack while it is read.
+ */
+static void test_every_byte(void)
+{
+	static const char json[] = "{\"brightness\":41,\"night\":9,\"night_mode\":false,\"reverse\":true,\"standby_s\":300,\"cerbo\":\"1.2.3.4\",\"web_open\":true}";
+	static const unsigned char dirt[] = {0x00, 0x5a, 0xff};
+	static box_t wanted;
+	size_t members = sizeof(box.settings.brightness) + sizeof(box.settings.night) + sizeof(box.settings.night_mode) + sizeof(box.settings.reverse) +
+	                 sizeof(box.settings.standby_s) + sizeof(box.settings.cerbo) + sizeof(box.settings.web_open);
+	size_t length = strlen(json);
+	bool read = true, same = true, kept = true;
+	size_t i;
+
+	check(sizeof(settings_t) > members, "settings_t is larger than its members together: it has a gap, and the checks below look at it");
+
+	for(i = 0; i < sizeof(dirt) / sizeof(dirt[0]); i++)
+	{
+		// The settings before: every member another one than the text names, the gap holds the guard byte
+		other();
+		memcpy(&wanted, &box, sizeof(box));
+		wanted.settings.brightness = 41;
+		wanted.settings.night = 9;
+		wanted.settings.night_mode = false;
+		wanted.settings.reverse = true;
+		wanted.settings.standby_s = 300;
+		memset(wanted.settings.cerbo, 0, sizeof(wanted.settings.cerbo));
+		memcpy(wanted.settings.cerbo, "1.2.3.4", 7);
+		wanted.settings.web_open = true;
+		// Nothing between the two calls: what is called in between would write over the fill
+		dirty_stack(dirt[i]);
+		if(!settings_from_json(&box.settings, json, length, NULL, 0, work, SETTINGS_TOKENS)) read = false;
+		if(memcmp(&wanted, &box, sizeof(box)) != 0) same = false;
+
+		// ... and settings that were zero in every byte, as the app has them before its first text
+		memset(&box.settings, 0, sizeof(box.settings));
+		memset(&wanted.settings, 0, sizeof(wanted.settings));
+		wanted.settings.standby_s = 7;
+		dirty_stack(dirt[i]);
+		if(!settings_from_json(&box.settings, "{\"standby_s\":7}", 15, NULL, 0, work, SETTINGS_TOKENS)) read = false;
+		if(memcmp(&wanted, &box, sizeof(box)) != 0) kept = false;
+	}
+	check(read && same, "a text read over three different bytes on the stack: the members it names, and every other byte of the settings as it was - the gap behind the last member as well");
+	check(read && kept, "a text read into settings of zeros over three different bytes on the stack: zero in every byte but the member it names");
 }
 
 static void test_backlight(void)
@@ -1758,7 +1969,8 @@ static void test_backlight(void)
 
 typedef struct
 {
-	int name;           // 0 to 4 the known ones in the order of the header, 5 an unknown one, 6 the address of the Cerbo
+	int name;           // 0 to 4 the known ones in the order of the header, 5 an unknown one, 6 the address of the Cerbo,
+	                    // 7 web_open
 	bool good;
 	int number;         // of a good number
 	bool flag;          // of a good boolean
@@ -1767,6 +1979,12 @@ typedef struct
 
 static const char *const known[5] = {"brightness", "night", "night_mode", "reverse", "standby_s"};
 static uint32_t random_state;
+
+// The name of a listed member that is not an unknown one
+static const char *name_of(int name)
+{
+	return name == 6 ? "cerbo" : name == 7 ? "web_open" : known[name];
+}
 
 /*
  * Never two rolls among the arguments of one call: C leaves open which argument is worked out first, gcc
@@ -1818,7 +2036,7 @@ static void write_value(char *to, size_t size, listed_t *entry)
 		if(entry->good) snprintf(to, size, "\"%s\"", entry->address);
 		else snprintf(to, size, "%s", wrong_address[rnd(12)]);
 	}
-	else if(entry->name == 2 || entry->name == 3)
+	else if(entry->name == 2 || entry->name == 3 || entry->name == 7)
 	{
 		entry->good = pick < 7;
 		entry->flag = rnd(2) == 1;
@@ -1842,8 +2060,10 @@ static void write_value(char *to, size_t size, listed_t *entry)
 }
 
 static int seen_taken, seen_member, seen_whole, seen_twice, seen_unknown, seen_addresses, seen_no_address, seen_bad_address;
+static int seen_opened, seen_closed, seen_bad_open;
 
-// names: 6 for texts of the five members and unknown ones, 7 for texts that name the address of the Cerbo as well
+// names: 6 for texts of the five members and unknown ones, 7 for texts that name the address of the Cerbo as well,
+// 8 for texts that name web_open, too
 static bool model_walk(uint32_t seed, int steps, int names)
 {
 	listed_t list[LIST_MAX];
@@ -1882,7 +2102,7 @@ static bool model_walk(uint32_t seed, int steps, int names)
 				const char *before = rnd(5) == 0 ? "\n" : "";
 
 				length += (size_t)snprintf(text + length, sizeof(text) - length, "%s%s\"%s\"%s:%s", i ? "," : "", before,
-				                           list[i].name == 6 ? "cerbo" : known[list[i].name], behind, value);
+				                           name_of(list[i].name), behind, value);
 			}
 		}
 		// A text that is no JSON object at all, in three ways
@@ -1903,8 +2123,9 @@ static bool model_walk(uint32_t seed, int steps, int names)
 				if(list[i].name != 5 && !list[i].good)
 				{
 					expected = false;
-					expected_bad = list[i].name == 6 ? "cerbo" : known[list[i].name];
+					expected_bad = name_of(list[i].name);
 					if(list[i].name == 6) seen_bad_address++;
+					if(list[i].name == 7) seen_bad_open++;
 				}
 			}
 		}
@@ -1936,6 +2157,16 @@ static bool model_walk(uint32_t seed, int steps, int names)
 				else seen_no_address++;
 				break;
 			}
+			// web_open: the last one named
+			for(i = count - 1; i >= 0; i--)
+			{
+				if(list[i].name != 7) continue;
+
+				if(list[i].flag && !model.web_open) seen_opened++;
+				if(!list[i].flag && model.web_open) seen_closed++;
+				model.web_open = list[i].flag;
+				break;
+			}
 			seen_taken++;
 		}
 		else if(broken) seen_whole++;
@@ -1944,14 +2175,15 @@ static bool model_walk(uint32_t seed, int steps, int names)
 		remember();
 		strcpy(bad, UNTOLD);
 		result = settings_from_json(&box.settings, text, length, bad, sizeof(bad), large_work, 256);
-		// The address the settings have to hold now, byte for byte
+		// The address the settings have to hold now, byte for byte, and web_open
 		memcpy(held_address, model.cerbo, sizeof(held_address));
+		held_open = model.web_open;
 		if(result != expected || strcmp(bad, expected_bad) != 0 || (!expected && !unchanged()) ||
 		   !is(model.brightness, model.night, model.night_mode, model.reverse, model.standby_s))
 		{
-			printf("  seed %lu, step %d: %s\n  module %d \"%s\" %d %d %d %d %d \"%.15s\"\n  model  %d \"%s\" %d %d %d %d %d \"%.15s\"\n", (unsigned long)seed, step, text,
+			printf("  seed %lu, step %d: %s\n  module %d \"%s\" %d %d %d %d %d \"%.15s\" %d\n  model  %d \"%s\" %d %d %d %d %d \"%.15s\" %d\n", (unsigned long)seed, step, text,
 			       result, bad, box.settings.brightness, box.settings.night, box.settings.night_mode, box.settings.reverse, box.settings.standby_s, box.settings.cerbo,
-			       expected, expected_bad, model.brightness, model.night, model.night_mode, model.reverse, model.standby_s, model.cerbo);
+			       box.settings.web_open, expected, expected_bad, model.brightness, model.night, model.night_mode, model.reverse, model.standby_s, model.cerbo, model.web_open);
 			return false;
 		}
 	}
@@ -1983,6 +2215,17 @@ static void test_model(void)
 	printf("  with the address: an address taken %d times, taken away %d times, a bad one the first bad member %d times\n", seen_addresses, seen_no_address, seen_bad_address);
 	check(seen_addresses > 1000 && seen_no_address > 300 && seen_bad_address > 1000,
 	      "model: these 20 walks contain texts that set an address, that take it away and that are refused for it");
+	check(seen_opened == 0 && seen_closed == 0 && seen_bad_open == 0, "model: none of these 60 walks names web_open: it stays false, as it was, in every one of them");
+
+	// The same with web_open among the names
+	for(seed = 61; seed <= 80; seed++)
+	{
+		snprintf(what, sizeof(what), "model: 1000 random texts that name web_open as well, seed %lu, are taken or refused as the rules say", (unsigned long)seed);
+		check(model_walk(seed, 1000, 8), what);
+	}
+	printf("  with web_open: released for good %d times, taken back %d times, a bad one the first bad member %d times\n", seen_opened, seen_closed, seen_bad_open);
+	check(seen_opened > 200 && seen_closed > 200 && seen_bad_open > 1000,
+	      "model: these 20 walks contain texts that release the web interface for good, that take that back and that are refused for web_open");
 }
 
 int main(void)
@@ -2005,12 +2248,14 @@ int main(void)
 	test_from_json_address();
 	test_to_json_address();
 	test_round_trip_address();
+	test_web_open();
+	test_every_byte();
 	in_child(test_bad, "the name of the bad member in every room: no crash");
 	in_child(test_null, "calls without a buffer for the name or the text: no crash");
 	test_tokens();
 	test_round_trip();
 	test_backlight();
-	in_child(test_model, "model: 60 walks of 1000 random texts each: no crash, no hang");
+	in_child(test_model, "model: 80 walks of 1000 random texts each: no crash, no hang");
 
 	check(work[SETTINGS_TOKENS].start == 0x5A5A5A5A && work[SETTINGS_TOKENS + 1].start == 0x5A5A5A5A,
 	      "no call wrote behind the SETTINGS_TOKENS tokens it was given");

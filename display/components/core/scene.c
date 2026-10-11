@@ -499,8 +499,10 @@ static void build_brightness(const scene_input_t *input, scene_t *scene)
 static void build_web(const scene_input_t *input, scene_t *scene)
 {
 	uint32_t seconds = access_seconds_left(input->access, input->now_ms);
+	bool lasting = access_is_lasting(input->access);
 	char release[SCENE_SHORT_SIZE] = "aus";
 	const choice_t choices[] = {
+		{"Dauerhaft frei", lasting ? "ja" : "nein"},
 		{"Freigabe", release},
 		{"Zurück", ""},
 	};
@@ -512,6 +514,12 @@ static void build_web(const scene_input_t *input, scene_t *scene)
 		release[0] = '\0';
 		append(release, sizeof(release), "an – noch ");
 		append_time(release, sizeof(release), seconds);
+	}
+	// The release that lasts has no end to count down to: access.h answers the largest number for its seconds
+	if(lasting)
+	{
+		release[0] = '\0';
+		append(release, sizeof(release), "dauerhaft");
 	}
 
 	set_title(scene, "Web-Zugriff");

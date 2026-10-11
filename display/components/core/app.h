@@ -225,10 +225,15 @@ typedef struct
  * 105360, the lines of the three fault memory lists 62376, the poll 39520, the layout text 16385, the
  * second source 5456; 232656 bytes calculated for a 32 bit target that aligns 64 bit numbers to 8 bytes,
  * not measured on the device): static storage or the external RAM, never a stack.
- * - settings: settings_defaults(), then the stored text if settings_from_json() takes it
+ * - settings: settings_defaults(), then the stored text if settings_from_json() takes it. A text that is not
+ *   taken, and no text at all, leave the defaults - with them the web interface is released for good
  * - the second source: cerbo_init() with the address of the settings, safe_mode and ap_ssid; in no network
  * - profiles, bound id, catalogue and old list as stored (poll_init(), poll_stored()); link_init() with the
- *   profiles and safe_mode; knob with settings.reverse; hold, access and nav in their start states
+ *   profiles and safe_mode; knob with settings.reverse; hold and nav in their start states
+ * - the release of the web interface (access.h): the one that lasts if settings.web_open says so - given at
+ *   the time of the start, with nobody at the display, and in safe mode as well: the settings are read there
+ *   too, and the web interface is the way out of safe mode. Closed if the setting is off: a change then needs
+ *   the release of ten minutes, given at the display. See "The release of the web interface" below.
  * - the built-in layout is parsed (has_builtin false if that fails or there is none: then the views are
  *   made from the catalogue, layout_from_catalog(), whenever the built-in ones would be used)
  * - the layout in use: the stored text if there is one, safe_mode is false and layout_parse() takes it
@@ -250,6 +255,23 @@ void app_init(app_t *app, const app_boot_t *boot, uint64_t now_ms);
 
 // The choice above, made now, whatever the source is (app_web.h: the stored layout was forgotten)
 void app_choose_layout(app_t *app);
+
+/*
+ * The release of the web interface. The owner asked on 2026-10-10 that a change through the web no longer
+ * needs a walk to the display: the setting web_open (settings.h) is on by default, and while it is on the
+ * release is the one that lasts (access.h) - from the start (app_init()) to the moment the setting is
+ * switched off. At every moment access_is_lasting(&app->access) is settings.web_open:
+ * - app_init() gives the release that lasts, or none
+ * - NAV_DO_WEB_OPEN_TOGGLE (the row "Dauerhaft frei" of the screen Web-Zugriff) flips the setting and the
+ *   release with it, and nothing else does: the web interface cannot change the setting (app_web.h), and
+ *   NAV_DO_RELEASE_OFF does not close a release that lasts
+ * - a factory reset erases the stored settings: the display starts with the default again, released for good
+ * While the setting is off everything is as it was before there was one: the release of ten minutes, given
+ * and taken back at the display (NAV_DO_RELEASE_ON / OFF).
+ * What needs the knob needs it under both releases: storing a network, installing firmware and the factory
+ * reset are asked on the screen and carried out by a press alone (NAV_DO_ASK_CONFIRM). So a device in the
+ * WiFi cannot take the display from its owner, however long the web interface is open.
+ */
 
 /*
  * The second source: the Cerbo GX (cerbo.h), whose broker a task of the platform talks to. It is switched
@@ -464,6 +486,13 @@ const char *app_host(const app_t *app);
  *   NAV_DO_RELEASE_ON / OFF   access_open() / access_close(). Taking the release back refuses a question
  *                             that waits: what the browser asked for is dropped with it. Giving it again
  *                             leaves a question that waits, and what it asks for, as they are.
+ *                             While the release is the one that lasts both do nothing (nav.h does not return
+ *                             them then): ON has nothing to add, and OFF does not end what the setting gave.
+ *   NAV_DO_WEB_OPEN_TOGGLE    settings.web_open is flipped; APP_EVENT_STORE_SETTINGS. Now on:
+ *                             access_open_lasting() - a release of ten minutes that holds becomes the one
+ *                             that lasts, a question that waits goes on waiting with what it asks for. Now
+ *                             off: access_close() - closed at once, no release of ten minutes is left below
+ *                             it, a question that waits is refused and what the browser asked for dropped.
  *   NAV_DO_ASK_CONFIRM        (nav.h returns it for a short press of the knob alone, never for a tap)
  *                             access_confirm(): WIFI -> the network asked for is stored (net_store(); without
  *                             a password in the request, with the password stored for that SSID, or as an
@@ -484,6 +513,7 @@ const char *app_host(const app_t *app);
 void app_do(app_t *app, nav_do_t what, uint64_t now_ms);
 
 // The world as nav sees it right now (nav.h), filled from the state of the app: every byte of it is written.
+// `release_lasting` of it is access_is_lasting(), which is settings.web_open (see above).
 // `reverse` of it is settings.reverse, which is what the knob was told at every moment (app_init(),
 // NAV_DO_REVERSE_TOGGLE, app_web.h): the sign nav takes back on the brightness screen is the one the knob turned.
 void app_world(const app_t *app, nav_world_t *world, uint64_t now_ms);

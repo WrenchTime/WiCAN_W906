@@ -74,9 +74,14 @@ F_FOUND = "\tif(left == app->profile_count) return refuse(404, \"not_found\", ou
 F_COUNT = "\tapp->profile_count = left;\n"
 F_LINK = "\tlink_profiles(&app->link, app->profiles, app->profile_count, now);\n"
 F_NET = "\tapp_net(app, now);\n\tapp->events |= APP_EVENT_STORE_WIFI;\n"
-S_WRITE = "\tif(!access_write(&app->access, advance(app, now_ms))) return refuse(403, \"locked\", out, length);\n\n\tbody = body_of(body, &body_length);\n\tif(!settings_from_json"
+S_WRITE = "\tif(!access_write(&app->access, advance(app, now_ms))) return refuse(403, \"locked\", out, length);\n\n\tbody = body_of(body, &body_length);\n\t// As bytes"
 S_REFUSED = "\t\treturn answer(400, snprintf(out, APP_WEB_OUT_SIZE, \"{\\\"error\\\":\\\"body\\\",\\\"member\\\":\\\"%s\\\"}\", member), out, length);"
 S_KNOB = "\tknob_set_reverse(&app->knob, app->settings.reverse);\n"
+# The switch of the release for good is at the display: settings that would turn it are refused
+S_SWITCH = ("\tif(taken && wanted.web_open != app->settings.web_open)\n\t{\n\t\ttaken = false;\n\t\tstrcpy(member, \"web_open\");\n\t}\n")
+S_COPIED = "\tmemcpy(&wanted, &app->settings, sizeof(wanted));\n"
+S_TAKEN = "\tmemcpy(&app->settings, &wanted, sizeof(wanted));\n"
+INFO_LASTING = "\tinfo.release_lasting = access_is_lasting(&app->access);\n"
 S_EVENT = "\tapp->events |= APP_EVENT_STORE_SETTINGS;\n"
 S_ANSWER = "\treturn answer(200, settings_to_json(&app->settings, out, APP_WEB_OUT_SIZE), out, length);"
 A_ROUTES = "\tif(route != WEB_ROUTE_REBOOT && route != WEB_ROUTE_RESET) return refuse(404, \"not_found\", out, length);\n"
@@ -165,7 +170,7 @@ MUTATIONS = [
     ("app_web_no_body_read_as_one", T, F, "\tif(body != NULL) return body;\n\n\t*body_length = 0;", "\treturn body;\n\n\t*body_length = 0;"),
     ("app_web_layout_without_body_read", T, F, "\t\tbody = body_of(body, &body_length);\n\t\tif(!layout_parse", "\t\tif(!layout_parse"),
     ("app_web_wifi_without_body_read", T, F, W_TIME, "\tnow = advance(app, now_ms);\n"),
-    ("app_web_settings_without_body_read", T, F, "\n\tbody = body_of(body, &body_length);\n\tif(!settings_from_json", "\n\tif(!settings_from_json"),
+    ("app_web_settings_without_body_read", T, F, "\n\tbody = body_of(body, &body_length);\n\t// As bytes", "\n\t// As bytes"),
     ("app_web_upload_without_bytes_read", T, F, U_CHECK, "\tcheck = ota_check(first, first_length, file_size, slot_size, version, sizeof(version));\n"),
 
     ("app_web_layout_body_read_to_its_zero", T, F, "\t\tif(!layout_parse(body, body_length, &app->checked, &report, app->work, app->work_count))",
@@ -174,8 +179,8 @@ MUTATIONS = [
      "\t\tmemcpy(app->layout_text, body, body_length + 4);\n"),
     ("app_web_wifi_body_read_to_its_zero", T, F, "\tnow = advance(app, now_ms);\n\tbody = body_of(body, &body_length);\n",
      "\tnow = advance(app, now_ms);\n\tbody = body_of(body, &body_length);\n\tbody_length = strlen(body);\n"),
-    ("app_web_settings_body_read_to_its_zero", T, F, "\n\tbody = body_of(body, &body_length);\n\tif(!settings_from_json",
-     "\n\tbody = body_of(body, &body_length);\n\tbody_length = strlen(body);\n\tif(!settings_from_json"),
+    ("app_web_settings_body_read_to_its_zero", T, F, "\n\tbody = body_of(body, &body_length);\n\t// As bytes",
+     "\n\tbody = body_of(body, &body_length);\n\tbody_length = strlen(body);\n\t// As bytes"),
 
     # what an earlier question left behind
     ("app_web_dropped_network_stays_in_memory", T, F, DROP, "\tapp->has_wifi_asked = false;\n"),
@@ -598,7 +603,7 @@ MUTATIONS = [
      "\tapp->events |= APP_EVENT_STORE_WIFI;\n\treturn answer_text(\"{}\", 2, out, length);"),
 
     # POST /api/settings
-    ("app_web_settings_without_release", T, F, S_WRITE, "\tadvance(app, now_ms);\n\n\tbody = body_of(body, &body_length);\n\tif(!settings_from_json"),
+    ("app_web_settings_without_release", T, F, S_WRITE, "\tadvance(app, now_ms);\n\n\tbody = body_of(body, &body_length);\n\t// As bytes"),
     ("app_web_settings_release_not_renewed", T, F, S_WRITE, S_WRITE.replace("!access_write(", "!access_is_open(")),
     ("app_web_settings_release_one_ms_late", T, F, S_WRITE, S_WRITE.replace("advance(app, now_ms))", "advance(app, now_ms) + 1)")),
     ("app_web_settings_time_not_taken_over", T, F, S_WRITE, S_WRITE.replace("advance(app, now_ms)", "time_at(app, now_ms)")),
@@ -607,7 +612,7 @@ MUTATIONS = [
     ("app_web_settings_refused_is_422", T, F, S_REFUSED, S_REFUSED.replace("answer(400,", "answer(422,")),
     ("app_web_settings_refused_without_member", T, F, S_REFUSED, "\t\treturn refuse(400, \"body\", out, length);"),
     ("app_web_settings_refused_member_empty", T, F, S_REFUSED, S_REFUSED.replace(", member), out, length);", ", \"\"), out, length);")),
-    ("app_web_settings_member_name_cut", T, F, "settings_from_json(&app->settings, body, body_length, member, sizeof(member),", "settings_from_json(&app->settings, body, body_length, member, sizeof(member) / 2,"),
+    ("app_web_settings_member_name_cut", T, F, "settings_from_json(&wanted, body, body_length, member, sizeof(member),", "settings_from_json(&wanted, body, body_length, member, sizeof(member) / 2,"),
     ("app_web_settings_refused_is_ok", T, F, S_REFUSED, "\t\treturn answer_text(OK_BODY, sizeof(OK_BODY) - 1, out, length);"),
     ("app_web_settings_knob_not_told", T, F, S_KNOB, ""),
     ("app_web_settings_knob_told_opposite", T, F, S_KNOB, "\tknob_set_reverse(&app->knob, !app->settings.reverse);\n"),
@@ -877,15 +882,52 @@ MUTATIONS += [
     ("app_web_settings_source_gets_its_first_address_only", T, F, C_FOLLOW, C_FOLLOW.replace("if(strcmp(", "if(cerbo_host(&app->cerbo)[0] == '\\0' && strcmp(")),
     ("app_web_settings_source_gets_no_address", T, F, C_FOLLOW, C_FOLLOW.replace("cerbo_set_host(&app->cerbo, app->settings.cerbo,", "cerbo_set_host(&app->cerbo, \"\",")),
     ("app_web_settings_source_told_before_the_text_is_read", T, F,
-     "\tbody = body_of(body, &body_length);\n\tif(!settings_from_json(&app->settings, body, body_length, member, sizeof(member), app->work, app->work_count))",
-     "\tbody = body_of(body, &body_length);\n\tif(body_length > 30 && memcmp(body, \"{\\\"brightness\\\":50,\\\"cerbo\\\":\\\"192.168.88.256\\\"\", 39) == 0) cerbo_set_host(&app->cerbo, \"192.168.88.25\", app->clock_ms);\n"
-     "\tif(!settings_from_json(&app->settings, body, body_length, member, sizeof(member), app->work, app->work_count))"),
+     "\tbody = body_of(body, &body_length);\n\t// As bytes",
+     "\tbody = body_of(body, &body_length);\n\tif(body_length >= 39 && memcmp(body, \"{\\\"brightness\\\":50,\\\"cerbo\\\":\\\"192.168.88.256\\\"\", 39) == 0) cerbo_set_host(&app->cerbo, \"192.168.88.25\", app->clock_ms);\n"
+     "\t// As bytes"),
     ("app_web_settings_bad_address_named_as_no_member", T, F, S_REFUSED, S_REFUSED.replace(", member), out, length);", ", strcmp(member, \"cerbo\") == 0 ? \"\" : member), out, length);")),
     ("app_web_settings_source_makes_the_display_busy", T, F,
      "\trequest->busy = app_busy(app);", "\trequest->busy = app_busy(app) || app->cerbo.phase == CERBO_SESSION;"),
     ("app_web_settings_address_needs_no_release", T, F,
-     "\tif(!access_write(&app->access, advance(app, now_ms))) return refuse(403, \"locked\", out, length);\n\n\tbody = body_of(body, &body_length);\n\tif(!settings_from_json(",
+     "\tif(!access_write(&app->access, advance(app, now_ms))) return refuse(403, \"locked\", out, length);\n\n\tbody = body_of(body, &body_length);\n\t// As bytes",
      "\tif(!access_write(&app->access, advance(app, now_ms)) && (body == NULL || strstr(body, \"cerbo\") == NULL)) return refuse(403, \"locked\", out, length);\n\n"
-     "\tbody = body_of(body, &body_length);\n\tif(!settings_from_json("),
+     "\tbody = body_of(body, &body_length);\n\t// As bytes"),
+    # the release for good: told by the info, and never changed by the settings of the browser
+    info("release_for_good_not_told", INFO_LASTING, ""),
+    info("release_for_good_told_of_every_open_release", INFO_LASTING, "\tinfo.release_lasting = info.release_open;\n"),
+    info("release_for_good_told_always", INFO_LASTING, "\tinfo.release_lasting = true;\n"),
+    info("release_for_good_by_the_setting_reversed", INFO_LASTING, "\tinfo.release_lasting = !access_is_lasting(&app->access);\n"),
+    info("release_for_good_only_outside_safe_mode", INFO_LASTING, "\tinfo.release_lasting = access_is_lasting(&app->access) && !app->safe_mode;\n"),
+    info("release_for_good_only_while_nothing_is_asked", INFO_LASTING, "\tinfo.release_lasting = access_is_lasting(&app->access) && access_asking(&app->access, now) == ACCESS_ASK_NONE;\n"),
+    ("app_web_settings_switch_turned_by_the_browser", T, F, S_SWITCH, ""),
+    ("app_web_settings_switch_turned_on_by_the_browser", T, F, S_SWITCH, S_SWITCH.replace("wanted.web_open != app->settings.web_open", "!wanted.web_open && app->settings.web_open")),
+    ("app_web_settings_switch_turned_off_by_the_browser", T, F, S_SWITCH, S_SWITCH.replace("wanted.web_open != app->settings.web_open", "wanted.web_open && !app->settings.web_open")),
+    ("app_web_settings_switch_named_at_all_refused", T, F, S_SWITCH,
+     S_SWITCH.replace("wanted.web_open != app->settings.web_open", "(wanted.web_open != app->settings.web_open || strstr(body, \"web_open\") != NULL)")),
+    ("app_web_settings_switch_refused_only_under_ten_minutes", T, F, S_SWITCH,
+     S_SWITCH.replace("wanted.web_open != app->settings.web_open", "wanted.web_open != app->settings.web_open && !access_is_lasting(&app->access)")),
+    ("app_web_settings_switch_refused_only_under_the_release_for_good", T, F, S_SWITCH,
+     S_SWITCH.replace("wanted.web_open != app->settings.web_open", "wanted.web_open != app->settings.web_open && access_is_lasting(&app->access)")),
+    ("app_web_settings_switch_refused_without_its_name", T, F, S_SWITCH, S_SWITCH.replace("\t\tstrcpy(member, \"web_open\");\n", "")),
+    ("app_web_settings_switch_refused_under_another_name", T, F, S_SWITCH, S_SWITCH.replace("strcpy(member, \"web_open\")", "strcpy(member, \"reverse\")")),
+    # The switch is looked for in the text before the text is checked. (Only dropping "taken &&" changes nothing:
+    # a text that is refused leaves `wanted` as it was, so that mutation stayed green.)
+    ("app_web_settings_switch_named_before_another_bad_member", T, F, S_SWITCH,
+     "\tfor(size_t at = 0; at + 15 <= body_length; at++)\n\t{\n"
+     "\t\tif(memcmp(body + at, app->settings.web_open ? \"\\\"web_open\\\":fals\" : \"\\\"web_open\\\":true\", 15) != 0) continue;\n"
+     "\t\twanted.web_open = !app->settings.web_open;\n\t\ttaken = true;\n\t}\n" + S_SWITCH),
+    ("app_web_settings_switch_silently_left", T, F, S_SWITCH, "\twanted.web_open = app->settings.web_open;\n"),
+    ("app_web_settings_switch_refused_and_the_rest_taken", T, F, S_SWITCH,
+     S_SWITCH.replace("\t\ttaken = false;\n", "\t\ttaken = false;\n\t\twanted.web_open = app->settings.web_open;\n\t\tmemcpy(&app->settings, &wanted, sizeof(wanted));\n")),
+    # (Making the release follow the setting here changes nothing and stayed green: the setting that is taken is
+    # the one in use, and the release is that one already.)
+    ("app_web_settings_taken_give_the_release_for_good", T, F, S_TAKEN, S_TAKEN + "\taccess_open_lasting(&app->access, app->clock_ms);\n"),
+    ("app_web_settings_taken_text_not_in_use", T, F, S_TAKEN, ""),
+    ("app_web_settings_refused_text_in_use", T, F, S_REFUSED, "\t\tmemcpy(&app->settings, &wanted, sizeof(wanted));\n" + S_REFUSED),
+    ("app_web_settings_bytes_of_the_stack_taken", T, F, S_COPIED,
+     "\twanted.brightness = app->settings.brightness;\n\twanted.night = app->settings.night;\n\twanted.night_mode = app->settings.night_mode;\n"
+     "\twanted.reverse = app->settings.reverse;\n\twanted.standby_s = app->settings.standby_s;\n"
+     "\tmemcpy(wanted.cerbo, app->settings.cerbo, sizeof(wanted.cerbo));\n\twanted.web_open = app->settings.web_open;\n"),
+
 ]
 

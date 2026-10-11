@@ -585,6 +585,10 @@ static void test_start(void)
 	boot.builtin_length = (size_t)(layout_end - layout_start);
 	boot.work = work;
 	boot.work_count = LAYOUT_TOKENS;
+	// The display of this simulation is one whose owner switched "Dauerhaft frei" off: a change needs the
+	// release of ten minutes, which release() gives and takes back as the checks below need it. As it comes
+	// the display is released for good (settings.h), and no request would ever be refused as locked.
+	boot.settings_json = "{\"web_open\":false}";
 	app_init(platform_app, &boot, 0);
 	sim_state = state;
 
@@ -1069,6 +1073,32 @@ static void test_upload_not_recorded(void)
 	begun_fails = false;
 }
 
+// The release for good, through the server of the platform: switched on at the display it needs nobody at
+// the knob, the info tells it, and the settings of a browser cannot switch it
+static void test_for_good(void)
+{
+	release(false);
+	app_do(platform_app, NAV_DO_WEB_OPEN_TOGGLE, now_ms);
+	CHECK(app_take_events(platform_app) == APP_EVENT_STORE_SETTINGS && platform_app->settings.web_open);
+	release(false);
+	now_ms += 3600000;
+
+	begin_change(HTTP_POST, "/api/settings");
+	body("{\"brightness\":51}", 17, "17");
+	CHECK(run() == ESP_OK && status_is("200") && platform_app->settings.brightness == 51 && strstr(wire.answer, "\"web_open\":true}") != NULL);
+	begin_get("/api/info");
+	CHECK(run() == ESP_OK && status_is("200") && strstr(wire.answer, "\"release\":{\"open\":true,\"left_s\":0,\"lasting\":true}") != NULL);
+	begin_change(HTTP_POST, "/api/settings");
+	body("{\"web_open\":false}", 18, "18");
+	CHECK(run() == ESP_OK && status_is("400") && answer_is("{\"error\":\"body\",\"member\":\"web_open\"}") && platform_app->settings.web_open);
+
+	app_do(platform_app, NAV_DO_WEB_OPEN_TOGGLE, now_ms);
+	CHECK(app_take_events(platform_app) == APP_EVENT_STORE_SETTINGS && !platform_app->settings.web_open);
+	begin_change(HTTP_POST, "/api/settings");
+	body("{\"brightness\":52}", 17, "17");
+	CHECK(run() == ESP_OK && status_is("403") && strstr(wire.answer, "\"locked\"") != NULL && platform_app->settings.brightness == 51);
+}
+
 int main(void)
 {
 	test_start();
@@ -1082,6 +1112,7 @@ int main(void)
 	test_lengths();
 	test_slow_clients();
 	test_upload_not_recorded();
+	test_for_good();
 
 	printf("the lock was taken %d times\n", lock_count);
 	return sim_end();

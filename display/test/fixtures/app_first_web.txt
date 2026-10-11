@@ -2,9 +2,10 @@ kind: list
 ring: red
 title: Web-Zugriff
 note:
-row: > action | Freigabe | aus | enabled
+row: > action | Dauerhaft frei | nein | enabled
+row: - action | Freigabe | aus | enabled
 row: - action | Zurück |  | enabled
 first: 0
-total: 2
+total: 3
 line: WLAN: WiCAN-Display
 line: Passwort: geheim1234
