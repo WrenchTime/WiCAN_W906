@@ -204,6 +204,10 @@ static void test_defaults(void)
 	static const int brightness[4] = {0, 80, 33, 255};
 	static const int night[4] = {0, 25, 7, 255};
 	static const int standby[4] = {0, 60, 1234, 65535};
+	// A field that begins with a zero and holds a text behind it. In room that is larger than the field
+	// whatever size a mutation gives it: copied from the text itself, a field made one byte longer was read
+	// from behind the text, and gcc refuses that source (seen in the CI on 2026-10-11)
+	static const char LEFT_BEHIND[SETTINGS_CERBO_SIZE + 16] = "\0" "92.168.188.100";
 	bool all;
 	int b, n, s, flags;
 
@@ -249,7 +253,7 @@ static void test_defaults(void)
 	settings_defaults(&box.settings);
 	check(address_is("") && guards_intact(), "defaults: no address of a Cerbo, from a field without a zero in it");
 	set(0, 0, false, false, 0);
-	memcpy(box.settings.cerbo, "\0" "92.168.188.100", SETTINGS_CERBO_SIZE);
+	memcpy(box.settings.cerbo, LEFT_BEHIND, SETTINGS_CERBO_SIZE);
 	settings_defaults(&box.settings);
 	check(address_is(""), "defaults: nothing is left behind the zero of a field that began with one");
 }

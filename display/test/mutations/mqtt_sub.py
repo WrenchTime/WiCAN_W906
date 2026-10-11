@@ -95,7 +95,8 @@ MUTATIONS = [
     ("mqtt_keepalive_high_byte_lost", T, F, "\tout[10] = (uint8_t)(keepalive_s >> 8);", "\tout[10] = 0;"),
     ("mqtt_keepalive_low_byte_lost", T, F, "\tout[11] = (uint8_t)(keepalive_s & 0xFFu);", "\tout[11] = 30;"),
     ("mqtt_connect_id_length_wrong", T, F, "\tout[13] = (uint8_t)count;", "\tout[13] = (uint8_t)(count + 1);"),
-    ("mqtt_connect_id_not_written", T, F, "\tmemcpy(out + CONNECT_HEAD, id, count);\n", ""),
+    # Not simply taken away: gcc refuses a source whose id is filled and never used (seen in the CI on 2026-10-11)
+    ("mqtt_connect_id_not_written", T, F, "\tmemcpy(out + CONNECT_HEAD, id, count);\n", "\t(void)id;\n"),
     ("mqtt_connect_returns_wrong_length", T, F, "\treturn CONNECT_HEAD + count;", "\treturn CONNECT_HEAD + count - 1;"),
 
     # SUBSCRIBE
