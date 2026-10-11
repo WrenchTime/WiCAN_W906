@@ -152,9 +152,13 @@ jobs:
       # declaration of its own, so no CMakeLists.txt has to name the component - has to make the check fail.
       # The call stands in gx_start(), which the network task calls. In a function of its own that nobody
       # calls it proved nothing: the linker threw that function away and the client with it, and the check
-      # was right to find none (the run of 2026-10-12).
+      # was right to find none (the run of 2026-10-12). And the component is named among the requirements
+      # of main/: without that the linker does not find the client at all (the second run of that day) -
+      # which is the first guard. The check of the map is the second, for the day somebody names it.
       - name: Counter-check, a source calls the MQTT client
         run: |
+          sed -i 's/esp_http_client esp_http_server nvs_flash esp_lcd esp_partition$/esp_http_client esp_http_server nvs_flash esp_lcd esp_partition mqtt/' display/main/CMakeLists.txt
+          test "$(grep -c "esp_partition mqtt$" display/main/CMakeLists.txt)" = 1
           sed -i 's/^esp_err_t gx_start(void)$/extern void *esp_mqtt_client_init(const void *config);\nesp_err_t gx_start(void)/' display/main/gx.c
           sed -i '/^esp_err_t gx_start(void)$/,/^}/ s/^\tif(running)$/\tif(esp_mqtt_client_init(0) == NULL \&\& running)/' display/main/gx.c
           grep -n "esp_mqtt_client_init" display/main/gx.c
