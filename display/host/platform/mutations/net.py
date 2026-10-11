@@ -60,6 +60,8 @@ ROOM = "\troom = heap_caps_malloc(sizeof(*room), MALLOC_CAP_SPIRAM);\n"
 NO_NVS = "\tinit_config.nvs_enable = 0;\n"
 PS_NONE = "\tESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, \"WiFi power save\");\n"
 WIFI_START = "\tESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, \"WiFi start\");\n"
+TX_POWER = "\tESP_RETURN_ON_ERROR(esp_wifi_set_max_tx_power(NET_TX_POWER), TAG, \"WiFi transmit power\");\n"
+TX_LEVEL = "#define NET_TX_POWER        34 "
 PROTOCOL = "\tESP_RETURN_ON_ERROR(esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G), TAG, \"WiFi protocol\");\n"
 AP_PASSWORD = "\tmemcpy(ap_config.ap.password, ap_password, password_length);\n"
 AP_WPA2 = "\tap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;\n"
@@ -140,6 +142,10 @@ MUTATIONS = [
     ("net_station_speaks_b_only", S, F, PROTOCOL, PROTOCOL.replace("WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G", "WIFI_PROTOCOL_11B")),
     ("net_station_speaks_g_only", S, F, PROTOCOL, PROTOCOL.replace("WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G", "WIFI_PROTOCOL_11G")),
     ("net_protocol_of_the_access_point_set_instead", S, F, PROTOCOL, PROTOCOL.replace("WIFI_IF_STA", "WIFI_IF_AP")),
+    ("net_transmitter_at_the_power_the_driver_starts_out_with", S, F, TX_POWER, ""),
+    ("net_transmitter_told_20_dbm", S, F, TX_LEVEL, TX_LEVEL.replace("34", "80")),
+    ("net_transmitter_told_13_dbm", S, F, TX_LEVEL, TX_LEVEL.replace("34", "52")),
+    ("net_transmit_power_also_set_before_the_driver_runs", S, F, WIFI_START, TX_POWER + WIFI_START),
     ("net_protocol_set_when_the_driver_runs_already", S, F, PROTOCOL + WIFI_START, WIFI_START + PROTOCOL),
     ("net_access_point_without_its_password", S, F, AP_PASSWORD, ""),
     ("net_access_point_open", S, F, AP_WPA2, ""),

@@ -126,6 +126,8 @@ typedef enum
 esp_err_t esp_wifi_init(const wifi_init_config_t *config);
 esp_err_t esp_wifi_set_storage(wifi_storage_t storage);
 esp_err_t esp_wifi_set_ps(wifi_ps_type_t type);
+// In quarter dBm, 8 to 84; the driver starts out with 80 (20 dBm)
+esp_err_t esp_wifi_set_max_tx_power(int8_t power);
 
 // esp_wifi_types_generic.h: what an interface speaks, as bits
 #define WIFI_PROTOCOL_11B   0x1

@@ -70,6 +70,7 @@
 #define NET_AP_CLIENTS      4
 #define NET_AP_RETRY_MS     1000u   // a refused order for the access point is given again this often
 #define NET_ADDRESS_SIZE    16      // "255.255.255.255" and its zero
+#define NET_TX_POWER        34      // quarter dBm: 8.5 dBm, see net_start()
 
 #define NET_EVENT_SCAN_DONE     ((EventBits_t)0x01)
 #define NET_EVENT_DISCONNECTED  ((EventBits_t)0x02)
@@ -985,6 +986,26 @@ esp_err_t net_start(const char *ap_ssid, const char *ap_password)
 	// the radio listens all the time, and a slow link keeps the transmitter on for long (65 degrees were
 	// seen while 60 KB were fetched twelve times in a row).
 	ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "WiFi power save");
+	// The transmitter at 8.5 dBm instead of the 20 the driver starts out with. At full power the board is
+	// badly heard while it hears the access point well: the driver reports no disconnect, the info page
+	// says -65 dBm, and of 60 pings one arrives (2026-10-11, the console read along). Measured the same
+	// morning with a firmware that changed the power every two minutes, the display unmoved at -63 to
+	// -65 dBm, two pings a second, four rounds:
+	//   20 dBm     710 of 779 arrived (72, 91, 100 and 98 in a hundred), round trip 37, 24, 11 and 17 ms
+	//   13 dBm     840 of 840, 4 to 6 ms
+	//   8.5 dBm    662 of 665, 4 to 5 ms
+	//   2 dBm      630 of 632, 4 ms
+	// The round trip at 20 dBm was several times that of the next slice in every round, also where no ping
+	// was lost: the frames are sent again and again. Where between 13 and 20 dBm this begins is not
+	// measured; 8.5 leaves room to it and is still 6 dB above a level that got everything through.
+	// This is what was looked for before: the weak drive of the panel lines (board.c), the station that
+	// never sleeps and b/g only (above) each helped a little or not at all.
+	// The driver takes the level once it is started, and keeps it through the changes of the mode.
+	// CHECK: all of this was measured with the backlight off (standby) and the display on the USB of a
+	// PC. In its place in the vehicle, backlight on: two pings a second from a PC for an hour, at most a
+	// few in a thousand lost and a round trip of a few milliseconds. If not, try 2 dBm (8) before
+	// anything else.
+	ESP_RETURN_ON_ERROR(esp_wifi_set_max_tx_power(NET_TX_POWER), TAG, "WiFi transmit power");
 
 	platform_lock();
 	strlcpy(platform_info.ap_ssid, ap_ssid, sizeof(platform_info.ap_ssid));

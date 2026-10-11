@@ -169,6 +169,8 @@ static struct
 	int ps_calls;
 	uint8_t sta_protocol;       // what the station speaks: as the driver starts out, or as told
 	int protocol_calls;
+	int8_t tx_power;            // of the transmitter, in quarter dBm: as the driver starts out, or as told
+	int tx_power_calls;
 	int ap_stations;
 	// A driver that does what is not written down, one switch at a time
 	bool join_silent;           // an attempt never ends by itself
@@ -389,6 +391,7 @@ esp_err_t esp_wifi_init(const wifi_init_config_t *config)
 	// The defaults of the driver (esp_wifi.h, esp_wifi_set_ps() and esp_wifi_set_protocol())
 	drv.ps = WIFI_PS_MIN_MODEM;
 	drv.sta_protocol = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
+	drv.tx_power = 80;
 	return ESP_OK;
 }
 
@@ -421,6 +424,16 @@ esp_err_t esp_wifi_set_ps(wifi_ps_type_t type)
 	CHECK(drv.started);
 	drv.ps = type;
 	drv.ps_calls++;
+	return ESP_OK;
+}
+
+esp_err_t esp_wifi_set_max_tx_power(int8_t power)
+{
+	// The driver takes this once it is started (esp_wifi.h: ESP_ERR_WIFI_NOT_STARTED before), and only what
+	// lies between 2 and 21 dBm
+	CHECK(drv.started && power >= 8 && power <= 84);
+	drv.tx_power = power;
+	drv.tx_power_calls++;
 	return ESP_OK;
 }
 
@@ -1094,6 +1107,8 @@ static void test_access_point(void)
 	CHECK(drv.ps == WIFI_PS_NONE && drv.ps_calls == 1);
 	// The station speaks b and g only: the link of the board is too weak for more (net.c has the numbers)
 	CHECK(drv.sta_protocol == (WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G) && drv.protocol_calls == 1);
+	// The transmitter at 8.5 dBm: at the 20 of the driver the board was badly heard (net.c has the numbers)
+	CHECK(drv.tx_power == 34 && drv.tx_power_calls == 1);
 	CHECK(strcmp(platform_info.ap_ssid, "WiCAN-Display-1234") == 0 && strcmp(platform_info.ap_password, "geheimes-passwort") == 0);
 	run(1000);
 	CHECK(drv.mode == WIFI_MODE_APSTA && !drv.ap_open_window && drv.scans == 0 && link_ap_on(&platform_app->link));
