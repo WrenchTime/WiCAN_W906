@@ -7,7 +7,7 @@ mit dem WiCAN; der bisherige Weg WiCAN → MQTT → Node-RED bleibt daneben best
 Hardware: Elecrow CrowPanel 2.1inch-HMI ESP32 Rotary Display (ESP32-S3R8, rundes IPS-Panel 480 × 480,
 Drehknopf mit Taster, Touch).
 
-## Stand (2026-10-10)
+## Stand (2026-10-11)
 
 Die Firmware läuft seit dem 2026-10-09 auf dem Board, seit dem 2026-10-10 im Fahrzeug. Gesehen oder gemessen:
 
@@ -21,24 +21,41 @@ Die Firmware läuft seit dem 2026-10-09 auf dem Board, seit dem 2026-10-10 im Fa
 - Fehlerspeicher lesen vom Display aus (2026-10-10): 35 s, 18 von 18 Steuergeräten, die Liste steht auf dem
   Display.
 
-**Offen: die Funkstrecke des Boards ist schwach.** Zwei Meter vom Router empfängt das Display ihn mit −56 bis
-−69 dBm, rund 25 dB unter dem, was der Platz hergibt; der WiCAN in gleicher Entfernung verliert nichts. In guten
-Phasen gehen 2 % der Pings verloren, in schlechten 50 bis 100 %, dann scheitert schon der Beitritt. Auch in
-einer guten Phase ist die Strecke in beide Richtungen langsam (60 KB vom Display: 1,9 s im Mittel, bis 10 s).
-Das Gehäuse ist aus PETG, der Platz ist besser als der des WiCAN. Zwei Erklärungen haben sich als falsch
-erwiesen und stehen hier, damit niemand sie wiederholt:
+**Gefunden (2026-10-11): Bei voller Sendeleistung wird das Board schlecht gehört.** Zwei Tage lang fiel die
+Strecke immer wieder aus, obwohl das Display den Router gut empfängt: In schlechten Phasen kamen 0 bis 50 % der
+Pings an, dann scheiterte schon der Beitritt. Mit mitgelesener Konsole zeigte sich: Der Treiber meldet dabei
+keine Trennung, die Info-Seite nennt −65 dBm, und von 60 Pings kommt einer an – der Hinweg steht, der Rückweg
+nicht. Eine Versuchs-Firmware hat die Sendeleistung alle zwei Minuten gewechselt (Display unbewegt, zwei Pings
+je Sekunde, fünf Durchgänge):
+
+| Sendeleistung | Pings angekommen | je Abschnitt | Laufzeit (Median je Abschnitt) |
+|---|---|---|---|
+| 20 dBm (Vorgabe des Treibers) | 717 von 893 | 72 / 91 / 100 / 98 / 6 % | 11 bis 38 ms |
+| 13 dBm | 1051 von 1051 | 5 × 100 % | 4 bis 6 ms |
+| 8,5 dBm | 1058 von 1061 | 99 bis 100 % | 4 bis 5 ms |
+| 2 dBm | 1065 von 1067 | 99 bis 100 % | 4 ms |
+
+Bei 20 dBm war die Laufzeit in jedem Durchgang ein Mehrfaches der Nachbarabschnitte, auch wo kein Ping verloren
+ging: Die Pakete werden wieder und wieder gesendet. Die Sendeleistung steht jetzt fest auf 8,5 dBm
+(`NET_TX_POWER` in `main/net.c`). Damit gemessen am selben Tag: am PC 89 Minuten lang 10.533 von 10.533 Pings,
+dann am Platz im Fahrzeug bei −69 dBm (−79 bis −61) zweieinhalb Stunden lang 17.896 von 17.896, Laufzeit im
+Median 4 ms, 10.706 Abfragen an den WiCAN ohne einen Fehlschlag. Am Tag davor gingen bei gleichem Empfang und
+voller Leistung 10 bis 49 % verloren. Wo zwischen 13 und 20 dBm es kippt, ist nicht gemessen; ebenso wenig, ob
+es mit voller Helligkeit hält (gemessen wurde mit dunklem Bildschirm und mit 5 %).
+
+Der Empfangswert auf der Info-Seite sagt über diese Störung nichts: Er misst nur den Hinweg. Was vorher
+versucht und für die Ursache gehalten wurde, steht hier, damit niemand es wiederholt:
 
 - „Der Energiesparmodus des WLAN-Treibers ist schuld": Er ist abgeschaltet (das senkt die Antwortzeit von 154
   auf 14 ms), die Verluste blieben.
 - „Mit eingeschaltetem Hotspot ist die Strecke gut": In zehn Minuten einer Mitschrift stimmte das (kein
   einziger Fehlschlag gegen zwei bis sieben je Minute davor und danach), in einer späteren Messung nicht.
-
-**Gefunden (2026-10-10): Die Leitungen zum Bildschirm stören den eigenen Empfang.** Eine Versuchs-Firmware
-hat ihre Treiberstärke alle zwei Minuten zwischen der normalen und der schwächsten Stufe gewechselt, ein PC
-hat 70 Minuten lang gepingt: mit normaler Stufe 15,5 % Verlust (284 von 1830), mit der schwächsten 3,5 % (62
-von 1780), bei gleicher Empfangsstärke; in 15 von 16 Nachbarpaaren verlor die schwächste weniger. Die
-schwächste Stufe ist jetzt fest eingestellt (`components/board/board.c`). Was an Verlust bleibt, ist noch nicht
-untersucht.
+- „Das Display braucht mindestens −55 dBm": Am besten Platz (−51 dBm) blieben 6 % Verlust, an einem anderen
+  Tag gingen bei −55 dBm 20 bis 45 % verloren und bei −67 dBm 1,4 %.
+- „Die Leitungen zum Bildschirm stören den eigenen Empfang": Mit der schwächsten Treiberstufe sank der Verlust
+  in 70 Minuten von 15,5 % (284 von 1830) auf 3,5 % (62 von 1780), in 15 von 16 Nachbarpaaren. Die Stufe ist
+  geblieben (`components/board/board.c`), aber die Ursache war sie nicht: Ein zweiter Versuch, der die
+  Leitungen und das Hintergrundlicht zeitweise ganz abschaltete, fand keinen Unterschied mehr.
 
 Ohne Beleg geblieben und trotzdem noch drin: Das Display spricht nur 802.11b/g (`main/net.c`).
 
@@ -47,12 +64,13 @@ Damit ein Aussetzer kein Lesen mehr kostet: Ein Lesen des Fehlerspeichers, das d
 180 s Stille auf. Das Löschen bleibt dabei, wie es war: Geht die Verbindung währenddessen verloren, ist der
 Ausgang unbekannt, und es muss neu gelesen werden.
 
-Ebenfalls offen: Nach jedem gewollten Neustart nennt die Info-Seite `wdt` als Grund (zweimal gesehen, Ursache
-nicht geklärt). Nicht geprüft am Board: Fehlerspeicher löschen, Zurücknehmen eines Updates, Wärme im Gehäuse.
+Ebenfalls offen: Nach jedem gewollten Neustart nennt die Info-Seite `wdt` als Grund (mehrfach gesehen, Ursache
+nicht geklärt). Nicht geprüft am Board: Fehlerspeicher löschen, Zurücknehmen eines Updates, Wärme im Gehäuse,
+der Web-Schirm mit seinen drei Zeilen und der dauerhaft freie Web-Zugriff.
 
 | Teil | Stand |
 |---|---|
-| Logik (`components/core`, 27 Module) | auf dem PC getestet: 27 Testprogramme mit gut 12.000 Prüfungen, dazu über 8.000 Mutationen, von denen jede einen Test rot machen muss. Läuft in der CI unter gcc, lokal unter clang, jeweils auch mit `unsigned char` wie auf dem ESP32. |
+| Logik (`components/core`, 29 Module) | auf dem PC getestet: 29 Testprogramme mit gut 14.000 Prüfungen, dazu über 9.500 Mutationen, von denen jede einen Test rot machen muss. Läuft in der CI unter gcc, lokal unter clang, jeweils auch mit `unsigned char` wie auf dem ESP32. |
 | Zeichencode (`components/ui`, LVGL 9.5.0) | in der CI gebaut; ein Renderer ohne Display zeichnet 79 von Hand gebaute Bildschirme und gut 200 Szenen aus den Tests der Logik und prüft, dass nichts über den Kreis ragt, sich überlappt oder abgeschnitten wird. Die Bilder hängen als Artefakt `wican-display-screens` am CI-Lauf. |
 | Plattform (`main`: Start, Bildschirm-Task, WLAN, HTTP, Flash) | übersetzt und linkt für den ESP32-S3. Gegen ESP-IDF v5.5.2 und LVGL 9.5.0 gegengelesen. Dazu laufen `main.c`, `screen.c`, `net.c` und `web.c` unverändert auf dem PC gegen die echte Logik, mit Platzhaltern für ESP-IDF, FreeRTOS und LVGL (`host/platform`, in der CI). Die Platzhalter sind ein nach den Quellen geschriebenes Modell: Sie zeigen, dass die Plattform ihre eigenen Regeln hält, nicht, dass Treiber, Scheduler und Flash sich so verhalten wie gelesen. |
 | Board-Schicht (`components/board`) | Pins, Zeiten und die Panel-Initialisierung sind aus dem Schaltplan und den Beispielen des Herstellers gelesen. Am Board bestätigt (2026-10-09): Bild, Farben, Hintergrundlicht, Expander, Touch, Taster, Encoder. Gemessen ist nur die Zahl der Zählschritte je Raste. |
@@ -224,8 +242,8 @@ Slot noch ein zurückgenommenes Update, steht es danach wieder unter „Vorherig
 
 ## Erster Tag am Board
 
-Im Quelltext sind 54 Stellen mit `CHECK:` markiert (21 in `components/board/board.c`, 10 in `main/main.c`,
-5 in `main/screen.c`, 11 in `main/net.c`, 3 in `main/web.c`, 2 in `main/web/index.html`, 2 in
+Im Quelltext sind 55 Stellen mit `CHECK:` markiert (21 in `components/board/board.c`, 10 in `main/main.c`,
+5 in `main/screen.c`, 12 in `main/net.c`, 3 in `main/web.c`, 2 in `main/web/index.html`, 2 in
 `sdkconfig.defaults`). Jede sagt, was zu beobachten ist und was zu ändern ist, wenn es anders kommt:
 
 ```bash
@@ -249,9 +267,9 @@ Die Reihenfolge, in der sie sich stellen:
    der Hand. Der Knopf gibt also zwei Zählschritte je Raste, und die Konstante in `components/core/knob.h`
    steht seitdem auf 2. Gesehen am 2026-10-10: Im Uhrzeigersinn (von vorn) zählt der Encoder abwärts – der
    Fokus im Menü ging nach oben, die Helligkeit nach unten. Seiten und Zeilen bleiben so (wer es andersherum
-   will: Einstellung „Drehrichtung"); die Helligkeit nimmt ihre Richtung jetzt von der Hand. Noch zu sehen:
-   Mit der 2 ist eine Raste eine Seite; zehn Rasten vor und zurück ergeben null; die Helligkeit wird im
-   Uhrzeigersinn heller, mit „Drehrichtung" normal und umgekehrt. Taster: losgelassen und
+   will: Einstellung „Drehrichtung"); die Helligkeit nimmt ihre Richtung jetzt von der Hand: im Uhrzeigersinn
+   heller, am Board gesehen am 2026-10-11. Noch zu sehen: zehn Rasten vor und zurück ergeben null; die
+   Helligkeit auch mit umgekehrter „Drehrichtung" im Uhrzeigersinn heller. Taster: losgelassen und
    gedrückt werden richtig gelesen, auch nach Minuten. Gehen Tastendrücke verloren, ohne dass gerade etwas
    gespeichert wird, dauert eine Lesung länger als die angenommenen 10 ms (`READ_MS` in `main/screen.c`).
 6. Touch: Ein Tipp trifft die Zeile unter dem Finger, oben und unten in einer Liste.

@@ -1001,10 +1001,13 @@ esp_err_t net_start(const char *ap_ssid, const char *ap_password)
 	// This is what was looked for before: the weak drive of the panel lines (board.c), the station that
 	// never sleeps and b/g only (above) each helped a little or not at all.
 	// The driver takes the level once it is started, and keeps it through the changes of the mode.
-	// CHECK: all of this was measured with the backlight off (standby) and the display on the USB of a
-	// PC. In its place in the vehicle, backlight on: two pings a second from a PC for an hour, at most a
-	// few in a thousand lost and a round trip of a few milliseconds. If not, try 2 dBm (8) before
-	// anything else.
+	// With this level, the same day: 10533 of 10533 pings in 89 minutes on the USB of a PC, then in its
+	// place in the vehicle at -69 dBm (-79 to -61) 17896 of 17896 in two and a half hours, and 10706
+	// requests to the adapter without a failure. The day before, at the same signal and full power, 10 to
+	// 49 in a hundred were lost there.
+	// CHECK: the backlight was off or at 5 % in all of this. With full brightness: two pings a second from
+	// a PC for an hour, at most a few in a thousand lost and a round trip of a few milliseconds. If not,
+	// try 2 dBm (8) before anything else.
 	ESP_RETURN_ON_ERROR(esp_wifi_set_max_tx_power(NET_TX_POWER), TAG, "WiFi transmit power");
 
 	platform_lock();
