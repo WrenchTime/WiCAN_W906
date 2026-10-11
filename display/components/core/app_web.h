@@ -98,7 +98,10 @@ void app_web_request(const app_t *app, web_request_t *request, uint64_t now_ms);
  *   WEB_ROUTE_CATALOG   catalog_to_json()
  *   WEB_ROUTE_VALUES    web_values_json() with text_view_word() of the connection. While an address of the
  *                       Cerbo is set: web_values_cerbo_json() with the values of the Cerbo (cerbo.values)
- *                       and text_cerbo_word() of cerbo_view() as well. The answer has room in every case:
+ *                       and text_cerbo_word() of cerbo_view() as well - and without the values of the adapter
+ *                       whose names begin with CERBO_PREFIX: in that answer the prefix is the Cerbo's, and no
+ *                       key stands twice (web_json.h). The values of the Cerbo in it are as many as "values"
+ *                       of the object "cerbo" above says (cerbo_shown()). The answer has room in every case:
  *                       see APP_WEB_OUT_SIZE.
  *   WEB_ROUTE_LAYOUT    the text of the layout in use (app->layout_text) as it is. An empty one (app.h: a
  *                       text that could not be written) is no answer: 500 "too_large"

@@ -291,8 +291,14 @@ static esp_err_t touch_reset(void)
  * One detent of the knob is two counts, KNOB_COUNTS_PER_DETENT in knob.h. Measured on the board on
  * 2026-10-09, not read from a data sheet: while the constant was 4, two detents of the hand turned one
  * page. If every edge counts as it is set up here, the encoder has a detent on every half period.
- * CHECK: turning clockwise counts up. If it counts down, that is the setting "reverse" of knob.h; nothing
- * changes here. The sources disagree about it.
+ * Turning clockwise, seen from the front, counts DOWN. Seen on the device on 2026-10-10 (firmware b1827ef,
+ * the setting "reverse" off): clockwise made the brightness lower and moved the focus of the menu up, and
+ * both are negative detents for nav.h. Until then this place said "turning clockwise counts up", marked to
+ * be looked at with the board in hand; the sources had disagreed about it. Nothing changes here for it:
+ * pages and rows stay as they are on the device, the setting "reverse" of knob.h is for who wants them the
+ * other way, and the brightness has its direction from nav.h - clockwise is brighter whatever the setting
+ * says. nav.h relies on the direction as it is: a counter set up the other way would turn pages, rows and
+ * the brightness at once.
  * CHECK: log the sum of board_encoder(): it is 20 after ten detents forth and back at its start after ten
  * back, slowly and fast. If it drifts, counts are lost or made up: look at both channels with an
  * oscilloscope before changing BOARD_ENCODER_GLITCH_NS.

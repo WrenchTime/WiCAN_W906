@@ -7,6 +7,7 @@
  * (at your option) any later version.
  */
 
+#include <math.h>
 #include <string.h>
 #include "cerbo.h"
 
@@ -500,12 +501,23 @@ uint32_t cerbo_refused(const cerbo_t *cerbo)
 	return sum > UINT32_MAX ? UINT32_MAX : (uint32_t)sum;
 }
 
+// Whether GET /api/values has a text for a value of the store (web_json.h): a number that is finite, "on" or
+// "off". A number beyond the range of a double is taken into the store as infinite, as the store of the
+// adapter takes one (values.h), and has none.
+static bool has_text(const value_t *item)
+{
+	if(item->kind == VALUE_NUMBER) return isfinite(item->number);
+	return item->kind == VALUE_ON || item->kind == VALUE_OFF;
+}
+
 int cerbo_shown(const cerbo_t *cerbo, uint64_t now_ms)
 {
 	int shown = 0;
 
 	for(int i = 0; i < cerbo->values.count; i++)
 	{
+		// The number of values GET /api/values names: that answer leaves out what has no text
+		if(!has_text(&cerbo->values.items[i])) continue;
 		if(cerbo_age(&cerbo->values.items[i], now_ms) != VALUE_AGE_GONE) shown++;
 	}
 	return shown;

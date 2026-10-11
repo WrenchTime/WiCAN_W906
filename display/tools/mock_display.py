@@ -50,8 +50,11 @@ Taken from the sources, read and written a second time here:
   - the second source, the Cerbo GX (cerbo.c, settings.c, web_json.c, app_web.c): the setting
     "cerbo" - empty or an IPv4 address in dotted form, written only while it is set -, the object
     "cerbo" in /api/info and the member "cerbo" and the values with GX_ in /api/values, each only
-    while an address is set, the values fresh under 5 s and left out from 60 s on. A mock nobody
-    gave an address answers byte for byte what it answered before there was a second source
+    while an address is set, the values fresh under 5 s and left out from 60 s on. With an address
+    the prefix GX_ is the Cerbo's: a value of the adapter that bears it is left out of /api/values,
+    so that no key stands twice; and "values" of /api/info counts what /api/values names of the
+    Cerbo - not a number without end, which has no text there. A mock nobody gave an address
+    answers byte for byte what it answered before there was a second source
 
 What the check of a layout does not check as the display does:
   - a text that is not UTF-8. The display reads bytes and passes them on; the mock answers
@@ -174,6 +177,7 @@ WICAN_AP_PREFIX = "WiCAN_"
 VALUE_FRESH_MS = 3000
 VALUE_KEPT_MS = 10000
 # cerbo.h
+CERBO_PREFIX = "GX_"
 CERBO_FRESH_MS = 5000
 CERBO_KEPT_MS = 60000
 CERBO_LIVE_MS = 10000
@@ -482,6 +486,12 @@ def quote(text, delete_too=True):
         else:
             written.append(character)
     return "\"" + "".join(written) + "\""
+
+
+def has_text(value):
+    """What web_json.c writes of a value: "on", "off" or a number that is finite. A source may send
+    1e999: the display holds it as infinite and names it in no answer"""
+    return isinstance(value, str) or math.isfinite(value)
 
 
 def boolean(value):
@@ -997,7 +1007,8 @@ class Display:
         if self.settings["cerbo"] == "":
             return ""
         view = self.cerbo_view(now)
-        shown = [1 for name, value, seen in self.cerbo_values(now) if now - seen < CERBO_KEPT_MS]
+        # cerbo_shown(): what /api/values names of the Cerbo, see values_json()
+        shown = [1 for name, value, seen in self.cerbo_values(now) if now - seen < CERBO_KEPT_MS and has_text(value)]
         return ("\"cerbo\":{\"host\":%s,\"view\":%s,\"values\":%d,\"ok\":%d,\"refused\":0,\"connects\":%d,\"boots\":%d,\"lag_ms\":0},"
                 % (quote(self.settings["cerbo"]), quote(view), len(shown), self.cerbo_numbers["ok"], self.cerbo_numbers["connects"],
                    1 if self.cerbo_numbers["ok"] > 0 else 0))
@@ -1037,14 +1048,16 @@ class Display:
         """web_values_json(), and with an address of the Cerbo web_values_cerbo_json(): its view behind
         the one of the adapter, its values behind those of the adapter, each source with its own limits"""
         has_cerbo = self.settings["cerbo"] != ""
-        stores = [(self.values(now), VALUE_FRESH_MS, VALUE_KEPT_MS)]
+        # With an address of the Cerbo its prefix is the Cerbo's: a value of the adapter that bears it is
+        # left out, whether the Cerbo has that key or not - no key stands twice in the answer
+        stores = [(self.values(now), VALUE_FRESH_MS, VALUE_KEPT_MS, CERBO_PREFIX if has_cerbo else None)]
         if has_cerbo:
-            stores.append((self.cerbo_values(now), CERBO_FRESH_MS, CERBO_KEPT_MS))
+            stores.append((self.cerbo_values(now), CERBO_FRESH_MS, CERBO_KEPT_MS, None))
         written = []
-        for values, fresh_ms, kept_ms in stores:
+        for values, fresh_ms, kept_ms, not_with in stores:
             for name, value, seen in values:
                 age = max(0, now - seen)
-                if age >= kept_ms:
+                if age >= kept_ms or not has_text(value) or (not_with is not None and name.startswith(not_with)):
                     continue
                 # printf would write minus zero as "-0"
                 shown = "\"%s\"" % value if isinstance(value, str) else "%.9g" % (value if value != 0 else 0)

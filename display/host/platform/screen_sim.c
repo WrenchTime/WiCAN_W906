@@ -1603,14 +1603,16 @@ static void test_backlight(void)
 	CHECK(round_of(T0 + 200)->lights == 0 && round_of(T0 + 220)->lights == 1 && light == 0 && lights == 2);
 	CHECK(sim_log_found == 2);
 
-	// A brightness that changes while the screen stays lit is set and not logged: menu, Helligkeit, a detent
+	// A brightness that changes while the screen stays lit is set and not logged: menu, Helligkeit, a detent.
+	// The detent on the brightness screen is one clockwise, which the encoder counts down (knob.h, seen on the
+	// device on 2026-10-10): brighter
 	power_on();
 	world.press[0] = (span_t){ T0 + 100, T0 + 200 };
 	world.turn[0].at_ms = T0 + 400;
 	world.turn[0].counts = KNOB_COUNTS_PER_DETENT;
 	world.press[1] = (span_t){ T0 + 600, T0 + 700 };
 	world.turn[1].at_ms = T0 + 1000;
-	world.turn[1].counts = KNOB_COUNTS_PER_DETENT;
+	world.turn[1].counts = -KNOB_COUNTS_PER_DETENT;
 	run(1400);
 	CHECK(shown.kind == SCENE_LEVEL && round_of(T0 + 1000)->lights == 1 && lights == 2 && light > round_of(T0)->wanted);
 	CHECK(sim_log_found == 1);

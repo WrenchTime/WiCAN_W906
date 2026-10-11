@@ -345,6 +345,10 @@ void app_button(app_t *app, bool pressed, bool read_ok, uint64_t now_ms);
 
 // New counts of the encoder (board). knob_turn() makes detents of them; those go to nav_turn(), and to
 // hold_activity() while the clear dialog shows. Counts that make no detent are no input.
+// The direction: the board counts down clockwise (knob.h, seen 2026-10-10), and knob_turn() turns the sign
+// if settings.reverse is set. Pages and rows take the detents as they come. The brightness screen does not:
+// nav is told the setting with the world (app_world()) and takes it back there, so that a hand turning
+// clockwise - negative counts - makes the light brighter whatever the setting says (nav.h).
 void app_encoder(app_t *app, int counts, uint64_t now_ms);
 
 // A tap on row `row` of the screen (the drawing code knows where the rows are; a tap that hit none comes
@@ -479,7 +483,9 @@ const char *app_host(const app_t *app);
  */
 void app_do(app_t *app, nav_do_t what, uint64_t now_ms);
 
-// The world as nav sees it right now (nav.h), filled from the state of the app: every byte of it is written
+// The world as nav sees it right now (nav.h), filled from the state of the app: every byte of it is written.
+// `reverse` of it is settings.reverse, which is what the knob was told at every moment (app_init(),
+// NAV_DO_REVERSE_TOGGLE, app_web.h): the sign nav takes back on the brightness screen is the one the knob turned.
 void app_world(const app_t *app, nav_world_t *world, uint64_t now_ms);
 
 // What is on the screen (scene_build() with everything of the app). The lines of a list, of an outcome and

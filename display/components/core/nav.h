@@ -25,6 +25,7 @@
  *
  * The grammar of the knob, the same everywhere, usable without looking:
  *   turn         on the value pages: one detent = one page, hard ends, no wrap
+ *                on the brightness screen: one detent = NAV_BRIGHTNESS_STEP percent, clockwise is brighter
  *                everywhere else: moves the focus over the rows of the screen, hard ends
  *   short press  on the value pages: opens the menu; everywhere else: acts on the focused row
  *   long press   one level back; on a value page: back to the first page
@@ -63,6 +64,16 @@
  *                    Ordnung?": a short press says yes; everything else is ignored, a tap as well (a
  *                    firmware whose knob does not work must not be kept because its touch does)
  * In this order if several apply.
+ *
+ * The direction of a turn. The detents of nav_turn() are those knob_turn() reports (knob.h): positive is the
+ * next page and the next row, negative the page before and the row above. Which way the hand turns for that
+ * is the business of the knob and of its setting `reverse`, which turns the sign - a preference for pages and
+ * rows, and they take the sign as it comes. On this board, with `reverse` off, clockwise (seen from the
+ * front) is NEGATIVE: seen on the device on 2026-10-10, the focus of the menu went up.
+ * The brightness is the one place that does not follow the setting. The arc on its screen grows clockwise,
+ * and the hand follows what it sees: clockwise is brighter, whatever `reverse` says. So nav takes back
+ * there what the knob did with the sign, and for that the world carries the setting (nav_world_t.reverse):
+ * the detents the hand turned clockwise are -n, and n if `reverse` is set.
  */
 
 #define NAV_IDLE_MS             120000u // without input every screen but the value pages returns to them
@@ -146,6 +157,8 @@ typedef struct
 	bool ap_kept;                   // the own access point cannot be switched: link_ap_kept()
 	bool night_mode;
 	int brightness;                 // the one in use: settings.night in night mode, else settings.brightness
+	bool reverse;                   // settings.reverse, with which knob_turn() turns the sign of the detents: the
+	                                // brightness screen takes that back (see above); nothing else looks at it
 } nav_world_t;
 
 typedef struct
@@ -233,8 +246,10 @@ bool nav_row_acts(const nav_t *nav, int row, const nav_world_t *world);
  *   short on      a line: nothing;  Zurück -> NAV_DTC
  *   long          -> NAV_DTC
  * NAV_BRIGHTNESS
- *   turn n        value += n * NAV_BRIGHTNESS_STEP, kept within SETTINGS_BRIGHTNESS_MIN and
- *                 SETTINGS_BRIGHTNESS_MAX -> NAV_DO_BRIGHTNESS (also when the value did not change)
+ *   turn n        value += c * NAV_BRIGHTNESS_STEP, kept within SETTINGS_BRIGHTNESS_MIN and
+ *                 SETTINGS_BRIGHTNESS_MAX -> NAV_DO_BRIGHTNESS (also when the value did not change).
+ *                 c: the detents clockwise, -n, or n if `reverse` of the world is set (see "The direction of
+ *                 a turn" above) - reckoned in 64 bit, for every n an int holds, the smallest among them
  *   short, long   -> NAV_MENU (focus on row 1) and NAV_DO_SETTINGS_STORE
  * NAV_WEB
  *   short on      0 -> NAV_DO_RELEASE_OFF if release_open, else NAV_DO_RELEASE_ON;  1 -> NAV_MENU (row 3)
@@ -262,7 +277,8 @@ bool nav_row_acts(const nav_t *nav, int row, const nav_world_t *world);
  *                 NAV_DTC_CONFIRM (NAV_DO_CLEAR) alone, and each of them leads to NAV_DTC_BUSY. A caller
  *                 that starts one in another way has to see to this dialog itself.
  *
- * Turning on a screen with rows moves the focus by n and keeps it within 0 and rows - 1. Where a screen is
+ * Turning on a screen with rows moves the focus by n and keeps it within 0 and rows - 1, whatever `reverse`
+ * of the world says: pages and rows take the detents as the knob reports them. Where a screen is
  * entered and no focus is named above, the focus is on row 0. A short press while the focus lies beyond the
  * last row (a list became shorter and nav_tick() has not run yet) does nothing.
  */
@@ -279,7 +295,7 @@ nav_do_t nav_long(nav_t *nav, const nav_world_t *world, uint64_t now_ms);
 nav_do_t nav_tap(nav_t *nav, int row, const nav_world_t *world, uint64_t now_ms);
 
 // A swipe: on NAV_PAGES a turn of one detent in that direction (positive = next page; 0 is ignored), on
-// every other screen ignored.
+// every other screen ignored. A finger is no knob: `reverse` of the world says nothing about a swipe.
 // A swipe without a direction (0) is the input that acts on nothing: on every screen and under everything that
 // lies over it, it restarts the idle time and changes nothing else. The caller passes it for what counts as an
 // input and is no turn, press or touch that means something here - app.h: a swipe up or down in one of the two

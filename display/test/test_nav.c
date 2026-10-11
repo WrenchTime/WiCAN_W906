@@ -1192,41 +1192,48 @@ static void test_old(void)
 	check(turn(INT_MAX) == NAV_DO_NOTHING && at(NAV_DTC_OLD, INT_MAX - 3) && press() == NAV_DO_NOTHING && at(NAV_DTC, 0), "an old list of INT_MAX lines: its last row INT_MAX - 3 is Zurück");
 }
 
+// Every detent of these examples is written as the knob reports it (knob.h): the encoder of the board counts
+// down clockwise - seen on the device on 2026-10-10 -, so a detent clockwise is -1, and +1 once the user has
+// reversed the direction. No helper turns "clockwise" here: it would be the rule of nav.c a second time.
 static void test_brightness(void)
 {
 	nav_t before;
 
 	open_brightness(60);
-	check(turn(1) == NAV_DO_BRIGHTNESS && at(NAV_BRIGHTNESS, 0) && nav.value == 65, "brightness, one detent: 5 percent more, to be set at once");
-	check(turn(-1) == NAV_DO_BRIGHTNESS && at(NAV_BRIGHTNESS, 0) && nav.value == 60, "brightness, one detent back: 5 percent less");
-	check(turn(3) == NAV_DO_BRIGHTNESS && nav.value == 75, "brightness, three detents: 15 percent more");
-	check(turn(-4) == NAV_DO_BRIGHTNESS && nav.value == 55, "brightness, four detents back: 20 percent less");
+	check(!world.reverse, "the world of the examples: the direction of the knob is not reversed");
+	check(turn(-1) == NAV_DO_BRIGHTNESS && at(NAV_BRIGHTNESS, 0) && nav.value == 65, "brightness, one detent clockwise - the knob reports -1 -: 5 percent more, to be set at once");
+	check(turn(1) == NAV_DO_BRIGHTNESS && at(NAV_BRIGHTNESS, 0) && nav.value == 60, "brightness, one detent counter-clockwise (+1): 5 percent less");
+	check(turn(-3) == NAV_DO_BRIGHTNESS && nav.value == 75, "brightness, three detents clockwise: 15 percent more");
+	check(turn(4) == NAV_DO_BRIGHTNESS && nav.value == 55, "brightness, four detents counter-clockwise: 20 percent less");
 	check(turn(0) == NAV_DO_BRIGHTNESS && nav.value == 55, "brightness, a turn of no detent: the value stays and is to be set all the same");
-	check(turn(9) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, nine detents from 55: exactly 100");
-	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, a detent at 100: it stays 100 and is to be set all the same");
-	check(turn(-19) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, 19 detents back from 100: exactly 5");
-	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, a detent back at 5: it stays 5");
-	check(turn(INT_MAX) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, the largest number of detents: 100");
-	check(turn(INT_MIN) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, the largest number of detents back: 5");
+	check(turn(-9) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, nine detents clockwise from 55: exactly 100");
+	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, a detent clockwise at 100: it stays 100 and is to be set all the same");
+	check(turn(19) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, 19 detents counter-clockwise from 100: exactly 5");
+	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, a detent counter-clockwise at 5: it stays 5");
+	check(turn(INT_MIN) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, the smallest int clockwise - more detents than an int holds as a positive number -: 100");
+	check(turn(INT_MAX) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, the largest number of detents counter-clockwise: 5");
+	check(turn(-500000000) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, 500 million detents clockwise from 5 - five times that is beyond 32 bit -: 100");
+	check(turn(500000000) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, 500 million detents counter-clockwise from 100: 5");
+	check(turn(-1000000000) == NAV_DO_BRIGHTNESS && nav.value == 100 && turn(1000000000) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, a billion detents each way: 100, then 5");
 	check(at(NAV_BRIGHTNESS, 0) && nav.page == 2, "turning on the brightness screen changes neither focus nor page");
 
 	open_brightness(97);
-	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness 97, one detent: kept at 100");
+	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness 97, one detent clockwise: kept at 100");
 	open_brightness(96);
-	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness 96, one detent: 101 is kept at 100");
+	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness 96, one detent clockwise: 101 is kept at 100");
 	open_brightness(94);
-	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 99, "brightness 94, one detent: 99");
+	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 99, "brightness 94, one detent clockwise: 99");
 	open_brightness(9);
-	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness 9, one detent back: 4 is kept at 5");
+	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness 9, one detent counter-clockwise: 4 is kept at 5");
 	open_brightness(11);
-	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 6, "brightness 11, one detent back: 6");
+	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 6, "brightness 11, one detent counter-clockwise: 6");
 
 	open_brightness(60);
-	turn(2);
+	turn(-2);
 	world.brightness = 30;
 	check(press() == NAV_DO_SETTINGS_STORE && at(NAV_MENU, 1) && nav.value == 70, "brightness, short press: the value is to be stored, back to the menu with the focus on Helligkeit");
 	open_brightness(60);
-	turn(-3);
+	turn(3);
 	check(long_press() == NAV_DO_SETTINGS_STORE && at(NAV_MENU, 1) && nav.value == 45, "brightness, long press: the value is to be stored, back to the menu with the focus on Helligkeit");
 	open_brightness(60);
 	check(press() == NAV_DO_SETTINGS_STORE && at(NAV_MENU, 1) && nav.value == 60, "brightness left without turning: the value in use is to be stored");
@@ -1237,7 +1244,128 @@ static void test_brightness(void)
 	check(swipe(1) == NAV_DO_NOTHING && stays(&before) && swipe(-1) == NAV_DO_NOTHING && stays(&before), "brightness: a swipe is ignored and changes no value");
 	check(held(HOLD_CONFIRMED) == NAV_DO_NOTHING && stays(&before), "brightness: whatever the hold reports is nothing here");
 	world.brightness = 20;
-	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 65, "the brightness of the world changes while it is being set: the value being set counts");
+	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 65, "the brightness of the world changes while it is being set: the value being set counts");
+}
+
+// The user reversed the direction of the knob (settings.reverse): the knob turns the sign of every detent it
+// reports. That is his preference for pages and rows. The brightness does not follow it - the arc on its
+// screen grows clockwise, and so does the light.
+static void test_brightness_reversed(void)
+{
+	static const int detents[] = {1, -1, 2, -3, 7, 0, 12, -12, 500000000, -500000000, INT_MAX, INT_MIN};
+	int wrong = 0, compared = 0;
+
+	open_brightness(60);
+	world.reverse = true;
+	check(turn(1) == NAV_DO_BRIGHTNESS && at(NAV_BRIGHTNESS, 0) && nav.value == 65, "brightness, the direction reversed: the knob reports a detent clockwise as +1, and it is 5 percent more all the same");
+	check(turn(-1) == NAV_DO_BRIGHTNESS && at(NAV_BRIGHTNESS, 0) && nav.value == 60, "brightness, the direction reversed: a detent counter-clockwise comes as -1 and is 5 percent less");
+	check(turn(3) == NAV_DO_BRIGHTNESS && nav.value == 75 && turn(-4) == NAV_DO_BRIGHTNESS && nav.value == 55, "brightness, the direction reversed: three detents clockwise are 15 percent more, four the other way 20 less");
+	check(turn(0) == NAV_DO_BRIGHTNESS && nav.value == 55, "brightness, the direction reversed: a turn of no detent leaves the value and is to be set all the same");
+	check(turn(9) == NAV_DO_BRIGHTNESS && nav.value == 100 && turn(1) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, the direction reversed: clockwise ends at exactly 100 and stays there");
+	check(turn(-19) == NAV_DO_BRIGHTNESS && nav.value == 5 && turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, the direction reversed: counter-clockwise ends at exactly 5 and stays there");
+	check(turn(INT_MAX) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness, the direction reversed: the largest number of detents clockwise: 100");
+	check(turn(INT_MIN) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness, the direction reversed: the smallest int counter-clockwise: 5");
+	check(turn(500000000) == NAV_DO_BRIGHTNESS && nav.value == 100 && turn(-500000000) == NAV_DO_BRIGHTNESS && nav.value == 5,
+	      "brightness, the direction reversed: 500 million detents clockwise from 5 are 100, as many the other way 5");
+	check(at(NAV_BRIGHTNESS, 0) && nav.page == 2, "brightness, the direction reversed: turning changes neither focus nor page");
+
+	open_brightness(96);
+	world.reverse = true;
+	check(turn(1) == NAV_DO_BRIGHTNESS && nav.value == 100, "brightness 96, the direction reversed, one detent clockwise: 101 is kept at 100");
+	open_brightness(9);
+	world.reverse = true;
+	check(turn(-1) == NAV_DO_BRIGHTNESS && nav.value == 5, "brightness 9, the direction reversed, one detent counter-clockwise: 4 is kept at 5");
+
+	// The setting changes while the screen shows: the browser may send it at any time
+	open_brightness(60);
+	check(turn(-2) == NAV_DO_BRIGHTNESS && nav.value == 70, "brightness, two detents clockwise before the direction is reversed: 70");
+	world.reverse = true;
+	check(turn(2) == NAV_DO_BRIGHTNESS && nav.value == 80, "brightness, the direction reversed in between: the next two detents clockwise come as +2 and go on to 80");
+	world.reverse = false;
+	check(turn(2) == NAV_DO_BRIGHTNESS && nav.value == 70, "brightness, the direction normal again: +2 is counter-clockwise again, back to 70");
+	world.reverse = true;
+	check(press() == NAV_DO_SETTINGS_STORE && at(NAV_MENU, 1) && nav.value == 70, "brightness, the direction reversed: a short press stores the value and leads back as always");
+
+	// With the same hand the two worlds give the same brightness: what the knob reports in one is the opposite
+	// of what it reports in the other
+	for(size_t i = 0; i < sizeof(detents) / sizeof(detents[0]); i++)
+	{
+		for(int from = 5; from <= 100; from += 19)
+		{
+			int normal;
+
+			// The smallest int has no opposite an int could hold
+			if(detents[i] == INT_MIN) continue;
+
+			open_brightness(from);
+			turn(detents[i]);
+			normal = nav.value;
+			open_brightness(from);
+			world.reverse = true;
+			turn(-detents[i]);
+			if(nav.value != normal) wrong++;
+			compared++;
+		}
+	}
+	check(compared == 66 && wrong == 0, "brightness from 5, 24, 43, 62, 81 and 100 with eleven turns: a turn the knob reports as n ends where one it reports as -n ends with the direction reversed");
+}
+
+// `reverse` of the world is told for the brightness alone. Pages, rows and swipes take what they are given:
+// the knob has turned the sign of its detents already, and a second turn here would take it back.
+static void test_direction_elsewhere(void)
+{
+	static const int detents[] = {1, -1, 2, -3, 0, 5, -5, INT_MAX, INT_MIN};
+	nav_t before, normal;
+	int wrong = 0, moved = 0, compared = 0;
+
+	start();
+	world.reverse = true;
+	check(turn(1) == NAV_DO_NOTHING && page_is(2) && turn(1) == NAV_DO_NOTHING && page_is(4), "value pages with the direction reversed in the world: +1 is the next page, as without it");
+	check(turn(-1) == NAV_DO_NOTHING && page_is(2) && turn(-1) == NAV_DO_NOTHING && page_is(0), "value pages with the direction reversed in the world: -1 is the page before");
+	check(turn(INT_MAX) == NAV_DO_NOTHING && page_is(4) && turn(INT_MIN) == NAV_DO_NOTHING && page_is(0), "value pages with the direction reversed in the world: the largest turns end on the last page and on the first");
+	check(swipe(1) == NAV_DO_NOTHING && page_is(2) && swipe(-1) == NAV_DO_NOTHING && page_is(0), "value pages with the direction reversed in the world: a swipe forwards is the next page, one back the page before - a finger is no knob");
+
+	open_menu(0);
+	world.reverse = true;
+	check(turn(2) == NAV_DO_NOTHING && at(NAV_MENU, 2) && turn(-1) == NAV_DO_NOTHING && at(NAV_MENU, 1), "menu with the direction reversed in the world: +2 moves the focus two rows down, -1 one up");
+	check(turn(INT_MAX) == NAV_DO_NOTHING && at(NAV_MENU, 6) && turn(INT_MIN) == NAV_DO_NOTHING && at(NAV_MENU, 0), "menu with the direction reversed in the world: the largest turns end on the last row and on the first");
+	open_clear_dialog(3);
+	world.reverse = true;
+	check(turn(1) == NAV_DO_NOTHING && at(NAV_DTC_CONFIRM, 1) && turn(-1) == NAV_DO_NOTHING && at(NAV_DTC_CONFIRM, 0),
+	      "clear dialog with the direction reversed in the world: +1 moves the focus to Löschen and -1 back to Abbrechen, as without it");
+
+	// Every screen, both ends of its focus, nine turns: the setting changes nothing but on the brightness screen
+	for(int screen = 0; screen < SCREENS; screen++)
+	{
+		for(int last = 0; last < 2; last++)
+		{
+			for(size_t i = 0; i < sizeof(detents) / sizeof(detents[0]); i++)
+			{
+				nav_do_t action;
+
+				reach((nav_screen_t)screen, last == 1);
+				before = nav;
+				action = turn(detents[i]);
+				normal = nav;
+				reach((nav_screen_t)screen, last == 1);
+				world.reverse = true;
+				if(screen == NAV_BRIGHTNESS)
+				{
+					// 60 percent: a detent either way moves it, and the two worlds part
+					if(turn(detents[i]) != action || (nav.value == normal.value) != (detents[i] == 0)) wrong++;
+					continue;
+				}
+				if(turn(detents[i]) != action || !stays(&normal)) wrong++;
+				// A turn that moved a page or a focus: one a turned sign would have sent elsewhere
+				if(normal.page != before.page || normal.row != before.row) moved++;
+				compared++;
+			}
+		}
+	}
+	printf("  turns compared with the direction reversed: %d, of which %d moved a page or a focus\n", compared, moved);
+	check(wrong == 0 && compared == 2 * 9 * (SCREENS - 1), "every screen but the brightness, the focus near either end, nine turns each: with the direction reversed in the world a turn does what it does without, "
+	                                                         "and on the brightness screen every turn of a detent or more ends elsewhere than without");
+	check(moved >= 80, "of those turns eighty and more moved a page or a focus: the comparison had something to compare");
 }
 
 static void test_web(void)
@@ -2527,6 +2655,7 @@ typedef struct
 	bool ap_kept;                   // the own access point stays on whatever is asked
 	int list, cleared, old, info;   // lines as the header counts them: within 0 and INT_MAX - 3
 	int brightness;
+	bool reverse;                   // the knob reports a detent clockwise as positive, not as negative
 	nav_overlay_t over;
 } seen_t;
 
@@ -2811,7 +2940,11 @@ static nav_do_t model_turn(model_t *model, const seen_t *seen, int detents)
 	}
 	if(model->screen == NAV_BRIGHTNESS)
 	{
-		long long value = model->value + 5ll * detents;
+		// Which way the hand went, and how far: the knob reports clockwise as negative, and as positive once
+		// its direction is reversed. Clockwise is brighter.
+		bool brighter = (detents > 0) == seen->reverse;
+		long long far = detents < 0 ? -(long long)detents : (long long)detents;
+		long long value = model->value + (brighter ? 5 : -5) * far;
 
 		model->value = value < 5 ? 5 : value > 100 ? 100 : (int)value;
 		return NAV_DO_BRIGHTNESS;
@@ -3004,6 +3137,12 @@ static struct
 	long ap_refused[2];                 // short presses and taps on Hotspot while it is kept on
 	long ap_kept_calls;                 // calls with the access point kept on
 	long acts_kept;                     // times the row Hotspot was asked whether it acts while the access point is kept on
+	// The brightness and the direction of the knob
+	long level_turns[2][2];             // turns of a detent or more on the brightness screen: direction normal and reversed, reported negative and positive
+	long level_moves[2];                // ... of them those that made it darker, and brighter
+	long levels;                        // ... and those that went against the hand: must not happen
+	long reversed_calls;                // calls with the direction reversed
+	long reversed_turns[2];             // turns over the value pages and over a screen with rows with the direction reversed
 } walked;
 
 static uint32_t walk_state;
@@ -3018,6 +3157,19 @@ static uint32_t walk_random(uint32_t below)
 {
 	walk_state = walk_state * 1664525u + 1013904223u;
 	return (walk_state >> 8) % below;
+}
+
+/*
+ * The direction of the knob has a die of its own. The walk was written before nav was told of the direction,
+ * and it is to stay the walk it was: with this die it rolls the numbers it always rolled, meets the same
+ * screens with the same calls, and only the brightness goes another way.
+ */
+static uint32_t side_state;
+
+static uint32_t side_random(uint32_t below)
+{
+	side_state = side_state * 1664525u + 1013904223u;
+	return (side_state >> 8) % below;
 }
 
 static int walk_layout, walk_catalog;
@@ -3036,6 +3188,7 @@ static void see(seen_t *seen)
 	seen->previous_firmware = world.previous_firmware;
 	seen->ap_kept = world.ap_kept;
 	seen->brightness = world.brightness;
+	seen->reverse = world.reverse;
 	seen->over = world.uploading ? NAV_OVER_UPLOAD : world.asking != ACCESS_ASK_NONE ? NAV_OVER_ASK : world.update_pending ? NAV_OVER_UPDATE : NAV_OVER_NONE;
 	for(int i = 0; i < 4; i++)
 	{
@@ -3246,6 +3399,7 @@ static void walk(uint32_t seed)
 	uint64_t at_ms = 1000 + seed;
 
 	walk_state = seed;
+	side_state = seed ^ 0xD1CEu;
 	quiet_world();
 	walk_layout = 0;
 	walk_catalog = 3;
@@ -3305,6 +3459,8 @@ static void walk(uint32_t seed)
 		if(nav.screen == NAV_DTC_CONFIRM && what >= 28 && walk_random(3) == 0) what = 95;
 		// ... and in both dialogs somebody finds that nobody can see them
 		if((nav.screen == NAV_DTC_CONFIRM || nav.screen == NAV_CONFIRM) && what >= 28 && walk_random(30) == 0) what = 98;
+		// The user reverses the direction of the knob, or the browser does: at any time, on any screen
+		if(side_random(20) == 0) world.reverse = !world.reverse;
 		see(&seen);
 		rows = model_rows(model.screen, &seen);
 		before = nav;
@@ -3536,6 +3692,19 @@ static void walk(uint32_t seed)
 		if((nav.screen == NAV_BRIGHTNESS || action == NAV_DO_SETTINGS_STORE || action == NAV_DO_BRIGHTNESS) && (nav.value < 5 || nav.value > 100)) walked.values++;
 		if(action == NAV_DO_SETTINGS_STORE && !(before.screen == NAV_BRIGHTNESS && nav.screen != NAV_BRIGHTNESS)) walked.values++;
 
+		// The brightness follows the hand, not the setting: clockwise - what the knob reports as negative, and as
+		// positive with the direction reversed - never makes it darker, the other way never brighter
+		if(call == CALL_TURN && before.screen == NAV_BRIGHTNESS && seen.over == NAV_OVER_NONE && given != 0)
+		{
+			bool hand_clockwise = (given > 0) == world.reverse;
+
+			if(hand_clockwise ? nav.value < before.value : nav.value > before.value) walked.levels++;
+			walked.level_turns[world.reverse][given > 0]++;
+			if(nav.value != before.value) walked.level_moves[nav.value > before.value]++;
+		}
+		if(world.reverse) walked.reversed_calls++;
+		if(world.reverse && call == CALL_TURN && seen.over == NAV_OVER_NONE && given != 0 && (before.screen == NAV_PAGES || rows > 1)) walked.reversed_turns[before.screen != NAV_PAGES]++;
+
 		// No screen without a way back
 		if(step % 3 == 0)
 		{
@@ -3592,6 +3761,9 @@ static void test_walk(void)
 	printf("  the own access point: switched by %ld short presses and %ld taps on Hotspot, kept on under %ld short presses and %ld taps on it; kept on in %ld calls, "
 	       "and the row asked %ld times whether it acts then\n",
 	       walked.ap_toggles[0], walked.ap_toggles[1], walked.ap_refused[0], walked.ap_refused[1], walked.ap_kept_calls, walked.acts_kept);
+	printf("  the brightness: turned with the direction normal %ld times as negative and %ld as positive detents, with it reversed %ld and %ld; %ld turns made it darker, %ld brighter\n",
+	       walked.level_turns[0][0], walked.level_turns[0][1], walked.level_turns[1][0], walked.level_turns[1][1], walked.level_moves[0], walked.level_moves[1]);
+	printf("  the direction reversed in %ld calls, in %ld turns over the value pages and %ld over rows\n", walked.reversed_calls, walked.reversed_turns[0], walked.reversed_turns[1]);
 
 	for(int i = 0; i < CALLS; i++) reached = reached && walked.calls[i] >= 200;
 	for(int i = 0; i < SCREENS; i++) reached = reached && walked.screens[i] >= 1000;
@@ -3627,6 +3799,11 @@ static void test_walk(void)
 	check(walked.overlays == 0, "in the walk an input under an overlay changes nothing below it and returns only what the overlay names; the hold returns nothing there, the tick at most the closing of the hold dialog");
 	check(walked.rows == 0, "in the walk the focus is never negative and lies beyond the last row only while nothing moved it since a list became shorter, never after a tick or a turn");
 	check(walked.values == 0, "in the walk the brightness being set stays within 5 and 100, and a store is asked for only when the brightness screen is left");
+	check(walked.level_turns[0][0] >= 500 && walked.level_turns[0][1] >= 500 && walked.level_turns[1][0] >= 500 && walked.level_turns[1][1] >= 500 &&
+	      walked.level_moves[0] >= 500 && walked.level_moves[1] >= 500 && walked.reversed_calls >= 100000 && walked.reversed_turns[0] >= 10000 && walked.reversed_turns[1] >= 10000,
+	      "the walk turns the knob on the brightness screen with the direction normal and reversed, each as negative and as positive detents, darker and brighter, "
+	      "and over value pages and rows with the direction reversed, in numbers");
+	check(walked.levels == 0, "in the walk a turn clockwise never makes the brightness lower and one the other way never higher, whatever the direction set for pages and rows");
 	check(walked.trapped == 0, "in the walk every screen has a way back to the value pages with at most 6 inputs of the knob");
 	check(walked.acts_wrong == 0, "in the walk a row acts exactly when the table of the rules has a short press for it that applies: after every call, for the row in focus, "
 	                              "the ends of the screen, the rows around the end of the lines and the rows beside the screen");
@@ -3838,6 +4015,8 @@ static void examples_of_the_screens(void)
 	test_failed();
 	test_old();
 	test_brightness();
+	test_brightness_reversed();
+	test_direction_elsewhere();
 	test_web();
 	test_info();
 	test_settings();

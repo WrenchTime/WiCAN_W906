@@ -613,6 +613,56 @@ class Api(unittest.TestCase):
         self.clock.advance(2.1)
         self.assertEqual(self.call("GET", "/api/values"), (200, fixture("app_web_values_cerbo.json")))
 
+    def test_cerbo_owns_its_prefix(self):
+        # The story of the firmware (test_app_web.c): the other vehicle with a value named GX_BATT_SOC, a key
+        # the Cerbo publishes as well. Without an address it is a value like every other ...
+        display = self.display
+        display.values = lambda now: [("@BATT_V", 12.4, 2000), ("SPEED", 0, 2000), ("GX_BATT_SOC", 12.5, 2000), ("RPM", 790, 2000),
+                                      ("COOLANT", 81.5, 2000), ("FUEL", 62, 2000), ("INTAKE_TEMP", 19, 2000)]
+        plain = display.values_json(2100)
+        self.assertEqual(plain, fixture("app_web_values.json").replace("\"RPM\"", "\"GX_BATT_SOC\":{\"v\":12.5,\"age\":\"fresh\"},\"RPM\""))
+        # ... with one the prefix is the Cerbo's: the key stands once, with the value of the Cerbo
+        display.settings["cerbo"] = "192.168.88.2"
+        display.cerbo = "silent"
+        display.cerbo_base = (("GX_BATT_SOC", 87.5), ("GX_BATT_V", 26.41), ("GX_BATT_I", -6.2), ("GX_SW_B2B", "on"), ("GX_SW_VALVE", "off"),
+                              ("GX_TANK_FRESH", 77))
+        display.cerbo_seen_ms = 2040
+        self.assertEqual(display.values_json(2100), fixture("app_web_values_cerbo.json"))
+        self.assertEqual(display.values_json(2100).count("\"GX_BATT_SOC\""), 1)
+        # ... without exception: also where the Cerbo has no value of that name, and where it has none at all
+        display.cerbo_base = (("GX_TANK_FRESH", 77),)
+        self.assertEqual(display.values_json(2100), fixture("app_web_values.json").replace("\"view\":\"live\"", "\"view\":\"live\",\"cerbo\":\"live\"")
+                         .replace("}}}", "},\"GX_TANK_FRESH\":{\"v\":77,\"age\":\"fresh\"}}}"))
+        display.cerbo_seen_ms = None
+        self.assertEqual(display.values_json(2100), fixture("app_web_values.json").replace("\"view\":\"live\"", "\"view\":\"live\",\"cerbo\":\"quiet\""))
+        # The address is taken away: the answer of before
+        display.settings["cerbo"] = ""
+        self.assertEqual(display.values_json(2100), plain)
+
+    def test_cerbo_counts_what_it_names(self):
+        # A number beyond a double (the Cerbo sent 1e999): held as infinite, named by no answer, not counted
+        display = self.display
+        display.settings["cerbo"] = "192.168.88.2"
+        display.cerbo = "silent"
+        display.cerbo_base = (("GX_BATT_SOC", 87.5), ("GX_BATT_V", float("inf")), ("GX_BATT_I", float("-inf")), ("GX_SW_B2B", "on"),
+                              ("GX_SW_VALVE", "off"), ("GX_TANK_FRESH", 77))
+        display.cerbo_seen_ms = 2040
+        display.cerbo_numbers = {"ok": 3, "connects": 1}
+        display.values = lambda now: [("@BATT_V", 12.4, 2000), ("SPEED", 0, 2000), ("RPM", 790, 2000), ("COOLANT", float("inf"), 2000),
+                                      ("FUEL", 62, 2000), ("INTAKE_TEMP", 19, 2000)]
+        values = display.values_json(2100)
+        self.assertEqual(values, fixture("app_web_values_cerbo.json").replace("\"COOLANT\":{\"v\":81.5,\"age\":\"fresh\"},", "")
+                         .replace("\"GX_BATT_V\":{\"v\":26.41,\"age\":\"fresh\"},", "").replace("\"GX_BATT_I\":{\"v\":-6.2,\"age\":\"fresh\"},", ""))
+        self.assertEqual(values.count("\"GX_"), 4)
+        self.assertNotIn("inf", values)
+        self.assertIn("\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":4,\"ok\":3,", display.info_json(2100))
+        # The two agree at every age: four until the values are gone, then none
+        for now in (2100, 7040, 62039, 62040):
+            with self.subTest(now=now):
+                named = display.values_json(now).count("\"GX_")
+                self.assertEqual(named, 4 if now < 62040 else 0)
+                self.assertIn("\"values\":%d,\"ok\":3," % named, display.info_json(now))
+
     def test_cerbo_comes_and_goes(self):
         display = self.display
         self.release()
@@ -1451,6 +1501,35 @@ class CerboBehindTheLayout(mock_display.Display):
         return text.replace(cerbo, "", 1).replace("\"http\":", cerbo + "\"http\":", 1) if cerbo else text
 
 
+class OwnsThePrefixOnlyWhereTheCerboHasTheKey(mock_display.Display):
+    """Leaves a value of the adapter with the prefix of the Cerbo out only while the Cerbo has a value of that name"""
+
+    def values_json(self, now):
+        taken = {name for name, value, seen in self.cerbo_values(now)}
+        with mock.patch.object(mock_display, "CERBO_PREFIX", "NO_SUCH_PREFIX_"):
+            text = super().values_json(now)
+        if self.settings["cerbo"] != "":
+            for name in taken:
+                text = re.sub("\"%s\":\\{[^}]*\\},(?=.*\"%s\":)" % (name, name), "", text, count=1)
+        return text
+
+
+class OwnsThePrefixWithoutAnAddress(mock_display.Display):
+    """Leaves a value of the adapter with the prefix of the Cerbo out also on a display without its address"""
+
+    def values_json(self, now):
+        text = super().values_json(now)
+        return text if self.settings["cerbo"] != "" else re.sub("\"%s[^\"]*\":\\{[^}]*\\},?" % mock_display.CERBO_PREFIX, "", text)
+
+
+class CountsTheWholeStore(mock_display.Display):
+    """cerbo.values of the info as it was: every value of the store that is not gone, a number without end among them"""
+
+    def cerbo_json(self, now):
+        with mock.patch.object(mock_display, "has_text", lambda value: True):
+            return super().cerbo_json(now)
+
+
 class KeepsTheValuesOfTheOldAddress(mock_display.Display):
     def _settings(self, data, now=None):
         seen = self.cerbo_seen_ms
@@ -1680,6 +1759,8 @@ API_MUTATIONS = {
     "test_cerbo_settings": TakesNamesForTheCerbo,
     "test_cerbo_answers": WrongCerbo,
     "test_cerbo_comes_and_goes": ("CERBO_KEPT_MS", 59999),
+    "test_cerbo_owns_its_prefix": ("CERBO_PREFIX", "NO_SUCH_PREFIX_"),
+    "test_cerbo_counts_what_it_names": CountsTheWholeStore,
     "test_no_cerbo_without_an_address": NamesTheCerboAlways,
     "test_release": ("OPEN_MAX_MS", 1801 * 1000),
     "test_tickets": ("CONFIRM_MS", 61 * 1000),
@@ -1702,6 +1783,8 @@ API_MUTATIONS_MORE = {
     "test_cerbo_answers": [("CERBO_FRESH_MS", 4999), ("CERBO_FRESH_MS", 3000), ("CERBO_KEPT_MS", 10000), ("CERBO_LIVE_MS", 9940), CerboBehindTheLayout],
     "test_cerbo_comes_and_goes": [("CERBO_FRESH_MS", 5001), ("CERBO_LIVE_MS", 10001), ("CERBO_SILENT_MS", 20001), ("CERBO_GRACE_MS", 15001),
                                   ("CERBO_ADDRESS", "192.168.88.9"), KeepsTheValuesOfTheOldAddress, NamesTheCerboAlways],
+    "test_cerbo_owns_its_prefix": [OwnsThePrefixOnlyWhereTheCerboHasTheKey, OwnsThePrefixWithoutAnAddress],
+    "test_cerbo_counts_what_it_names": [("has_text", lambda value: True), ("has_text", lambda value: isinstance(value, str) or value > float("-inf"))],
     "test_no_cerbo_without_an_address": [NamesTheViewOfTheCerboAlways, WritesAnEmptyAddress],
     "test_busy_keeps_the_adapter": [AsksForANetworkWhileItReads],
     "test_heat": [UploadsInTheDark, KeepsTheQuestionInTheDark, NamesNoHeat],

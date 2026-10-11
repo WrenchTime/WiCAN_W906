@@ -637,7 +637,10 @@ DIGITS_OF = "\t\tsnprintf(digits, sizeof(digits), \"%.9g\", item->number == 0 ? 
 NO_TEXT = "\tif(text == NULL) return;\n"
 COMMA = "\tif(*comma) put_char(writer, ',');\n\t*comma = true;\n"
 AGE_WORD = "\tput(writer, age == VALUE_AGE_FRESH ? \",\\\"age\\\":\\\"fresh\\\"}\" : \",\\\"age\\\":\\\"old\\\"}\");"
-OF_WICAN = "\tfor(int i = 0; i < wican->count; i++) put_member(&writer, &wican->items[i], values_age(&wican->items[i], now_ms), &comma);\n"
+# The values of the adapter, without those whose names bear the prefix of the Cerbo
+NOT_THE_CERBOS = "\t\tif(cerbo_key(wican->items[i].name)) continue;\n"
+OF_WICAN = ("\tfor(int i = 0; i < wican->count; i++)\n\t{\n" + NOT_THE_CERBOS +
+            "\t\tput_member(&writer, &wican->items[i], values_age(&wican->items[i], now_ms), &comma);\n\t}\n")
 OF_CERBO = "\tfor(int i = 0; i < cerbo->count; i++) put_member(&writer, &cerbo->items[i], cerbo_age(&cerbo->items[i], now_ms), &comma);\n"
 BOTH_HEAD = ("\tput(&writer, \"{\\\"view\\\":\");\n\tput_string(&writer, wican_view);\n\tput(&writer, \",\\\"cerbo\\\":\");\n\tput_string(&writer, cerbo_view);\n"
              "\tput(&writer, \",\\\"values\\\":{\");\n")
@@ -735,6 +738,23 @@ MUTATIONS += [
      "\t// The object of the values, and the answer\n\tput_char(&writer, '}');\n\tput_char(&writer, '}');\n", "\t// The object of the values, and the answer\n\tput_char(&writer, '}');\n"),
     ("web_json_both_closed_three_times", T, F,
      "\t// The object of the values, and the answer\n\tput_char(&writer, '}');\n", "\t// The object of the values, and the answer\n\tput_char(&writer, '}');\n\tput_char(&writer, '}');\n"),
+
+    # the prefix of the Cerbo is the Cerbo's in the answer of a display with a second source, and nowhere else
+    ("web_json_both_adapter_with_the_prefix_written", T, F, NOT_THE_CERBOS, ""),
+    ("web_json_both_prefix_left_out_only_where_the_cerbo_has_the_key", T, F,
+     NOT_THE_CERBOS, NOT_THE_CERBOS.replace("cerbo_key(wican->items[i].name)", "cerbo_key(wican->items[i].name) && values_find(cerbo, wican->items[i].name) != NULL")),
+    ("web_json_both_prefix_left_out_only_while_the_cerbo_has_values", T, F,
+     NOT_THE_CERBOS, NOT_THE_CERBOS.replace("cerbo_key(wican->items[i].name)", "cerbo_key(wican->items[i].name) && cerbo->count > 0")),
+    ("web_json_both_prefix_left_out_only_while_it_is_fresh", T, F,
+     NOT_THE_CERBOS, NOT_THE_CERBOS.replace("cerbo_key(wican->items[i].name)", "cerbo_key(wican->items[i].name) && values_age(&wican->items[i], now_ms) == VALUE_AGE_FRESH")),
+    ("web_json_both_prefix_anywhere_in_the_name", T, F, NOT_THE_CERBOS, NOT_THE_CERBOS.replace("cerbo_key(wican->items[i].name)", "strstr(wican->items[i].name, CERBO_PREFIX) != NULL")),
+    ("web_json_both_prefix_of_one_letter", T, F, NOT_THE_CERBOS, NOT_THE_CERBOS.replace("cerbo_key(wican->items[i].name)", "wican->items[i].name[0] == 'G'")),
+    ("web_json_both_prefix_ends_the_values_of_the_adapter", T, F, NOT_THE_CERBOS, NOT_THE_CERBOS.replace("continue;", "break;")),
+    ("web_json_both_values_of_the_cerbo_left_out_by_their_prefix", T, F,
+     OF_CERBO, "\tfor(int i = 0; i < cerbo->count; i++)\n\t{\n\t\tif(cerbo_key(cerbo->items[i].name)) continue;\n"
+               "\t\tput_member(&writer, &cerbo->items[i], cerbo_age(&cerbo->items[i], now_ms), &comma);\n\t}\n"),
+    ("web_json_values_prefix_left_out_without_a_second_source", T, F,
+     "\t\tif(age == VALUE_AGE_GONE) continue;\n", "\t\tif(age == VALUE_AGE_GONE || cerbo_key(value->name)) continue;\n"),
 
     # the numbers of the header
     ("web_json_cerbo_size_too_small", T, H, "#define WEB_VALUES_CERBO_SIZE   4672", "#define WEB_VALUES_CERBO_SIZE   4350"),

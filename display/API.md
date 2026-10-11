@@ -202,7 +202,9 @@ answer has one object more, behind `wican`, and the address in its settings:
   broker answers, and no bundle for 20 s: the flow "Display" in Node-RED does not publish), `newer` (the
   flow publishes a newer version of the contract than this firmware reads), `live`.
 - `cerbo.values`: the values of the Cerbo the display has to show right now: those of the last bundle, until
-  they are 60 s old. `cerbo.ok`: bundles taken. `cerbo.refused`: messages not taken - no bundle of the
+  they are 60 s old. It is the number of keys with `GX_` in `GET /api/values` at that moment: what that answer
+  leaves out is not counted (a number beyond the range of a double, sent as `1e999`).
+- `cerbo.ok`: bundles taken. `cerbo.refused`: messages not taken - no bundle of the
   contract, a newer version, a retained message, another topic, too long. `cerbo.connects`: sessions with the
   broker that stood. `cerbo.boots`: runs of the flow the display has seen (a number that keeps running means
   two flows publish). `cerbo.lag_ms`: by how much the last bundle arrived late. All counted since the start of
@@ -228,7 +230,8 @@ adapter sleeps.
 ```
 
 `v` is a number, `"on"` or `"off"`; `age` is `fresh` (under 3 s) or `old` (under 10 s). Older values are
-left out.
+left out, and so is a number beyond the range of a double (the source sent `1e999`): the display holds it
+and has no text for it.
 
 **With a second source** — `web_values_cerbo.json`. A display that has the address of a Cerbo GX answers
 with one member more, `cerbo`, behind `view` - what it shows about the Cerbo, the words of `cerbo.view` in
@@ -240,11 +243,18 @@ adapter:
  "GX_BATT_SOC":{"v":99.7,"age":"fresh"},"GX_SW_B2B":{"v":"on","age":"fresh"},"GX_TANK_FRESH":{"v":77,"age":"old"}}}
 ```
 
-Every key of the Cerbo begins with `GX_`, and no key of the adapter does. A value of the Cerbo is `fresh`
-under 5 s and `old` under 60 s: the radio link to it drops out, and a state of charge of 40 s ago still says
-something. A value the last bundle of the Cerbo did not name is left out at once: the Cerbo has none.
-Without the address the answer is the one above, byte for byte: no member `cerbo`, no key with `GX_`. With
-both stores full the answer has at most 19511 bytes.
+Every key of the Cerbo begins with `GX_`, and in this answer the prefix belongs to the Cerbo alone. The
+display sees to that: a value of the adapter whose name begins with `GX_` - a vehicle profile may name one
+so - is left out of this answer, whether the Cerbo publishes that key or not, from the moment an address is
+set (also in safe mode, where the source is off). So no key stands twice in `values`, a key with `GX_` is
+always a value of the Cerbo, and there are as many of them as `cerbo.values` in `GET /api/info` says.
+
+A value of the Cerbo is `fresh` under 5 s and `old` under 60 s: the radio link to it drops out, and a state
+of charge of 40 s ago still says something. A value the last bundle of the Cerbo did not name is left out at
+once: the Cerbo has none.
+Without the address the answer is the one above, byte for byte: no member `cerbo`, and no value left out for
+its name - one of the adapter named `GX_...` is then a value like every other, as it always was. With both
+stores full the answer has at most 19511 bytes.
 
 ### Layout — `GET /api/layout`, `PUT /api/layout?mode=...`
 
@@ -311,8 +321,9 @@ the order is the priority.
 ```
 
 Every member is optional. `brightness` and `night` 5 to 100 percent, `standby_s` 0 to 3600 (0 = never):
-after that long without input the backlight goes dark while there is nothing to show. Answer: the settings
-now in use.
+after that long without input the backlight goes dark while there is nothing to show. `reverse` turns the
+direction of the knob for pages and rows; the brightness screen does not follow it - there, clockwise is
+always brighter. Answer: the settings now in use.
 
 `cerbo` — `settings_cerbo.json` — is the address of the MQTT broker of a Victron Cerbo GX, the second source
 of values: `{"cerbo":"192.168.88.2"}`. An IPv4 address in dotted form and nothing else - four numbers from 0

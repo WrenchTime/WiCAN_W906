@@ -109,9 +109,16 @@ int web_values_json(const values_t *values, const char *view, uint64_t now_ms, c
 // the Cerbo (`cerbo`) behind those of the adapter (`wican`), in the same object and in their order. The same
 // values are left out and the numbers are written the same way; a value of the adapter is as old as
 // values_age() says, one of the Cerbo as cerbo_age() says - "fresh" for less than CERBO_FRESH_MS, left out
-// from CERBO_KEPT_MS on. Nothing is looked at but the stores: a name is written as it is, whatever its
-// prefix. With an empty store of the Cerbo the answer is the one of web_values_json() with the member
-// "cerbo" put in.
+// from CERBO_KEPT_MS on.
+// The prefix of the Cerbo (CERBO_PREFIX, "GX_") belongs to the Cerbo in this answer, without exception: a
+// value of the adapter whose name begins with it (cerbo_key()) is left out, whether the Cerbo has a value of
+// that name or not, and whatever its store holds. A vehicle profile may name a value GX_..., and written its
+// key could stand twice in one object. So no key of `wican` stands twice with one of `cerbo`, as long as
+// every key of `cerbo` has the prefix - cerbo.h takes no other; of that store nothing is looked at but the
+// store, and a name in it is written as it is.
+// With an empty store of the Cerbo the answer is the one of web_values_json() for the values of the adapter
+// without that prefix, with the member "cerbo" put in. web_values_json() itself knows no prefix: a display
+// without a second source writes every value of the adapter, as it always did.
 // WEB_VALUES_CERBO_SIZE is the room the Cerbo needs on top of WEB_VALUES_SIZE: VALUES_MAX values with the
 // longest names cerbo.h takes, which need no escape, and a view of up to 32 bytes that needs none (4651
 // bytes). The longest text of all is then 19713 bytes, 19714 with the zero: every byte of the names and the

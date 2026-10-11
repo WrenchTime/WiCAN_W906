@@ -37,6 +37,14 @@
  * KNOB_COUNTS_PER_DETENT counts: two. That number was measured on the board on 2026-10-09, not read from a
  * data sheet: while it was 4, two detents of the hand turned one page.
  *
+ * The direction. Turning clockwise, seen from the front, counts DOWN on this board. Seen on the device on
+ * 2026-10-10 (firmware b1827ef, `reverse` off): clockwise made the brightness lower and moved the focus of
+ * the menu up, and both were negative detents. board.c had assumed the opposite and nobody had looked. So a
+ * detent clockwise is -1 from knob_turn(), and +1 with `reverse` set.
+ * The owner keeps pages and rows as they are on his device: they take the sign as it comes (nav.h), and
+ * `reverse` is the setting for who wants them the other way. The brightness alone has a direction of its
+ * own - clockwise is brighter - and nav.h takes the setting back there.
+ *
  * What is left of a detent is kept, so that slow turning loses nothing, and dropped after KNOB_REST_MS
  * without a count, so that a knob resting between two detents does not add up to a step some day. With two
  * counts a detent, what is left is one count and never more: half a detent. So the two counts of a detent
@@ -68,8 +76,8 @@ typedef struct
 	bool reverse;
 } knob_t;
 
-// Released, nothing counted. reverse: turning is reported with the opposite sign (setting of the user:
-// the sources disagree about the direction of this board).
+// Released, nothing counted. reverse: turning is reported with the opposite sign (setting of the user, his
+// preference for pages and rows; without it clockwise is negative, see "The direction" above).
 void knob_init(knob_t *knob, bool reverse);
 
 // Changes the sign of what knob_turn() returns from now on. What was counted so far stays.

@@ -668,14 +668,15 @@ static void test_brightness(void)
 	short_press();
 	shows("brightness", "the brightness screen opens with the brightness in use");
 	check(light() == 80 && app->brightness_preview == -1, "the brightness screen: before the knob is turned nothing is being set");
-	turn(-2);
-	shows("brightness_70", "the brightness screen: two detents back are ten percent less");
+	// The encoder counts up counter-clockwise (knob.h): darker
+	turn(2);
+	shows("brightness_70", "the brightness screen: two detents counter-clockwise are ten percent less");
 	check(light() == 70 && app->brightness_preview == 70 && app->settings.brightness == 80 && stores() == 0,
 	      "the brightness being set is on the backlight at once and is not stored");
-	turn(-20);
+	turn(20);
 	check(light() == 5 && app->brightness_preview == 5, "the brightness screen: the lower limit of 5 percent");
-	turn(1);
-	check(light() == 10 && app->brightness_preview == 10, "the brightness screen: one detent up from the limit");
+	turn(-1);
+	check(light() == 10 && app->brightness_preview == 10, "the brightness screen: one detent clockwise up from the limit");
 	short_press();
 	check(on(NAV_MENU) && app->nav.row == 1 && app->settings.brightness == 10 && app->settings.night == 25 && app->brightness_preview == -1 && light() == 10,
 	      "a short press leaves the brightness screen: the value is the brightness of the day");
@@ -687,7 +688,7 @@ static void test_brightness(void)
 	check(app->settings.night_mode && done.settings == 2 && flash_settings_are(SETTINGS_NIGHT) && light() == 25, "the night mode is stored and on the backlight at once");
 	turn(-1);
 	short_press();
-	turn(1);
+	turn(-1);
 	shows("brightness_night", "the brightness screen in night mode sets the brightness of the night");
 	check(light() == 30 && app->settings.night == 25, "the brightness of the night being set is on the backlight and not stored");
 	long_press();
@@ -695,7 +696,7 @@ static void test_brightness(void)
 	      "a long press leaves the brightness screen as well: in night mode the value is the brightness of the night, the one of the day stays");
 
 	short_press();
-	turn(2);
+	turn(-2);
 	check(light() == 40 && done.settings == 3, "the brightness screen once more: 40 percent being set");
 	run(119900);
 	check(on(NAV_BRIGHTNESS) && done.settings == 3, "the brightness screen 119.9 s after the last detent: still open");
@@ -712,6 +713,127 @@ static void test_brightness(void)
 	short_press();
 	check(!app->settings.night_mode && light() == 10 && flash_settings_are("{\"brightness\":10,\"night\":40,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}"),
 	      "a second short press on Nachtmodus switches it off again");
+}
+
+#define SETTINGS_25         "{\"brightness\":25,\"night\":25,\"night_mode\":false,\"reverse\":false,\"standby_s\":60}"
+#define SETTINGS_25_TURN    "{\"brightness\":25,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60}"
+#define SETTINGS_40_TURN    "{\"brightness\":40,\"night\":25,\"night_mode\":false,\"reverse\":true,\"standby_s\":60}"
+
+/*
+ * The hand at the ring, in counts of the encoder as the board delivers them. Seen on the device on 2026-10-10
+ * (firmware b1827ef, the direction not reversed): turning clockwise, seen from the front, counts DOWN - the
+ * focus of the menu went up, and the brightness went down. Pages and rows stay as the owner has them. The
+ * brightness follows the hand: clockwise is brighter, whatever the setting "Drehrichtung" says.
+ */
+static void test_brightness_hand(void)
+{
+	drive();
+	check(!app->settings.reverse && !app->knob.reverse && KNOB_COUNTS_PER_DETENT == 2, "the scene of the hand: the direction of the knob is not reversed, and two counts are a detent");
+
+	// Pages and rows as they are on the device
+	count(2);
+	shows("page_ladeluft", "two counts up - a detent counter-clockwise - are the next page, as on the device");
+	count(-2);
+	shows("page_motor", "two counts down - a detent clockwise - are the page before, as on the device");
+	short_press();
+	count(4);
+	check(on(NAV_MENU) && app->nav.row == 2, "in the menu two detents counter-clockwise move the focus two rows down");
+	count(-2);
+	check(on(NAV_MENU) && app->nav.row == 1, "a detent clockwise moves the focus of the menu up, as the owner saw it: to Helligkeit");
+	short_press();
+	shows("brightness", "the brightness screen at 80 percent");
+
+	// The brightness: clockwise is brighter
+	count(-2);
+	check(on(NAV_BRIGHTNESS) && app->nav.value == 85 && app->brightness_preview == 85 && light() == 85, "two counts down - a detent clockwise - make it brighter: 85 percent, on the backlight at once");
+	count(-1);
+	check(app->nav.value == 85 && light() == 85, "one count down is no detent yet: 85 percent stay");
+	count(-1);
+	check(app->nav.value == 90 && light() == 90, "the second count down makes the detent: 90 percent");
+	count(4);
+	check(app->nav.value == 80 && light() == 80, "four counts up - two detents counter-clockwise - make it darker: 80 percent");
+	count(4);
+	shows("brightness_70", "two more detents counter-clockwise: the screen of 70 percent");
+	check(light() == 70 && app->settings.brightness == 80, "70 percent on the backlight, and nothing stored yet");
+	count(-40);
+	check(app->nav.value == 100 && light() == 100, "twenty detents clockwise: the upper limit of 100 percent");
+	count(60);
+	check(app->nav.value == 5 && light() == 5, "thirty detents counter-clockwise: the lower limit of 5 percent");
+	count(-8);
+	check(app->nav.value == 25 && light() == 25, "four detents clockwise from the limit: 25 percent");
+	short_press();
+	check(on(NAV_MENU) && app->nav.row == 1 && app->settings.brightness == 25 && light() == 25 && done.settings == 1 && flash_settings_are(SETTINGS_25),
+	      "a short press stores what the hand set: 25 percent");
+
+	// The user reverses the direction: his preference for pages and rows
+	count(8);
+	short_press();
+	check(on(NAV_SETTINGS) && app->nav.row == 0, "four detents counter-clockwise further down and a short press: the settings, the focus on Drehrichtung");
+	short_press();
+	check(app->settings.reverse && app->knob.reverse && done.settings == 2 && flash_settings_are(SETTINGS_25_TURN), "a short press on Drehrichtung reverses the direction and stores it");
+	count(-2);
+	check(on(NAV_SETTINGS) && app->nav.row == 1, "with the direction reversed the same detent clockwise moves the focus DOWN: the opposite way from before");
+	count(2);
+	check(on(NAV_SETTINGS) && app->nav.row == 0, "with the direction reversed a detent counter-clockwise moves the focus up");
+	long_press();
+	check(on(NAV_MENU) && app->nav.row == 5, "a long press leads back to the menu, the focus on Einstellungen");
+	count(8);
+	check(on(NAV_MENU) && app->nav.row == 1, "with the direction reversed four detents counter-clockwise move the focus up, to Helligkeit");
+	short_press();
+	check(on(NAV_BRIGHTNESS) && app->nav.value == 25 && light() == 25, "the brightness screen with the direction reversed: the 25 percent in use");
+
+	// ... and the brightness follows the hand as before
+	count(-2);
+	check(app->nav.value == 30 && app->brightness_preview == 30 && light() == 30, "the same hand movement as before the setting - two counts down, a detent clockwise - makes it brighter as well: 30 percent");
+	count(2);
+	check(app->nav.value == 25 && light() == 25, "with the direction reversed a detent counter-clockwise makes it darker as well: 25 percent");
+	count(-1);
+	count(-1);
+	check(app->nav.value == 30 && light() == 30, "with the direction reversed two single counts down make the detent clockwise: 30 percent");
+	count(-200);
+	check(app->nav.value == 100 && light() == 100, "with the direction reversed a hundred detents clockwise end at 100 percent");
+	count(200);
+	check(app->nav.value == 5 && light() == 5, "with the direction reversed a hundred detents counter-clockwise end at 5 percent");
+	count(-14);
+	check(app->nav.value == 40 && light() == 40, "with the direction reversed seven detents clockwise from the limit: 40 percent");
+	long_press();
+	check(on(NAV_MENU) && app->nav.row == 1 && app->settings.brightness == 40 && light() == 40 && done.settings == 3 && flash_settings_are(SETTINGS_40_TURN),
+	      "a long press stores the 40 percent, and the direction stays reversed");
+	long_press();
+	count(-2);
+	shows("page_ladeluft", "with the direction reversed a detent clockwise is the NEXT page: the opposite way from before");
+	count(2);
+	shows("page_motor", "with the direction reversed a detent counter-clockwise is the page before");
+
+	// The setting is taken back while the brightness is being set: the hand goes on as it did
+	short_press();
+	count(8);
+	check(on(NAV_MENU) && app->nav.row == 0, "the menu opens on its first row, and four detents counter-clockwise leave the focus there: reversed, they lead up");
+	count(-2);
+	short_press();
+	count(-4);
+	check(on(NAV_BRIGHTNESS) && app->nav.value == 50 && light() == 50, "a detent clockwise down to Helligkeit, and two more on its screen: 50 percent");
+	app_do(app, NAV_DO_REVERSE_TOGGLE, now);
+	check(!app->settings.reverse && !app->knob.reverse && on(NAV_BRIGHTNESS), "the direction is set back to normal while the brightness screen shows");
+	count(-2);
+	check(app->nav.value == 55 && light() == 55, "the next detent clockwise makes it brighter still: 55 percent");
+	count(2);
+	check(app->nav.value == 50 && light() == 50, "and one counter-clockwise darker: 50 percent");
+
+	// After a restart with the direction stored as reversed
+	garage();
+	strcpy(flash.settings, SETTINGS_40_TURN);
+	flash.has_settings = true;
+	start();
+	run(2100);
+	check(app->settings.reverse && app->knob.reverse && light() == 40, "a start with the direction stored as reversed, at 40 percent");
+	short_press();
+	count(-2);
+	short_press();
+	count(-2);
+	check(on(NAV_BRIGHTNESS) && app->nav.value == 45 && light() == 45, "after that start a detent clockwise leads down to Helligkeit, and one more makes it brighter: 45 percent");
+	count(2);
+	check(app->nav.value == 40 && light() == 40, "after that start a detent counter-clockwise makes it darker: 40 percent");
 }
 
 static void test_settings(void)
@@ -3218,6 +3340,13 @@ static void test_world(void)
 	check(seen->layout == &app->layout && seen->catalog == &app->poll.catalog && seen->flow == DTC_FLOW_LIST && seen->can_read && seen->can_clear && seen->list_lines == 7 &&
 	      seen->cleared_lines == 0 && seen->old_lines == 0 && seen->info_lines == 13 && seen->asking == ACCESS_ASK_NONE && !seen->release_open && !seen->update_pending &&
 	      !seen->uploading && !seen->previous_firmware && !seen->night_mode && seen->brightness == 80, "the world with a list of the own read: every member is the one of the app");
+	check(!seen->reverse && !app->settings.reverse, "the world of a display whose direction is not reversed says so");
+	app->settings.reverse = true;
+	app_world(app, &over.world, now);
+	check(seen->reverse, "the world once the settings hold the direction as reversed: nav is told, for the brightness screen");
+	app->settings.reverse = false;
+	app_world(app, &over.world, now);
+	check(!seen->reverse, "the world with the direction set back: not reversed");
 
 	garage();
 	strcpy(flash.settings, "{\"brightness\":60,\"night\":15,\"night_mode\":true}");
@@ -5673,11 +5802,12 @@ enum
 	                    // open without them, sent what a subscriber never sends, or does not come back to delivering
 	PROMISE_APART,      // a round of the task of the second source changed something of the display outside of the source
 	PROMISE_TWIN,       // the run is another one than the same run on a display in a world without a Cerbo
+	PROMISE_HAND,       // the brightness being set went against the hand, or nav is told another direction than the one stored
 	PROMISES,
 };
 
 static const char *const PROMISE_NAMES[PROMISES] = {"clear", "danger", "store", "old list", "scene", "light", "wake", "world", "layout", "info", "memory", "pause", "end", "heal",
-                                                    "cerbo", "apart", "twin"};
+                                                    "cerbo", "apart", "twin", "hand"};
 
 #define RESTARTS        (APP_EVENT_REBOOT | APP_EVENT_FACTORY_RESET | APP_EVENT_PREVIOUS_FIRMWARE | APP_EVENT_INSTALL_FIRMWARE)
 // The events with one cause each that the run knows before the call
@@ -5738,6 +5868,8 @@ typedef struct
 	long gx_wrong;              // ... of them those that ended without such a source - no address, safe mode, another address -
 	                            // and got there by a restart with the address
 	long twins, twin_steps;     // runs told a second time in a world without a Cerbo, and their steps
+	long level_turns[2][2];     // detents on a lit brightness screen: with the direction normal and reversed, by a hand that
+	                            // turned counter-clockwise and clockwise
 } run_result_t;
 
 // What the run knows by itself
@@ -5780,6 +5912,7 @@ typedef struct
 	bool state_told;            // ... to a request for the state, and it was a state or a 404
 	bool input;                 // it is an input: a detent, a tap, a swipe
 	bool turned;                // ... a detent
+	int clockwise;              // ... as many detents clockwise as the hand turned, negative the other way
 	nav_t twin;                 // what nav makes of that input, asked of a copy of it
 	bool toggles_release;       // the input acts on "Freigabe" of the web screen
 	bool was_open;              // the release before it
@@ -6168,6 +6301,7 @@ static void world_holds(void)
 	{
 		broke(PROMISE_WORLD, "nav is told another brightness than the one stored");
 	}
+	if(seen.reverse != m.settings.reverse) broke(PROMISE_HAND, "nav is told another direction of the knob than the one stored");
 	// The own access point cannot be switched in the safe mode of this start and while no network is stored
 	if(seen.ap_kept != (machine.safe_mode || flash.profile_count == 0)) broke(PROMISE_WORLD, "nav is told that the own access point can be switched while it is kept on, or the other way round");
 	tally->kept[seen.ap_kept]++;
@@ -6643,12 +6777,17 @@ static void run_after(void)
 static void run_touch(touch_t kind, int a, int b)
 {
 	knob_t twin = app->knob;
+	knob_t plain = app->knob;
 	nav_world_t seen;
 	nav_do_t asked;
 	int detents;
 
 	before(screen_time());
 	detents = kind == TOUCH_COUNTS ? knob_turn(&twin, a, m.time) : 0;
+	// What the hand did, whatever direction is set: the knob without the setting makes the detents of the
+	// encoder, which counts down clockwise (knob.h, seen on the device on 2026-10-10)
+	plain.reverse = false;
+	m.clockwise = kind == TOUCH_COUNTS ? -knob_turn(&plain, a, m.time) : 0;
 	m.input = kind != TOUCH_COUNTS || detents != 0;
 	m.turned = kind == TOUCH_COUNTS && m.input;
 	m.toggles_release = false;
@@ -6709,7 +6848,18 @@ static void run_touched(void)
 		if(m.toggles_release && access_is_open(&app->access, m.time) == m.was_open) broke(PROMISE_WORLD, "a tap on Freigabe did not give the release or take it back");
 		if(m.tapped == 1 && m.over == NAV_OVER_NONE && m.nav.screen == NAV_SETTINGS) hotspot_taken();
 		// A detent on the brightness screen sets the brightness at once
-		if(m.turned && m.nav.screen == NAV_BRIGHTNESS && m.over == NAV_OVER_NONE) m.preview = app->nav.value;
+		if(m.turned && m.nav.screen == NAV_BRIGHTNESS && m.over == NAV_OVER_NONE)
+		{
+			// ... and the hand says which way, not the direction set for pages and rows: 5 percent a detent,
+			// clockwise brighter, within 5 and 100
+			int wanted = m.nav.value + 5 * m.clockwise;
+
+			if(wanted < 5) wanted = 5;
+			if(wanted > 100) wanted = 100;
+			if(app->nav.value != wanted) broke(PROMISE_HAND, "a detent on the brightness screen did not follow the hand: clockwise is brighter, whatever direction is set");
+			tally->level_turns[m.settings.reverse][m.clockwise > 0]++;
+			m.preview = app->nav.value;
+		}
 	}
 	else if(memcmp(&m.nav, &app->nav, sizeof(nav_t)) != 0) broke(PROMISE_WAKE, "an input on a dark screen, or counts that made no detent, were passed on");
 	if(!on(NAV_BRIGHTNESS)) m.preview = -1;
@@ -8048,6 +8198,8 @@ static void test_random_runs(void)
 		"the time of the app, the release, busy, the backlight or nav - and, where every byte was looked at, no byte of the app outside of the source",
 		"every random run that is told a second time in a world without a Cerbo is the same run step for step: screen, flow, requests, events, backlight, release, and every "
 		"64 steps every byte of the app but the source, its address and the info lines",
+		"in every random run a detent on the brightness screen makes it brighter when the hand turned clockwise and darker when it turned the other way, 5 percent a detent "
+		"within 5 and 100, whatever direction is set for pages and rows - and nav is told the direction the stored settings hold",
 	};
 	run_result_t result;
 	int ends[2];
@@ -8162,6 +8314,8 @@ static void test_random_runs(void)
 	printf("  random runs: requests of the display whose end a tick noted as an input: %ld with a list, %ld as failed, %ld with the outcome of a clear, %ld as unknown, %ld withdrawn; "
 	       "%ld of them on the progress 120 s or more behind the last input, %ld on a screen dark by standby that lit up, %ld on a screen the heat kept dark\n",
 	       result.ended[0], result.ended[1], result.ended[2], result.ended[3], result.ended[4], result.ended_late, result.ended_dark, result.ended_hot);
+	printf("  random runs: detents on a lit brightness screen: with the direction normal %ld by a hand turning counter-clockwise and %ld clockwise, with it reversed %ld and %ld\n",
+	       result.level_turns[0][0], result.level_turns[0][1], result.level_turns[1][0], result.level_turns[1][1]);
 
 	check(complete && status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0, "24 random runs of 240 deeds each, eight of them told twice: no crash and no hang");
 	for(int i = 0; i < PROMISES; i++) check(complete && result.broken[i] == 0, promises[i]);
@@ -8195,6 +8349,8 @@ static void test_random_runs(void)
 	check(complete && result.ended[0] >= 50 && result.ended[1] >= 12 && result.ended[2] >= 5 && result.ended[3] >= 2 && result.ended_late >= 8 && result.ended_dark >= 3 && result.ended_hot >= 3,
 	      "the random runs let requests of the display end with a list, as failed, with the outcome of a clear and as unknown - on a progress nobody touched for 120 s and more, on "
 	      "screens dark by standby that light up, and on screens the heat keeps dark");
+	check(complete && result.level_turns[0][0] >= 3 && result.level_turns[0][1] >= 3 && result.level_turns[1][0] >= 3 && result.level_turns[1][1] >= 3,
+	      "the random runs turn the knob on the brightness screen clockwise and counter-clockwise, with the direction normal and with it reversed");
 
 	printf("  random runs, the second source: steps by what the display shows of it:");
 	for(int i = 0; i <= CERBO_VIEW_LIVE; i++) printf(" %ld", result.gx_views[i]);
@@ -8251,6 +8407,7 @@ int main(void)
 	test_info();
 	test_platform();
 	test_brightness();
+	test_brightness_hand();
 	test_settings();
 	test_read_and_clear();
 	test_list_and_dialog();

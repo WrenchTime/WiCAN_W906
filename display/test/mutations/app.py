@@ -393,6 +393,11 @@ MUTATIONS = [
     ("app_encoder_turn_not_carried_out", T, F, "\tapp_do(app, nav_turn(&app->nav, detents, &world, now), now);\n}", "\tnav_turn(&app->nav, detents, &world, now);\n}"),
     ("app_encoder_one_detent_per_call", T, F, "\tapp_do(app, nav_turn(&app->nav, detents, &world, now), now);\n}", "\tapp_do(app, nav_turn(&app->nav, detents < 0 ? -1 : 1, &world, now), now);\n}"),
     ("app_encoder_direction_swapped", T, F, "\tapp_do(app, nav_turn(&app->nav, detents, &world, now), now);\n}", "\tapp_do(app, nav_turn(&app->nav, -detents, &world, now), now);\n}"),
+    # the setting taken back here for the brightness as well as in nav: taken back twice, it counts again
+    ("app_encoder_direction_taken_back_twice", T, F, "\tapp_do(app, nav_turn(&app->nav, detents, &world, now), now);\n}",
+     "\tapp_do(app, nav_turn(&app->nav, app->nav.screen == NAV_BRIGHTNESS && app->settings.reverse ? -detents : detents, &world, now), now);\n}"),
+    ("app_encoder_brightness_as_the_knob_reports", T, F, "\tapp_do(app, nav_turn(&app->nav, detents, &world, now), now);\n}",
+     "\tapp_do(app, nav_turn(&app->nav, app->nav.screen == NAV_BRIGHTNESS ? -detents : detents, &world, now), now);\n}"),
 
     # the touch screen
     ("app_tap_in_the_dark_passed_on", T, F, TAP_WAKE, TAP_WAKE.replace("\tif(in_the_dark(app, &world, now)) return;\n", "\tin_the_dark(app, &world, now);\n")),
@@ -717,6 +722,10 @@ MUTATIONS = [
     ("app_world_never_night", T, F, "\tworld->night_mode = app->settings.night_mode;\n", ""),
     ("app_world_brightness_of_the_day", T, F, "\tworld->brightness = app->settings.night_mode ? app->settings.night : app->settings.brightness;", "\tworld->brightness = app->settings.brightness;"),
     ("app_world_brightness_of_the_night", T, F, "\tworld->brightness = app->settings.night_mode ? app->settings.night : app->settings.brightness;", "\tworld->brightness = app->settings.night;"),
+    # the direction of the knob, which nav takes back on the brightness screen (seen on the device on 2026-10-10)
+    ("app_world_direction_not_told", T, F, "\tworld->reverse = app->settings.reverse;\n", ""),
+    ("app_world_direction_told_the_other_way", T, F, "\tworld->reverse = app->settings.reverse;", "\tworld->reverse = !app->settings.reverse;"),
+    ("app_world_direction_always_reversed", T, F, "\tworld->reverse = app->settings.reverse;", "\tworld->reverse = true;"),
     ("app_world_at_the_time_of_the_caller", T, F, "\tuint64_t now = time_at(app, now_ms);\n\tconst poll_t *poll = &app->poll;\n\n\t// Every byte", "\tuint64_t now = now_ms;\n\tconst poll_t *poll = &app->poll;\n\n\t// Every byte"),
     ("app_world_at_the_time_of_the_last_call", T, F, "\tuint64_t now = time_at(app, now_ms);\n\tconst poll_t *poll = &app->poll;\n\n\t// Every byte",
      "\tuint64_t now = app->clock_ms + 0 * now_ms;\n\tconst poll_t *poll = &app->poll;\n\n\t// Every byte"),

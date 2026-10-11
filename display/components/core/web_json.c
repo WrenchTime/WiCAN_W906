@@ -292,8 +292,15 @@ int web_values_cerbo_json(const values_t *wican, const char *wican_view, const v
 	put(&writer, ",\"cerbo\":");
 	put_string(&writer, cerbo_view);
 	put(&writer, ",\"values\":{");
-	// Each source with its own limits: a value of the adapter is old after 3 s, one of the Cerbo after 5
-	for(int i = 0; i < wican->count; i++) put_member(&writer, &wican->items[i], values_age(&wican->items[i], now_ms), &comma);
+	// Each source with its own limits: a value of the adapter is old after 3 s, one of the Cerbo after 5.
+	// The prefix of the Cerbo belongs to the Cerbo, without exception: a value of the adapter whose name begins
+	// with it - a vehicle profile may name its values as it likes - is left out here. Written, its key could
+	// stand twice in this object, and a reader would take one of the two for the other.
+	for(int i = 0; i < wican->count; i++)
+	{
+		if(cerbo_key(wican->items[i].name)) continue;
+		put_member(&writer, &wican->items[i], values_age(&wican->items[i], now_ms), &comma);
+	}
 	for(int i = 0; i < cerbo->count; i++) put_member(&writer, &cerbo->items[i], cerbo_age(&cerbo->items[i], now_ms), &comma);
 	// The object of the values, and the answer
 	put_char(&writer, '}');

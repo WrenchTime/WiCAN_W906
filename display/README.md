@@ -186,6 +186,8 @@ Slot noch ein zurückgenommenes Update, steht es danach wieder unter „Vorherig
 ## Bedienung in Kürze
 
 - Drehen: Seite vor und zurück, harte Enden. Kurz drücken: Menü. Lang drücken: eine Ebene zurück.
+- Helligkeit: im Uhrzeigersinn heller, dagegen dunkler – unabhängig von der Einstellung „Drehrichtung", die
+  nur für Seiten und Zeilen gilt.
 - Fehlerspeicher nur über das Menü. Löschen: auf „Löschen" drehen und den Knopf drei Sekunden halten.
   Touch kann nur abbrechen. Gelöscht wird nur die Liste, die das Display selbst gerade gelesen hat und zeigt,
   höchstens zehn Minuten lang, bei Zündung an und Motor aus.
@@ -207,7 +209,7 @@ Slot noch ein zurückgenommenes Update, steht es danach wieder unter „Vorherig
 
 ## Erster Tag am Board
 
-Im Quelltext sind 54 Stellen mit `CHECK:` markiert (22 in `components/board/board.c`, 9 in `main/main.c`,
+Im Quelltext sind 54 Stellen mit `CHECK:` markiert (21 in `components/board/board.c`, 10 in `main/main.c`,
 5 in `main/screen.c`, 11 in `main/net.c`, 3 in `main/web.c`, 2 in `main/web/index.html`, 2 in
 `sdkconfig.defaults`). Jede sagt, was zu beobachten ist und was zu ändern ist, wenn es anders kommt:
 
@@ -230,8 +232,11 @@ Die Reihenfolge, in der sie sich stellen:
 4. Hintergrundlicht: nach dem Start dunkel, dann stufenlos heller, kein Flackern bei 1 %.
 5. Knopf: Gemessen am 2026-10-09: Solange `KNOB_COUNTS_PER_DETENT` 4 war, brauchte eine Seite zwei Rasten
    der Hand. Der Knopf gibt also zwei Zählschritte je Raste, und die Konstante in `components/core/knob.h`
-   steht seitdem auf 2. Noch zu sehen: Mit der 2 ist eine Raste eine Seite; zehn Rasten vor und zurück
-   ergeben null; Drehrichtung (Einstellung „Drehrichtung", nicht der Quelltext). Taster: losgelassen und
+   steht seitdem auf 2. Gesehen am 2026-10-10: Im Uhrzeigersinn (von vorn) zählt der Encoder abwärts – der
+   Fokus im Menü ging nach oben, die Helligkeit nach unten. Seiten und Zeilen bleiben so (wer es andersherum
+   will: Einstellung „Drehrichtung"); die Helligkeit nimmt ihre Richtung jetzt von der Hand. Noch zu sehen:
+   Mit der 2 ist eine Raste eine Seite; zehn Rasten vor und zurück ergeben null; die Helligkeit wird im
+   Uhrzeigersinn heller, mit „Drehrichtung" normal und umgekehrt. Taster: losgelassen und
    gedrückt werden richtig gelesen, auch nach Minuten. Gehen Tastendrücke verloren, ohne dass gerade etwas
    gespeichert wird, dauert eine Lesung länger als die angenommenen 10 ms (`READ_MS` in `main/screen.c`).
 6. Touch: Ein Tipp trifft die Zeile unter dem Finger, oben und unten in einer Liste.

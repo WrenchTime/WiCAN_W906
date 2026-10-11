@@ -760,6 +760,9 @@ void app_world(const app_t *app, nav_world_t *world, uint64_t now_ms)
 	world->ap_kept = link_ap_kept(&app->link);
 	world->night_mode = app->settings.night_mode;
 	world->brightness = app->settings.night_mode ? app->settings.night : app->settings.brightness;
+	// What the knob does with the sign of its detents (knob_init(), knob_set_reverse()): the brightness
+	// screen takes it back
+	world->reverse = app->settings.reverse;
 }
 
 void app_scene(const app_t *app, scene_t *scene, uint64_t now_ms)

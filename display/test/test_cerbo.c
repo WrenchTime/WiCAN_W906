@@ -13,6 +13,7 @@
  */
 #include <stdint.h>
 #include <inttypes.h>
+#include <float.h>
 #include <math.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -1411,6 +1412,37 @@ static void test_numbers(void)
 	bundle(7, 3000, "");
 	check(cerbo_shown(cerbo, 8000) == 0 && cerbo_showing(cerbo, 8000) && view() == CERBO_VIEW_LIVE, "shown: a bundle without values leaves none, although the source delivers");
 
+	// What is counted is what GET /api/values names. A number beyond the range of a double is taken into the
+	// store as infinite, as the store of the adapter takes one, has no text and stands in no answer.
+	check(setup(), "a session for numbers without end");
+	now = 6000;
+	bundle(7, 1000, "\"GX_A\":1,\"GX_N\":1e999,\"GX_B\":\"on\"");
+	check(cerbo->values.count == 3 && number_is("GX_N", INFINITY) && cerbo_shown(cerbo, 6000) == 2 && cerbo_shown(cerbo, 65999) == 2 && cerbo_shown(cerbo, 66000) == 0,
+	      "shown: a number beyond a double - 1e999 - is in the store as infinite and is not counted: of three values two are named by GET /api/values");
+	now = 7000;
+	bundle(7, 2000, "\"GX_M\":-1e999,\"GX_A\":1");
+	check(cerbo->values.count == 2 && number_is("GX_M", -INFINITY) && cerbo_shown(cerbo, 7000) == 1, "shown: nor is a number beyond the range on the negative side, -1e999");
+	now = 8000;
+	bundle(7, 3000, "\"GX_N\":1e999,\"GX_M\":-1e999");
+	check(cerbo->values.count == 2 && cerbo_shown(cerbo, 8000) == 0 && cerbo_showing(cerbo, 8000), "shown: a bundle of nothing but such numbers leaves two values in the store and none to count");
+	now = 9000;
+	bundle(7, 4000, "\"GX_N\":1e308,\"GX_M\":-1e308,\"GX_Z\":0,\"GX_T\":1e-300");
+	check(cerbo->values.count == 4 && number_is("GX_N", 1e308) && cerbo_shown(cerbo, 9000) == 4, "shown: the largest numbers a double holds, zero and a very small one are numbers like every other: counted");
+	// What no bundle brings, written into the store: the count follows the answer there as well
+	cerbo->values.items[0].number = NAN;
+	check(cerbo_shown(cerbo, 9000) == 3, "shown: a value that is no number at all is not counted");
+	cerbo->values.items[0].number = 5;
+	cerbo->values.items[1].kind = (value_kind_t)3;
+	check(cerbo_shown(cerbo, 9000) == 3, "shown: a value whose kind is none of the three is not counted");
+	cerbo->values.items[1].kind = VALUE_OFF;
+	cerbo->values.items[1].number = INFINITY;
+	cerbo->values.items[2].kind = VALUE_ON;
+	cerbo->values.items[2].number = NAN;
+	check(cerbo_shown(cerbo, 9000) == 4, "shown: a switch is counted whatever its number holds - it is written as on or off");
+	cerbo->values.items[0].number = INFINITY;
+	cerbo->values.items[3].number = 1;
+	check(cerbo_shown(cerbo, 9000) == 3, "shown: the first value of the store without end, the last a number: the last is counted, the first is not");
+
 	// A bundle that arrived late: its values are as old as its lag
 	check(setup() && arrive(6000, 7, 1000) == 0 && arrive(9000, 7, 2000) == 1700 && cerbo_shown(cerbo, 67299) == 1 && cerbo_shown(cerbo, 67300) == 0,
 	      "shown: a value of a bundle with a lag of 1700 ms is gone 1700 ms sooner");
@@ -2043,6 +2075,20 @@ static value_age_t model_age(const model_t *m, uint64_t at)
 	return VALUE_AGE_GONE;
 }
 
+// The values GET /api/values names of what the last bundle brought: all of them, less the numbers without end
+static int model_shown(const model_t *m, uint64_t at)
+{
+	int shown = 0;
+
+	if(model_age(m, at) == VALUE_AGE_GONE) return 0;
+	for(int i = 0; i < m->count; i++)
+	{
+		// The largest double is the largest number that has a text
+		if(m->values[i].kind != VALUE_NUMBER || fabs(m->values[i].number) <= DBL_MAX) shown++;
+	}
+	return shown;
+}
+
 static bool model_showing(const model_t *m, uint64_t at)
 {
 	return model_view(m, at) == CERBO_VIEW_LIVE || (m->count > 0 && model_age(m, at) != VALUE_AGE_GONE);
@@ -2092,6 +2138,7 @@ typedef struct
 	long fates[FATES];                  // messages that were read, by what became of them
 	long sessions, downs, pauses, naps, hosts, networks, stale;
 	long lagged, old, distrusted, boots, full, over, empty, cuts, bursts, before_suback, two_pings, out_of_place, broken_bytes, refusals, ignored;
+	long endless;                       // bundles taken that brought a number without end: a value in the store that is not counted
 	long healed, healed_off;
 } walk_result_t;
 
@@ -2725,6 +2772,7 @@ static void world_tell(uint64_t at, walk_result_t *result)
 					if(model.count == VALUES_MAX) result->full++;
 					if(model.count == VALUES_MAX && note->message.skipped > 0) result->over++;
 					if(model.count == 0) result->empty++;
+					if(model_shown(&model, model.seen) < model.count) result->endless++;
 				}
 			}
 		}
@@ -2784,8 +2832,8 @@ static const char *walk_differs(uint64_t at)
 	if(cerbo->refused_invalid != model.invalid || cerbo->refused_version != model.version || cerbo->refused_retained != model.retained ||
 	   cerbo->refused_topic != model.topic || cerbo->refused_long != model.too_long) return "the counters of refused messages";
 	if(cerbo_refused(cerbo) != model.invalid + model.version + model.retained + model.topic + model.too_long) return "the number of refused messages";
-	if(cerbo_shown(cerbo, at) != (model_age(&model, at) != VALUE_AGE_GONE ? model.count : 0)) return "the number of values to show";
-	if(cerbo_shown(cerbo, other) != (model_age(&model, other) != VALUE_AGE_GONE ? model.count : 0)) return "the number of values to show later";
+	if(cerbo_shown(cerbo, at) != model_shown(&model, at)) return "the number of values to show";
+	if(cerbo_shown(cerbo, other) != model_shown(&model, other)) return "the number of values to show later";
 	if(cerbo->skipped != model.skipped) return "the counter of skipped members";
 	if(cerbo->distrusted != model.distrusted) return "the counter of lags not believed";
 	if(cerbo->lag_ms != model.lag) return "the lag";
@@ -3186,6 +3234,7 @@ static void test_walk(void)
 	printf("  walk: bundles %ld with a lag, %ld of them old, %ld lags not believed, %ld changes of boot, %ld with 64 values, %ld of them with more members, %ld without a value, "
 	       "%ld before the SUBACK; %ld deliveries of three bundles and more, %ld that ended inside a packet; %ld calls with two PINGREQ under way\n",
 	       result.lagged, result.old, result.distrusted, result.boots, result.full, result.over, result.empty, result.before_suback, result.bursts, result.cuts, result.two_pings);
+	printf("  walk: %ld bundles taken with a number without end among their values\n", result.endless);
 	printf("  walk: %ld walks healed, %ld stayed off in safe mode; promises broken: orders %ld, sent packets %ld, PINGREQ %ld, store %ld, off %ld, healing %ld, the walk itself %ld\n",
 	       result.healed, result.healed_off, result.broken[PROMISE_ORDERS], result.broken[PROMISE_SENT], result.broken[PROMISE_PINGS], result.broken[PROMISE_STORE],
 	       result.broken[PROMISE_OFF], result.broken[PROMISE_HEALS], result.broken[PROMISE_HARNESS]);
@@ -3223,6 +3272,7 @@ static void test_walk(void)
 	check(complete && result.lagged > 2000 && result.old > 300 && result.distrusted > 100 && result.boots > 1000 && result.full > 200 && result.over > 100 && result.empty > 200 &&
 	      result.before_suback > 100 && result.bursts > 200 && result.cuts > 20000 && result.two_pings > 500,
 	      "the walk reaches bundles that are late and old, lags not believed, new boots, full and empty stores, bundles before the SUBACK, bursts, cut packets and two PINGREQ under way in numbers");
+	check(complete && result.endless > 1000, "the walk takes bundles with a number without end among their values, which the count of the values to show leaves out, in numbers");
 }
 
 int main(void)

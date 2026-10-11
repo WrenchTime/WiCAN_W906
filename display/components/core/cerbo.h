@@ -234,7 +234,9 @@ void cerbo_opened(cerbo_t *cerbo, uint64_t now_ms);
  * The bundle is then taken. Its lag is reckoned (below), and the store of values is emptied and filled anew
  * from `values`, every value seen at the time of arrival less the lag (not before 0):
  * - a member is taken if its key is CERBO_PREFIX and then 1 to 29 of the characters A-Z, 0-9 and _ (the key
- *   as json_text() reads it, at most 32 bytes), and its value is a number json_number() takes, "on" or "off"
+ *   as json_text() reads it, at most 32 bytes), and its value is a number json_number() takes, "on" or "off".
+ *   A number beyond the range of a double is taken as infinite, as values.h takes one of the adapter: it is
+ *   in the store, has no text to show, and no answer names or counts it (cerbo_shown())
  * - every other member is passed over and counted in `skipped`
  * - of two members with the same key the last counts
  * - the 65th key finds no room (VALUES_MAX): counted in `skipped`, not kept
@@ -298,8 +300,12 @@ bool cerbo_key(const char *key);
 // 2^32-1 if they are more than that. For the info line and GET /api/info (app.h, app_web.h).
 uint32_t cerbo_refused(const cerbo_t *cerbo);
 
-// How many values of the store are not gone (cerbo_age()): what the source has to show right now, 0 to
-// VALUES_MAX. A value the last bundle did not name is not in the store and not counted.
+// How many values of the store GET /api/values names right now (web_json.h), 0 to VALUES_MAX: those that are
+// not gone (cerbo_age()) and are a finite number, "on" or "off". The two never disagree: `cerbo.values` of
+// GET /api/info is the number of keys with CERBO_PREFIX in GET /api/values at the same time.
+// A number beyond the range of a double - 1e999 - is taken into the store as infinite, as values.h takes one
+// of the adapter, and like there it has no text to show (fmt_number() refuses it) and is left out of GET
+// /api/values: it is not counted here. A value the last bundle did not name is not in the store.
 int cerbo_shown(const cerbo_t *cerbo, uint64_t now_ms);
 
 #endif

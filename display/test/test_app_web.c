@@ -17,6 +17,8 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <float.h>
+#include <math.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -2000,12 +2002,20 @@ static void test_settings(void)
 	short_press();
 	turn(1);
 	short_press();
-	turn(1);
+	// One detent clockwise, which the encoder counts down (knob.h): brighter
+	turn(-1);
 	check(on(NAV_BRIGHTNESS) && app->brightness_preview == 85 && light() == 85, "the scene of the brightness screen: 85 percent are being set");
 	remember();
 	post("/api/settings", "{\"standby_s\":120}");
 	check(code == 200 && nothing_but(MAY_CLOCK | MAY_SETTINGS, &app->access, now) && app->brightness_preview == 85 && light() == 85 && on(NAV_BRIGHTNESS),
 	      "settings of the browser change the settings and the direction of the knob and nothing else: the brightness being set at the knob stays");
+	// The direction is the user's preference for pages and rows: the brightness follows the hand (nav.h)
+	post("/api/settings", "{\"reverse\":true}");
+	turn(-1);
+	check(code == 200 && app->settings.reverse && app->knob.reverse && on(NAV_BRIGHTNESS) && app->brightness_preview == 90 && light() == 90,
+	      "the direction reversed by the browser while the brightness is being set: the next detent clockwise makes it brighter all the same, 90 percent");
+	turn(2);
+	check(app->brightness_preview == 80 && light() == 80, "with the direction reversed by the browser two detents counter-clockwise make it darker: 80 percent");
 
 	factory();
 	start();
@@ -2921,7 +2931,8 @@ static void test_frame(void)
 	short_press();
 	turn(1);
 	short_press();
-	turn(1);
+	// One detent clockwise, which the encoder counts down (knob.h): brighter
+	turn(-1);
 	run_to(10000);
 	check(on(NAV_BRIGHTNESS) && app->brightness_preview == 85 && app->last_input_ms < 10000, "the scene of the frame: the brightness screen, the last input before 10000");
 
@@ -3250,6 +3261,12 @@ static void released_with_cerbo(void)
 	app_do(app, NAV_DO_RELEASE_ON, now);
 }
 
+// The values of the other vehicle with one more, under a key of the Cerbo; and GET /api/values of a display
+// without the address of a Cerbo for them
+#define PREFIXED_VALUES "{\"SPEED\":0,\"GX_BATT_SOC\":12.5,\"RPM\":790,\"COOLANT\":81.5,\"FUEL\":62,\"INTAKE_TEMP\":19}"
+#define PREFIXED_PLAIN  "{\"view\":\"live\",\"values\":{\"@BATT_V\":{\"v\":12.4,\"age\":\"fresh\"},\"SPEED\":{\"v\":0,\"age\":\"fresh\"},\"GX_BATT_SOC\":{\"v\":12.5,\"age\":\"fresh\"}," \
+                        "\"RPM\":{\"v\":790,\"age\":\"fresh\"},\"COOLANT\":{\"v\":81.5,\"age\":\"fresh\"},\"FUEL\":{\"v\":62,\"age\":\"fresh\"},\"INTAKE_TEMP\":{\"v\":19,\"age\":\"fresh\"}}}"
+
 // How the answer with both stores full begins and ends
 #define BOTH_HEAD   "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"\\u001f\\u001f"
 #define BOTH_TAIL   ",\"GX_KEY_OF_32_BYTES_63_ABCDEFGHIJ\":{\"v\":-1.23456789e-308,\"age\":\"fresh\"}}}"
@@ -3258,6 +3275,7 @@ static void test_cerbo(void)
 {
 	access_t release;
 	value_t *value;
+	const value_t *delivered;
 	char name[VALUE_NAME_SIZE];
 
 	// GET /api/info
@@ -3375,6 +3393,61 @@ static void test_cerbo(void)
 	check(answered(200, "values_cerbo_alone"), "the values of the Cerbo 59999 ms after they were seen: still there");
 	get_at("/api/values", 62040);
 	check(answered_text(200, "{\"view\":\"live\",\"cerbo\":\"quiet\",\"values\":{}}"), "the values of the Cerbo 60000 ms after they were seen: left out, and the member cerbo stays");
+
+	// The prefix of the Cerbo is the Cerbo's. The other vehicle with a value named GX_BATT_SOC - a profile may
+	// name its values as it likes -, and the Cerbo publishes that key
+	garage();
+	cerbo_there();
+	wican.config = other_config;
+	wican.values = PREFIXED_VALUES;
+	start();
+	run(2100);
+	get("/api/values");
+	delivered = values_find(&app->poll.values, "GX_BATT_SOC");
+	check(answered(200, "values_cerbo") && delivered != NULL && delivered->number == 12.5 && values_age(delivered, now) == VALUE_AGE_FRESH && app->poll.values.count == 7,
+	      "the adapter delivers a value named GX_BATT_SOC and the Cerbo publishes that key: GET /api/values is app_web_values_cerbo.json, byte for byte - the key stands once, "
+	      "with the 87.5 of the Cerbo, and the 12.5 the adapter delivered stay in its store");
+	get("/api/info");
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":6,"), "the info counts the six values of the Cerbo: the value of the adapter is none of them");
+
+	// The same vehicle on a display without the address: nothing changed for it
+	garage();
+	wican.config = other_config;
+	wican.values = PREFIXED_VALUES;
+	start();
+	run(2100);
+	get("/api/values");
+	check(answered_text(200, PREFIXED_PLAIN), "without the address of a Cerbo the value of the adapter named GX_BATT_SOC is a value like every other: written, at its place among the seven");
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	get("/api/values");
+	check(answered_text(200, "{\"view\":\"live\",\"cerbo\":\"connecting\",\"values\":{\"@BATT_V\":{\"v\":12.4,\"age\":\"fresh\"},\"SPEED\":{\"v\":0,\"age\":\"fresh\"},"
+	                    "\"RPM\":{\"v\":790,\"age\":\"fresh\"},\"COOLANT\":{\"v\":81.5,\"age\":\"fresh\"},\"FUEL\":{\"v\":62,\"age\":\"fresh\"},\"INTAKE_TEMP\":{\"v\":19,\"age\":\"fresh\"}}}"),
+	      "the address is set: from the next answer on the prefix is the Cerbo's, and the value of the adapter is left out - before any bundle has come, without exception");
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	get("/api/values");
+	check(answered_text(200, PREFIXED_PLAIN), "the address is taken away: the answer of before, with the value of the adapter");
+
+	// What GET /api/info counts is what GET /api/values names. A number beyond a double is in the store of the
+	// Cerbo as infinite, as one of the adapter is in its store, and stands in no answer.
+	garage();
+	cerbo_there();
+	gx.values = "\"GX_BATT_SOC\":87.5,\"GX_BATT_V\":1e999,\"GX_BATT_I\":-1e999,\"GX_SW_B2B\":\"on\",\"GX_SW_VALVE\":\"off\",\"GX_TANK_FRESH\":77";
+	wican.config = other_config;
+	wican.values = "{\"SPEED\":0,\"RPM\":790,\"COOLANT\":1e999,\"FUEL\":62,\"INTAKE_TEMP\":19}";
+	start();
+	run(2100);
+	get("/api/values");
+	check(answered_text(200, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"@BATT_V\":{\"v\":12.4,\"age\":\"fresh\"},\"SPEED\":{\"v\":0,\"age\":\"fresh\"},"
+	                    "\"RPM\":{\"v\":790,\"age\":\"fresh\"},\"FUEL\":{\"v\":62,\"age\":\"fresh\"},\"INTAKE_TEMP\":{\"v\":19,\"age\":\"fresh\"},"
+	                    "\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"fresh\"},\"GX_SW_B2B\":{\"v\":\"on\",\"age\":\"fresh\"},\"GX_SW_VALVE\":{\"v\":\"off\",\"age\":\"fresh\"},"
+	                    "\"GX_TANK_FRESH\":{\"v\":77,\"age\":\"fresh\"}}}") &&
+	      app->cerbo.values.count == 6 && app->poll.values.count == 6,
+	      "the Cerbo publishes 1e999 and -1e999 among six values, the adapter 1e999 among its five: each store holds them all, and GET /api/values names four of the Cerbo "
+	      "and leaves the value of the adapter out the same way");
+	get("/api/info");
+	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":4,\"ok\":3,"),
+	      "GET /api/info counts four values of the Cerbo then, not the six of its store: the number of values GET /api/values names");
 
 	// Without the address: the answer of before, whatever a broker would send
 	other_vehicle();
@@ -3651,6 +3724,10 @@ typedef struct
 	long info_views[CERBO_VIEW_LIVE + 1];   // ... by the view it named
 	long values[2];             // answers to GET /api/values without the member cerbo, and with it
 	long gx_values;             // values of the Cerbo in those answers
+	long gx_endless[2];         // infos and values of a display with the address while its store held a value that is not gone and
+	                            // has no text: a number without end, which no answer names or counts
+	long gx_claimed[2];         // values asked for while the adapter had a value under a key of the Cerbo that was not gone: on a
+	                            // display without the address, which names it, and on one with it, which leaves it out
 	long gx_given, gx_moved, gx_taken_away, gx_same;    // settings that were accepted and gave the address, another one, none, or the same again
 	long gx_bad;                // settings refused that named an address that is none
 	long gx_rounds;             // rounds of the task of the source that were watched
@@ -3874,11 +3951,37 @@ static void walk_cerbo(void)
 	}
 }
 
+// The six values of the harness and one more, a number beyond the range of a double
+#define RUN_GX_VALUES   GX_VALUES ",\"GX_T_BOILER\":1e999"
+
+// The values of the store of the Cerbo an answer has to name at that time, by the rules of the headers written
+// once more: seen less than 60 s ago, and a switch or a number that has a text. *without: those of that age the
+// answer leaves out all the same.
+static int named_of_the_cerbo(uint64_t time, int *without)
+{
+	const values_t *store = &app->cerbo.values;
+	int named = 0;
+
+	*without = 0;
+	for(int i = 0; i < store->count; i++)
+	{
+		const value_t *item = &store->items[i];
+		uint64_t age = time > item->seen_ms ? time - item->seen_ms : 0;
+
+		if(age >= 60000) continue;
+		if(item->kind == VALUE_ON || item->kind == VALUE_OFF || (item->kind == VALUE_NUMBER && fabs(item->number) <= DBL_MAX)) named++;
+		else (*without)++;
+	}
+	return named;
+}
+
 // The second source in an answer to GET /api/info or GET /api/values that was read by sound() just now
 static void source_in_answer(kind_t kind, uint64_t time)
 {
 	const cerbo_t *cerbo = &app->cerbo;
 	bool has = told.settings.cerbo[0] != '\0';
+	int endless = 0;
+	int named = named_of_the_cerbo(time, &endless);
 	int object = json_member(reply, answer_tokens, 0, "cerbo");
 	char text[40];
 	int64_t number;
@@ -3894,7 +3997,7 @@ static void source_in_answer(kind_t kind, uint64_t time)
 		{
 			const char *name;
 			uint64_t number;
-		} numbers[] = {{"values", (uint64_t)cerbo_shown(cerbo, time)}, {"ok", cerbo->bundles}, {"refused", refused > UINT32_MAX ? UINT32_MAX : refused}, {"connects", cerbo->sessions},
+		} numbers[] = {{"values", (uint64_t)named}, {"ok", cerbo->bundles}, {"refused", refused > UINT32_MAX ? UINT32_MAX : refused}, {"connects", cerbo->sessions},
 		               {"boots", cerbo->boots}, {"lag_ms", cerbo->lag_ms}};
 
 		tally->infos[object >= 0]++;
@@ -3902,6 +4005,7 @@ static void source_in_answer(kind_t kind, uint64_t time)
 		if(object < 0) return;
 
 		tally->info_views[shown]++;
+		if(endless > 0) tally->gx_endless[0]++;
 		member = json_member(reply, answer_tokens, object, "host");
 		if(member < 0 || !json_text(reply, &answer_tokens[member], text, sizeof(text)) || strcmp(text, told.settings.cerbo) != 0) broke(PROMISE_SOURCE, "the info does not name the address of the Cerbo that was set");
 		member = json_member(reply, answer_tokens, object, "view");
@@ -3923,17 +4027,38 @@ static void source_in_answer(kind_t kind, uint64_t time)
 	{
 		int key = member + 1;
 		int of_cerbo = 0;
+		// The values of the adapter under a key of the Cerbo that are not gone: an answer of a display without
+		// the address names them, one of a display with it does not
+		int claimed = 0;
+		bool twice = false;
 
+		for(int i = 0; i < app->poll.values.count; i++)
+		{
+			const value_t *item = &app->poll.values.items[i];
+
+			if(item->name[0] == 'G' && item->name[1] == 'X' && item->name[2] == '_' && (time > item->seen_ms ? time - item->seen_ms : 0) < 10000) claimed++;
+		}
 		for(int i = 0; i < answer_tokens[member].size; i++)
 		{
 			bool with_prefix = json_text(reply, &answer_tokens[key], text, sizeof(text)) && cerbo_key(text);
+			int earlier = member + 1;
 
+			// Without the address a key with the prefix is a value of the adapter like every other, wherever it stands
 			if(with_prefix) of_cerbo++;
-			else if(of_cerbo > 0) broke(PROMISE_SOURCE, "a value of the adapter stands behind one of the Cerbo");
+			else if(has && of_cerbo > 0) broke(PROMISE_SOURCE, "a value of the adapter stands behind one of the Cerbo");
+			// No key twice: every key before this one is another one
+			for(int k = 0; k < i; k++)
+			{
+				if(answer_tokens[earlier].length == answer_tokens[key].length && memcmp(reply + answer_tokens[earlier].start, reply + answer_tokens[key].start, answer_tokens[key].length) == 0) twice = true;
+				earlier += 1 + answer_tokens[earlier + 1].skip;
+			}
 			key += 1 + answer_tokens[key + 1].skip;
 		}
-		if(of_cerbo != (has ? cerbo_shown(cerbo, time) : 0)) broke(PROMISE_SOURCE, "the values of the Cerbo in the answer are not those the source has to show, or there are some without its address");
-		tally->gx_values += of_cerbo;
+		if(twice) broke(PROMISE_SOURCE, "a key stands twice in the values of an answer");
+		if(of_cerbo != (has ? named : claimed)) broke(PROMISE_SOURCE, "the keys with the prefix of the Cerbo in the answer are not the values of the Cerbo it has to name - or, without its address, not the values of the adapter under such a key");
+		if(has) tally->gx_values += of_cerbo;
+		if(has && endless > 0) tally->gx_endless[1]++;
+		if(claimed > 0) tally->gx_claimed[has]++;
 	}
 }
 
@@ -4895,9 +5020,11 @@ static void walk_run(uint32_t number)
 
 	if(chance(12)) factory();
 	else garage();
-	// The Cerbo is there and publishes; every second display was given its address before the run begins
+	// The Cerbo is there and publishes; every second display was given its address before the run begins.
+	// Among its values is a number beyond a double: in the store, in no answer, and not counted.
 	gx.there = true;
 	gx.flow = true;
+	gx.values = RUN_GX_VALUES;
 	if(gx_pick(2) == 0)
 	{
 		strcpy(flash.settings, GX_SETTINGS);
@@ -4916,8 +5043,9 @@ static void walk_run(uint32_t number)
 	wifi.found = "192.168.1.50";
 	if(chance(25))
 	{
+		// The other vehicle, with a value under a key the Cerbo publishes as well
 		wican.config = other_config;
-		wican.values = other_values;
+		wican.values = PREFIXED_VALUES;
 	}
 	if(chance(30))
 	{
@@ -5103,6 +5231,9 @@ static void test_random_walk(void)
 	       "that is none; %ld rounds of its task watched; %ld bundles taken, %ld messages refused, %ld sessions, %ld orders to close; %ld restarts and resets asked for during a session\n",
 	       result.gx_given, result.gx_moved, result.gx_taken_away, result.gx_same, result.gx_bad, result.gx_rounds, result.gx_bundles, result.gx_refused, result.gx_sessions, result.gx_closed,
 	       result.gx_restarts);
+	printf("  random runs, the second source: its store held a number without end that was not gone under %ld infos and %ld answers with values; the adapter had a value under a key "
+	       "of the Cerbo under %ld answers with values of a display without the address and %ld of one with it\n",
+	       result.gx_endless[0], result.gx_endless[1], result.gx_claimed[0], result.gx_claimed[1]);
 	// No display of these runs is in safe mode: the view OFF of a display with the address is not among them
 	reached = result.info_views[CERBO_VIEW_OFF] == 0;
 	for(int i = CERBO_VIEW_NO_WIFI; i <= CERBO_VIEW_LIVE; i++) reached = reached && result.info_views[i] >= 3;
@@ -5111,6 +5242,9 @@ static void test_random_walk(void)
 	check(complete && result.gx_given >= 10 && result.gx_moved >= 5 && result.gx_taken_away >= 10 && result.gx_same >= 5 && result.gx_bad >= 5 && result.gx_rounds >= 100000 &&
 	      result.gx_bundles >= 2000 && result.gx_refused >= 100 && result.gx_sessions >= 100 && result.gx_closed >= 20 && result.gx_restarts >= 5,
 	      "the random runs give the address of the Cerbo, change it, take it away and send one that is none, while the Cerbo delivers, refuses, goes and comes back - and restart the display during its sessions");
+	check(complete && result.gx_endless[0] >= 20 && result.gx_endless[1] >= 20 && result.gx_claimed[0] >= 10 && result.gx_claimed[1] >= 10,
+	      "the random runs ask for the info and the values while the store of the Cerbo holds a number without end, and for the values of a vehicle that has a value under a key of the "
+	      "Cerbo, on displays without the address and with it");
 }
 
 int main(void)

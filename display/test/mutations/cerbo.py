@@ -426,7 +426,12 @@ SUM = ("\tuint64_t sum = (uint64_t)cerbo->refused_invalid + cerbo->refused_versi
        "cerbo->refused_long;")
 CAPPED = "\treturn sum > UINT32_MAX ? UINT32_MAX : (uint32_t)sum;"
 COUNTED = "\t\tif(cerbo_age(&cerbo->values.items[i], now_ms) != VALUE_AGE_GONE) shown++;"
-EACH = "\tfor(int i = 0; i < cerbo->values.count; i++)\n\t{\n" + COUNTED
+# What has no text in GET /api/values is not counted: a number beyond a double, taken as infinite
+TEXT = "\t\tif(!has_text(&cerbo->values.items[i])) continue;\n"
+EACH = ("\tfor(int i = 0; i < cerbo->values.count; i++)\n\t{\n"
+        "\t\t// The number of values GET /api/values names: that answer leaves out what has no text\n" + TEXT + COUNTED)
+TEXT_NUMBER = "\tif(item->kind == VALUE_NUMBER) return isfinite(item->number);\n"
+TEXT_SWITCH = "\treturn item->kind == VALUE_ON || item->kind == VALUE_OFF;"
 
 MUTATIONS += [
     ("cerbo_refused_without_the_invalid", T, F, SUM, SUM.replace("(uint64_t)cerbo->refused_invalid + cerbo->refused_version", "(uint64_t)cerbo->refused_version")),
@@ -452,5 +457,18 @@ MUTATIONS += [
     ("cerbo_shown_last_value_left_out", T, F, EACH, EACH.replace("i < cerbo->values.count;", "i < cerbo->values.count - 1;")),
     ("cerbo_shown_is_one_or_none", T, F, COUNTED, COUNTED.replace("shown++;", "shown = 1;")),
     ("cerbo_shown_never_later_than_the_source_has_seen", T, F, COUNTED, COUNTED.replace("now_ms)", "now_ms < cerbo->clock_ms ? now_ms : cerbo->clock_ms)")),
+    # the count is the number of values GET /api/values names
+    ("cerbo_shown_counts_what_has_no_text", T, F, TEXT, "\t\t(void)has_text;\n"),
+    ("cerbo_shown_text_of_the_first_value", T, F, TEXT, TEXT.replace("items[i]", "items[0]")),
+    ("cerbo_shown_counts_numbers_without_end", T, F, TEXT_NUMBER, "\tif(item->kind == VALUE_NUMBER) return true;\n"),
+    ("cerbo_shown_counts_minus_infinite", T, F, TEXT_NUMBER, "\tif(item->kind == VALUE_NUMBER) return item->number < HUGE_VAL;\n"),
+    ("cerbo_shown_counts_plus_infinite", T, F, TEXT_NUMBER, "\tif(item->kind == VALUE_NUMBER) return item->number > -HUGE_VAL;\n"),
+    ("cerbo_shown_counts_what_is_no_number", T, F, TEXT_NUMBER, "\tif(item->kind == VALUE_NUMBER) return !isinf(item->number);\n"),
+    ("cerbo_shown_counts_no_number", T, F, TEXT_NUMBER, "\tif(item->kind == VALUE_NUMBER) return false;\n"),
+    ("cerbo_shown_counts_no_switch", T, F, TEXT_SWITCH, "\treturn false;"),
+    ("cerbo_shown_counts_no_on", T, F, TEXT_SWITCH, "\treturn item->kind == VALUE_OFF;"),
+    ("cerbo_shown_counts_no_off", T, F, TEXT_SWITCH, "\treturn item->kind == VALUE_ON;"),
+    ("cerbo_shown_counts_every_kind", T, F, TEXT_SWITCH, "\treturn true;"),
+    ("cerbo_shown_switch_needs_a_finite_number", T, F, TEXT_SWITCH, "\treturn (item->kind == VALUE_ON || item->kind == VALUE_OFF) && isfinite(item->number);"),
 ]
 

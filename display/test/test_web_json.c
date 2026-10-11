@@ -1137,8 +1137,15 @@ static bool both_give(const char *view, const char *cerbo_view, uint64_t now_ms,
 	return every_room(call_both, wanted);
 }
 
-// The format of the header written a second time, with printf. Each store with the limits of its source.
-static size_t model_store(size_t at, const values_t *store, uint64_t now_ms, uint64_t fresh_below, uint64_t gone_from, bool *first)
+// A name that begins with the three bytes G, X and _: the prefix of the Cerbo
+static bool bears_prefix(const char *name)
+{
+	return name[0] == 'G' && name[1] == 'X' && name[2] == '_';
+}
+
+// The format of the header written a second time, with printf. Each store with the limits of its source; of
+// the store of the adapter (of_adapter) nothing whose name bears the prefix of the Cerbo.
+static size_t model_store(size_t at, const values_t *store, uint64_t now_ms, uint64_t fresh_below, uint64_t gone_from, bool of_adapter, bool *first)
 {
 	int i;
 
@@ -1149,6 +1156,7 @@ static size_t model_store(size_t at, const values_t *store, uint64_t now_ms, uin
 		char shown[40];
 
 		if(age >= gone_from) continue;
+		if(of_adapter && bears_prefix(value->name)) continue;
 		if(value->kind == VALUE_ON) snprintf(shown, sizeof(shown), "\"on\"");
 		else if(value->kind == VALUE_OFF) snprintf(shown, sizeof(shown), "\"off\"");
 		else if(value->kind != VALUE_NUMBER || isnan(value->number) || isinf(value->number)) continue;
@@ -1169,8 +1177,8 @@ static void model_both(const values_t *wican, const char *view, const values_t *
 
 	at += (size_t)snprintf(expected + at, sizeof(expected) - at, "{\"view\":%s,", q(view));
 	at += (size_t)snprintf(expected + at, sizeof(expected) - at, "\"cerbo\":%s,\"values\":{", q(cerbo_view));
-	at = model_store(at, wican, now_ms, 3000, 10000, &first);
-	at = model_store(at, cerbo, now_ms, 5000, 60000, &first);
+	at = model_store(at, wican, now_ms, 3000, 10000, true, &first);
+	at = model_store(at, cerbo, now_ms, 5000, 60000, false, &first);
 	snprintf(expected + at, sizeof(expected) - at, "}}");
 }
 
@@ -1188,6 +1196,28 @@ static bool with_word(const values_t *store, const char *view, const char *cerbo
 	if(behind == NULL) return false;
 	snprintf(text, sizeof(text), "%.*s,\"cerbo\":%s%s", (int)(behind - plain), plain, q(cerbo_view), behind);
 	return true;
+}
+
+// What GET /api/info says of a store of the Cerbo (cerbo_shown()): the store put into a source
+static int counted(const values_t *store, uint64_t now_ms)
+{
+	static cerbo_t source;
+
+	memset(&source, 0, sizeof(source));
+	source.values = *store;
+	return cerbo_shown(&source, now_ms);
+}
+
+// The values of a store whose names do not bear the prefix of the Cerbo, in their order
+static void without_prefix(const values_t *from, values_t *to)
+{
+	int i;
+
+	memset(to, 0, sizeof(*to));
+	for(i = 0; i < from->count; i++)
+	{
+		if(!bears_prefix(from->items[i].name)) to->items[to->count++] = from->items[i];
+	}
 }
 
 static void test_values_cerbo(void)
@@ -1264,14 +1294,81 @@ static void test_values_cerbo(void)
 		snprintf(wanted, sizeof(wanted), "{\"view\":\"live\",\"cerbo\":\"quiet\",\"values\":{%s}}", ages[i].written);
 		check(both_give("live", "quiet", ages[i].now_ms, wanted), ages[i].what);
 	}
-	// Nothing is looked at but the stores: the name of a value says nothing about its source
+	// The prefix of the Cerbo belongs to the Cerbo. A vehicle profile may name a value of the adapter GX_...,
+	// and with the Cerbo publishing that key both would stand in one object, under one name.
+	no_values();
+	add_value("ENGINE_RPM", VALUE_NUMBER, 812.5, 5000);
+	add_value("GX_BATT_SOC", VALUE_NUMBER, 12.5, 5000);
+	add_value("COOLANT_TMP", VALUE_NUMBER, 88, 5000);
+	no_gx();
+	add_gx("GX_BATT_SOC", VALUE_NUMBER, 99.7, 5000);
+	check(both_give("live", "live", 5000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"ENGINE_RPM\":{\"v\":812.5,\"age\":\"fresh\"},\"COOLANT_TMP\":{\"v\":88,\"age\":\"fresh\"},"
+	                "\"GX_BATT_SOC\":{\"v\":99.7,\"age\":\"fresh\"}}}") && count_of((char *)room, "\"GX_BATT_SOC\"") == 1 && is_json_object((char *)room),
+	      "values with a Cerbo: the adapter has a value named GX_BATT_SOC and the Cerbo publishes that key: it stands once in the answer, with the value of the Cerbo");
+	// Without exception: also where the Cerbo has no value of that name, and where it has none at all
+	no_gx();
+	add_gx("GX_TANK_FRESH", VALUE_NUMBER, 77, 5000);
+	check(both_give("live", "live", 5000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"ENGINE_RPM\":{\"v\":812.5,\"age\":\"fresh\"},\"COOLANT_TMP\":{\"v\":88,\"age\":\"fresh\"},"
+	                "\"GX_TANK_FRESH\":{\"v\":77,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: a value of the adapter named GX_BATT_SOC is left out also when the Cerbo publishes no such key: the prefix is the Cerbo's without exception");
+	no_gx();
+	check(both_give("live", "unreachable", 5000, "{\"view\":\"live\",\"cerbo\":\"unreachable\",\"values\":{\"ENGINE_RPM\":{\"v\":812.5,\"age\":\"fresh\"},\"COOLANT_TMP\":{\"v\":88,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: a value of the adapter named GX_BATT_SOC is left out also while the store of the Cerbo is empty: an address is set, and that decides");
+	// ... whatever its age and kind, and wherever it stands among the values of the adapter
+	no_values();
+	add_value("GX_A", VALUE_NUMBER, 1, 5000);
+	add_value("A", VALUE_ON, 0, 5000);
+	add_value("GX_B", VALUE_OFF, 0, 5000);
+	no_gx();
+	add_gx("GX_A", VALUE_NUMBER, 2, 5000);
+	check(both_give("live", "live", 5000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"A\":{\"v\":\"on\",\"age\":\"fresh\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: the first and the last value of the adapter bear the prefix, a number and a switch: the one between them is written, and one comma stands before the value of the Cerbo");
+	check(both_give("live", "live", 8000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"A\":{\"v\":\"on\",\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}}}") &&
+	      both_give("live", "live", 15000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_A\":{\"v\":2,\"age\":\"old\"}}}"),
+	      "values with a Cerbo: such a value of the adapter is left out fresh, old and gone alike: GX_A is the one of the Cerbo at every age, old after 5 s and not after 3");
+	no_values();
+	add_value("GX_A", VALUE_NUMBER, 1, 5000);
+	add_value("GX_B", VALUE_OFF, 0, 5000);
+	check(both_give("live", "live", 5000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_A\":{\"v\":2,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: nothing but such values at the adapter: the value of the Cerbo alone, without a comma in front");
+	no_gx();
+	check(both_give("live", "quiet", 5000, "{\"view\":\"live\",\"cerbo\":\"quiet\",\"values\":{}}"), "values with a Cerbo: nothing but such values at the adapter and none of the Cerbo: an empty object");
+	// The prefix is three bytes at the beginning of the name, as they are written
+	no_values();
+	add_value("XGX_A", VALUE_NUMBER, 1, 5000);
+	add_value("gx_A", VALUE_NUMBER, 2, 5000);
+	add_value("GX", VALUE_NUMBER, 3, 5000);
+	add_value("G", VALUE_NUMBER, 4, 5000);
+	add_value("GX-A", VALUE_NUMBER, 5, 5000);
+	add_value("Gx_A", VALUE_NUMBER, 6, 5000);
+	add_value("gX_A", VALUE_NUMBER, 7, 5000);
+	add_value("GX_", VALUE_NUMBER, 8, 5000);
+	add_value("GX_A", VALUE_NUMBER, 9, 5000);
+	add_value("GX__", VALUE_NUMBER, 10, 5000);
+	add_value("", VALUE_NUMBER, 11, 5000);
+	add_value("GXA_", VALUE_NUMBER, 12, 5000);
+	check(both_give("live", "off", 5000, "{\"view\":\"live\",\"cerbo\":\"off\",\"values\":{\"XGX_A\":{\"v\":1,\"age\":\"fresh\"},\"gx_A\":{\"v\":2,\"age\":\"fresh\"},\"GX\":{\"v\":3,\"age\":\"fresh\"},"
+	                "\"G\":{\"v\":4,\"age\":\"fresh\"},\"GX-A\":{\"v\":5,\"age\":\"fresh\"},\"Gx_A\":{\"v\":6,\"age\":\"fresh\"},\"gX_A\":{\"v\":7,\"age\":\"fresh\"},"
+	                "\"\":{\"v\":11,\"age\":\"fresh\"},\"GXA_\":{\"v\":12,\"age\":\"fresh\"}}}"),
+	      "values with a Cerbo: of twelve values of the adapter the three whose names begin with GX_ are left out - GX_, GX_A and GX__ -, and none whose name only resembles it: "
+	      "the prefix inside a name, in small letters, cut short or with another third byte");
+	// A display without a second source knows no prefix: it answers what it always did
+	values_now.values = &values;
+	values_now.view = "live";
+	values_now.now_ms = 5000;
+	check(gives(call_values, "{\"view\":\"live\",\"values\":{\"XGX_A\":{\"v\":1,\"age\":\"fresh\"},\"gx_A\":{\"v\":2,\"age\":\"fresh\"},\"GX\":{\"v\":3,\"age\":\"fresh\"},"
+	            "\"G\":{\"v\":4,\"age\":\"fresh\"},\"GX-A\":{\"v\":5,\"age\":\"fresh\"},\"Gx_A\":{\"v\":6,\"age\":\"fresh\"},\"gX_A\":{\"v\":7,\"age\":\"fresh\"},"
+	            "\"GX_\":{\"v\":8,\"age\":\"fresh\"},\"GX_A\":{\"v\":9,\"age\":\"fresh\"},\"GX__\":{\"v\":10,\"age\":\"fresh\"},\"\":{\"v\":11,\"age\":\"fresh\"},"
+	            "\"GXA_\":{\"v\":12,\"age\":\"fresh\"}}}"),
+	      "values without a second source: all twelve of these values are written, GX_A among them: without the address of a Cerbo no name is left out");
+	// Of the store of the Cerbo nothing is looked at but the store: cerbo.h takes no key without the prefix
 	no_values();
 	add_value("GX_A", VALUE_NUMBER, 1, 5000);
 	no_gx();
 	add_gx("ENGINE_RPM", VALUE_NUMBER, 2, 5000);
-	check(both_give("live", "live", 9000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_A\":{\"v\":1,\"age\":\"old\"},\"ENGINE_RPM\":{\"v\":2,\"age\":\"fresh\"}}}") &&
+	check(both_give("live", "live", 9000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"ENGINE_RPM\":{\"v\":2,\"age\":\"fresh\"}}}") &&
 	      both_give("live", "live", 20000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"ENGINE_RPM\":{\"v\":2,\"age\":\"old\"}}}"),
-	      "values with a Cerbo: a value is as old as its store says, whatever its name: one named GX_A among those of the adapter is old after 3 s and gone after 10");
+	      "values with a Cerbo: a value in the store of the Cerbo is written as it is named and as old as that store says, also one named ENGINE_RPM");
 	no_values();
 	no_gx();
 	add_gx("GX_SW_B2B", VALUE_ON, 0, 5000);
@@ -1298,6 +1395,10 @@ static void test_values_cerbo(void)
 	                "\"GX_I\":{\"v\":0,\"age\":\"fresh\"},\"GX_J\":{\"v\":\"on\",\"age\":\"fresh\"},\"GX_K\":{\"v\":\"on\",\"age\":\"fresh\"},"
 	                "\"GX_L\":{\"v\":\"off\",\"age\":\"fresh\"}}}"),
 	      "values with a Cerbo: numbers that are not finite and values whose kind is none of the three are left out, minus zero is written as 0, the number of a switch does not matter");
+	check(count_of((char *)room, "\"GX_") == 6 && counted(&gx, 1000) == 6 && gx.count == 12,
+	      "values with a Cerbo: of that store of twelve the answer names six, and six is what GET /api/info counts for it (cerbo_shown()): the two agree");
+	check(counted(&gx, 60999) == 6 && counted(&gx, 61000) == 0 && both_give("live", "live", 61000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{}}"),
+	      "values with a Cerbo: 60 s later the answer names none of them, and none is counted");
 	no_gx();
 	add_gx("GX_A", VALUE_NUMBER, -1.23456789e-308, 1000);
 	add_gx("GX_B", VALUE_NUMBER, 1e9, 1000);
@@ -3761,7 +3862,9 @@ static void test_random_info_cerbo(void)
 // 3000 random pairs of stores
 static void test_random_values_cerbo(void)
 {
+	static values_t plain, none;
 	int different = 0, invalid = 0, left_out = 0, written = 0, alike = 0;
+	int claimed = 0, doubled = 0, miscounted = 0, named = 0, uncounted = 0;
 	int round, i, store;
 
 	for(round = 0; round < 3000; round++)
@@ -3789,6 +3892,11 @@ static void test_random_values_cerbo(void)
 				value_kind_t made;
 
 				if(name == NULL || strlen(name) > 32) name = store == 0 ? "PLAIN_NAME" : "GX_PLAIN";
+				// Now and then the adapter has a value with the prefix of the Cerbo, mostly under a key the Cerbo
+				// may publish as well. By the numbers of round and value, without a roll: the stores are the ones
+				// they were otherwise.
+				if(store == 0 && (round + i) % 5 == 0) name = (round + i) % 3 == 0 ? "GX_OF_THE_ADAPTER" : "GX_PLAIN";
+				if(store == 1 && (round + i) % 4 == 0) name = "GX_PLAIN";
 				seen_ms = rnd(10) == 0 ? now_ms + age : now_ms - age;
 				made = kind < 6 ? VALUE_NUMBER : kind < 8 ? VALUE_ON : kind == 8 ? VALUE_OFF : (value_kind_t)(3 + rnd(3));
 				if(store == 0) add_value(name, made, number, seen_ms);
@@ -3805,17 +3913,39 @@ static void test_random_values_cerbo(void)
 		if(!is_json_object(expected)) invalid++;
 		written += count_of(expected, "\"age\":");
 		left_out += counts[0] + counts[1] - count_of(expected, "\"age\":");
+		// The values of the adapter the answer does not name because they bear the prefix of the Cerbo, and the
+		// rounds in which one of them has the name of a value in the store of the Cerbo
+		without_prefix(&values, &plain);
+		claimed += values.count - plain.count;
+		for(i = 0, store = 0; i < values.count && store == 0; i++)
+		{
+			if(bears_prefix(values.items[i].name) && values_find(&gx, values.items[i].name) != NULL) store = 1;
+		}
+		doubled += store;
 
-		// The values of the adapter alone: what web_values_json() writes for them, with the one member more
+		// The values of the Cerbo alone: as many as GET /api/info counts for that store (cerbo_shown())
+		both_now.values = &none;
+		if(call_both((char *)room, ROOM_SIZE) < 0 || count_of((char *)room, "\"age\":") != counted(&gx, now_ms)) miscounted++;
+		named += counted(&gx, now_ms);
+		uncounted += gx.count - counted(&gx, now_ms);
+		both_now.values = &values;
+
+		// The values of the adapter alone: what web_values_json() writes for those of them that do not bear the
+		// prefix of the Cerbo, with the one member more
 		no_gx();
 		both_now.cerbo = &gx;
-		if(with_word(&values, view, cerbo_view, now_ms) && gives(call_both, text)) alike++;
+		if(with_word(&plain, view, cerbo_view, now_ms) && gives(call_both, text)) alike++;
 	}
-	printf("  values of two sources written %d, left out %d\n", written, left_out);
+	printf("  values of two sources written %d, left out %d; values of the adapter with the prefix of the Cerbo %d, in %d rounds under a name the Cerbo has as well; "
+	       "values of the Cerbo counted %d, not counted %d\n", written, left_out, claimed, doubled, named, uncounted);
 	check(written > 3000 && left_out > 3000, "values with a Cerbo: 3000 random pairs of stores hold values that are written and values that are left out");
 	check(different == 0, "values with a Cerbo: 3000 random pairs of stores are written as the format of the header says, each with the limits of its source, each also with a random room");
 	check(invalid == 0, "values with a Cerbo: every one of the 3000 random answers is JSON for the reader of the project");
-	check(alike == 3000, "values with a Cerbo: for each of 3000 random stores of the adapter the answer without a value of the Cerbo is the one of web_values_json() with the view of the Cerbo put in");
+	check(alike == 3000, "values with a Cerbo: for each of 3000 random stores of the adapter the answer without a value of the Cerbo is the one of web_values_json() "
+	                     "for its values without the prefix of the Cerbo, with the view of the Cerbo put in");
+	check(claimed > 500 && doubled > 100, "values with a Cerbo: the random stores of the adapter hold values with the prefix of the Cerbo, and in many rounds one under a name the Cerbo has as well");
+	check(miscounted == 0 && named > 3000 && uncounted > 3000, "values with a Cerbo: for each of 3000 random stores of the Cerbo the answer names as many of its values as cerbo_shown() counts, "
+	                                                             "and both kinds are among them: values that are named and counted, and values that are neither");
 }
 
 static void test_random_values(void)

@@ -91,7 +91,12 @@ ROWS_CHOICE = "\t\tcase NAV_DTC_CONFIRM:\n\t\tcase NAV_CONFIRM:       return CHO
 
 TURN_HEAD = "\tnote_input(nav, now_ms);\n\tif(nav_overlay(world) != NAV_OVER_NONE) return NAV_DO_NOTHING;\n\n\tif(nav->screen == NAV_PAGES)"
 TURN_PAGES = "\tif(nav->screen == NAV_PAGES)\n\t{\n\t\tturn_pages(nav, detents, world);\n\t\treturn NAV_DO_NOTHING;\n\t}\n"
-TURN_LEVEL = "\t\tnav->value = brightness_of(nav->value + (int64_t)detents * NAV_BRIGHTNESS_STEP);\n\t\treturn NAV_DO_BRIGHTNESS;"
+TURN_LEVEL = "\t\tnav->value = brightness_of(nav->value + clockwise(detents, world) * NAV_BRIGHTNESS_STEP);\n\t\treturn NAV_DO_BRIGHTNESS;"
+TURN_ROWS = "\tmove_focus(nav, detents, world);\n\treturn NAV_DO_NOTHING;\n}\n\nnav_do_t nav_short("
+CLOCKWISE = "\treturn world->reverse ? (int64_t)detents : -(int64_t)detents;"
+# A sign turned without -x: the smallest int has no opposite, and a mutation must not fail by what the sanitizer
+# makes of that
+OPPOSITE = "(int)(0u - (unsigned)detents)"
 SHORT = "\tnote_input(nav, now_ms);\n\tif(overlay != NAV_OVER_NONE) return press_overlay(overlay);\n\treturn press(nav, world);"
 LONG = ("\tnote_input(nav, now_ms);\n\tif(overlay == NAV_OVER_ASK) return NAV_DO_ASK_REFUSE;\n"
         "\tif(overlay != NAV_OVER_NONE) return NAV_DO_NOTHING;\n\treturn back(nav, world);")
@@ -298,15 +303,27 @@ MUTATIONS = [
     ("nav_focus_wraps_at_the_beginning", T, F, FOCUS_BOTTOM, "\tif(row < 0) row = last > 0 ? last : 0;\n"),
     ("nav_focus_one_row_behind_the_end", T, F, FOCUS_LAST, "\tint last = nav_rows(nav, world);\n\n\tif(row > last) row = last;"),
     ("nav_focus_ends_one_row_early", T, F, FOCUS_LAST, "\tint last = nav_rows(nav, world) - 2;\n\n\tif(row > last) row = last;"),
-    ("nav_brightness_turn_moves_nothing", T, F, TURN_LEVEL, "\t\treturn NAV_DO_BRIGHTNESS;"),
+    ("nav_brightness_turn_moves_nothing", T, F, TURN_LEVEL, "\t\t(void)clockwise(detents, world);\n\t\treturn NAV_DO_BRIGHTNESS;"),
     ("nav_brightness_turn_not_reported", T, F, TURN_LEVEL, TURN_LEVEL.replace("return NAV_DO_BRIGHTNESS;", "return NAV_DO_NOTHING;")),
     ("nav_brightness_turn_reported_when_changed", T, F,
      TURN_LEVEL, "\t\tint before = nav->value;\n\n" + TURN_LEVEL.replace("return NAV_DO_BRIGHTNESS;", "return nav->value != before ? NAV_DO_BRIGHTNESS : NAV_DO_NOTHING;")),
     ("nav_brightness_turn_stored_at_once", T, F, TURN_LEVEL, TURN_LEVEL.replace("return NAV_DO_BRIGHTNESS;", "return NAV_DO_SETTINGS_STORE;")),
     ("nav_brightness_one_percent_per_detent", T, F, TURN_LEVEL, TURN_LEVEL.replace(" * NAV_BRIGHTNESS_STEP", "")),
     ("nav_brightness_step_changed", T, H, "#define NAV_BRIGHTNESS_STEP     5", "#define NAV_BRIGHTNESS_STEP     4"),
-    ("nav_brightness_in_32_bit", T, F, TURN_LEVEL, TURN_LEVEL.replace("(int64_t)detents", "detents")),
+    # The product cut to 32 bit as a wrap, not as an overflow the sanitizer would stop: 500 million detents
+    # clockwise become a negative number and the brightness 5 where it has to be 100
+    ("nav_brightness_in_32_bit", T, F,
+     TURN_LEVEL, TURN_LEVEL.replace("clockwise(detents, world) * NAV_BRIGHTNESS_STEP", "(int64_t)(int32_t)(uint32_t)(clockwise(detents, world) * NAV_BRIGHTNESS_STEP)")),
     ("nav_brightness_reversed", T, F, TURN_LEVEL, TURN_LEVEL.replace("nav->value + ", "nav->value - ")),
+    # the direction of the hand (seen on the device on 2026-10-10: clockwise counts down) and the setting
+    ("nav_brightness_darker_clockwise", T, F, CLOCKWISE, "\treturn world->reverse ? -(int64_t)detents : (int64_t)detents;"),
+    ("nav_brightness_direction_setting_ignored", T, F, CLOCKWISE, "\t(void)world;\n\treturn -(int64_t)detents;"),
+    ("nav_brightness_as_the_knob_reports", T, F, CLOCKWISE, "\t(void)world;\n\treturn (int64_t)detents;"),
+    ("nav_brightness_direction_setting_applied_twice", T, F, TURN_LEVEL, TURN_LEVEL.replace("clockwise(detents, world)", "(world->reverse ? -1 : 1) * clockwise(detents, world)")),
+    ("nav_brightness_opposite_in_32_bit", T, F, CLOCKWISE, CLOCKWISE.replace("-(int64_t)detents", OPPOSITE)),
+    ("nav_pages_follow_the_direction_setting", T, F, TURN_PAGES, TURN_PAGES.replace("turn_pages(nav, detents, world)", "turn_pages(nav, world->reverse ? %s : detents, world)" % OPPOSITE)),
+    ("nav_focus_follows_the_direction_setting", T, F, TURN_ROWS, TURN_ROWS.replace("move_focus(nav, detents, world)", "move_focus(nav, world->reverse ? %s : detents, world)" % OPPOSITE)),
+    ("nav_swipe_follows_the_direction_setting", T, F, SWIPE, SWIPE.replace("turn_pages(nav, direction < 0 ? -1 : 1, world)", "turn_pages(nav, (direction < 0) != world->reverse ? -1 : 1, world)")),
     ("nav_brightness_from_the_world", T, F, TURN_LEVEL, TURN_LEVEL.replace("nav->value + ", "world->brightness + ")),
     ("nav_brightness_no_lower_limit", T, F, TOO_DARK, "\tif(value < INT_MIN) return INT_MIN;\n"),
     ("nav_brightness_no_upper_limit", T, F, TOO_BRIGHT, "\tif(value > INT_MAX) return INT_MAX;\n"),

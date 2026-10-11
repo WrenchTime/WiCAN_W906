@@ -20,7 +20,8 @@
  *
  * Everything in this component is READ from the schematic of the maker (Main V1.0) and from the maker's
  * examples. Nothing was measured: the board was not there when this was written. Places that can only be
- * decided with the board in hand are marked CHECK in board.c.
+ * decided with the board in hand are marked CHECK in board.c. What was seen on the board since stands
+ * where it belongs, with its date - so far the encoder alone (board_encoder()).
  *
  * Wiring (schematic):
  *   I2C            SDA 38, SCL 39; touch controller at 0x15, port expander PCF8574 at 0x21
@@ -54,7 +55,9 @@ void board_backlight(int percent);
 // One reading of the switch of the knob. Returns false if the reading failed (*pressed is then untouched).
 bool board_button(bool *pressed);
 
-// Counts of the encoder since the last call, positive or negative (see knob.h for what a detent is)
+// Counts of the encoder since the last call, positive or negative. Seen on the board: two counts are one
+// detent of the knob (2026-10-09), and turning clockwise, seen from the front, counts DOWN (2026-10-10).
+// knob.h makes detents of the counts and says what follows from the direction.
 int board_encoder(void);
 
 // One reading of the touch controller. Returns false if the reading failed. *down tells whether a finger

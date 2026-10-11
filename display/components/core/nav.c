@@ -80,6 +80,14 @@ static int brightness_of(int64_t value)
 	return (int)value;
 }
 
+// The detents the hand turned clockwise, seen from the front. The encoder of this board counts down that way
+// (seen on the device on 2026-10-10, knob.h), so the knob reports them negative - and positive if the user
+// set `reverse`, which turns its sign: taken back here. In 64 bit: the smallest int has no positive counterpart.
+static int64_t clockwise(int detents, const nav_world_t *world)
+{
+	return world->reverse ? (int64_t)detents : -(int64_t)detents;
+}
+
 static bool under_way(dtc_flow_phase_t flow)
 {
 	return flow == DTC_FLOW_READ_SENT || flow == DTC_FLOW_READING || flow == DTC_FLOW_CLEAR_SENT || flow == DTC_FLOW_CLEARING;
@@ -428,8 +436,9 @@ nav_do_t nav_turn(nav_t *nav, int detents, const nav_world_t *world, uint64_t no
 	}
 	if(nav->screen == NAV_BRIGHTNESS)
 	{
-		// In 64 bit: any number of detents
-		nav->value = brightness_of(nav->value + (int64_t)detents * NAV_BRIGHTNESS_STEP);
+		// Brighter clockwise, whatever the setting for pages and rows says: the arc on the screen grows that
+		// way. In 64 bit: any number of detents
+		nav->value = brightness_of(nav->value + clockwise(detents, world) * NAV_BRIGHTNESS_STEP);
 		return NAV_DO_BRIGHTNESS;
 	}
 	move_focus(nav, detents, world);
