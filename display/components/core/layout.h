@@ -146,7 +146,18 @@ bool layout_parse(const char *json, size_t length, layout_t *layout, layout_repo
 // A page takes part in the rotation of the knob if it is not hidden and at least one of its values is in
 // the catalogue. With a catalogue that holds nothing but CATALOG_BATTERY (not loaded yet) every page that
 // is not hidden counts: the display shows dashes instead of jumping around when the catalogue arrives.
+// A value of the second source (cerbo.h: a key that begins with CERBO_PREFIX, cerbo_key()) counts as one
+// that is in the catalogue, whatever the catalogue holds: that source has none. So a page of values of the
+// Cerbo takes part as soon as it is in the views - whether the source delivers, is away or is switched off
+// is what the page itself says then (scene.h).
 bool layout_page_shown(const layout_t *layout, int page, const catalog_t *catalog);
+
+// Which sources the values of a page come from. *wican: at least one of its items names a value of the
+// adapter (a key that does not begin with CERBO_PREFIX); *gx: at least one names a value of the Cerbo
+// (cerbo_key()). The prefix alone decides, for every key and without a look into a store or a catalogue.
+// Both false for a page outside of the layout (and for one without items, which layout_parse() does not
+// make). Whether the page is hidden is not asked.
+void layout_page_sources(const layout_t *layout, int page, bool *wican, bool *gx);
 
 // The first shown page, -1 if there is none
 int layout_first_page(const layout_t *layout, const catalog_t *catalog);
@@ -170,6 +181,19 @@ bool layout_suits(const layout_t *layout, const catalog_t *catalog);
 // well: the layout has to come back from the editor in the browser. A catalogue without a name that can be
 // used gives a layout without pages.
 void layout_from_catalog(const catalog_t *catalog, layout_t *layout);
+
+// Appends the pages of `from` behind those of `to`, in their order: the views of the vehicle get the pages
+// of the second source (display/layouts/gx_default.json) when that source is switched on (app.h).
+// - Every page of `from` finds room: where the two have more than LAYOUT_PAGES_MAX pages together, the last
+//   pages of `to` give way. (Only views made from the catalogue of a vehicle with more than seven pages
+//   lose one that way: the built-in views of the W906 have seven, those of the Cerbo five.)
+// - profile_hint of `to` stays. Its name gets " + " and the name of `from` appended - "W906 OM651 Standard
+//   + Cerbo" - if both have a name and the whole fits (LAYOUT_NAME_SIZE - 1 bytes); else it stays as it is.
+// - A `from` without pages changes nothing, the name neither.
+// Both are layouts as layout_parse() and layout_from_catalog() fill them (see layout_t), and `to` is one
+// again afterwards: every byte it does not use is zero, so two layouts appended from the same two are the
+// same memory. `from` must not be `to`.
+void layout_append(layout_t *to, const layout_t *from);
 
 // The longest text layout_to_json() writes for a layout of layout_from_catalog(), without its zero: 48
 // items whose names are 24 quotes and 8 underscores

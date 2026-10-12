@@ -1,0 +1,11 @@
+kind: values
+ring: yellow
+title: Batterie
+note:
+item: SOC | 87,5 | % | dim | arc | 875
+item: Spannung | 26,41 | V | dim | number | -1
+item: Strom | -6,2 | A | dim | number | -1
+item: Leistung | -164 | W | dim | number | -1
+item: Zelle min | 3,298 | V | dim | number | -1
+item: Zelle max | 3,304 | V | dim | number | -1
+dots: 8/12

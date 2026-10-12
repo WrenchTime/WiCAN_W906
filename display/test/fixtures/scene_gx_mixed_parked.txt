@@ -1,0 +1,9 @@
+kind: values
+ring: none
+title: Fahrt
+note: WiCAN nicht gefunden – schläft, stromlos oder außer Reichweite
+item: Drehzahl | – |  | dim | arc | -1
+item: SOC | 87,5 | % | normal | number | -1
+item: Kühlwasser | – |  | dim | number | -1
+item: Alternator | 0,0 | A | normal | number | -1
+dots: 4/5

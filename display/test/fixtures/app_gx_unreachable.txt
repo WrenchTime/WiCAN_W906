@@ -1,0 +1,6 @@
+kind: notice
+ring: red
+title:
+note:
+dots: 8/12
+line: Cerbo nicht erreichbar

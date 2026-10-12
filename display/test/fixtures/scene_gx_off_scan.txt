@@ -1,0 +1,6 @@
+kind: notice
+ring: progress 277
+title:
+note:
+dots: 2/5
+line: Cerbo nicht eingerichtet

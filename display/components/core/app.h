@@ -112,6 +112,8 @@ typedef struct
 	size_t layout_length;
 	const char *builtin_layout;     // display/layouts/w906_default.json; has to stay
 	size_t builtin_length;
+	const char *builtin_gx;         // display/layouts/gx_default.json, the pages of the second source; read once
+	size_t builtin_gx_length;       // by app_init() and not kept. NULL: there are none
 	const char *catalog_json;
 	size_t catalog_length;
 	const char *old_text;           // the fault memory list before the last clear
@@ -163,6 +165,8 @@ typedef struct
 	bool has_builtin;
 	const char *builtin_text;       // its text, the one of app_boot_t
 	size_t builtin_length;
+	layout_t builtin_gx;            // the pages of the second source, parsed once at the start
+	bool has_builtin_gx;
 	layout_t checked;               // room for a layout the browser sent, until it is taken (app_web.h): a
 	                                // layout_t is too large for a stack
 	char layout_text[LAYOUT_TEXT_MAX + 1];  // the text `layout` was read from; layout_to_json() for a
@@ -221,9 +225,9 @@ typedef struct
 } app_t;
 
 /*
- * The start. app_t is large (232768 bytes on a 64 bit host: the two layouts and the room for a third
- * 105360, the lines of the three fault memory lists 62376, the poll 39520, the layout text 16385, the
- * second source 5456; 232656 bytes calculated for a 32 bit target that aligns 64 bit numbers to 8 bytes,
+ * The start. app_t is large (267896 bytes on a 64 bit host: the three layouts and the room for a fourth
+ * 140480, the lines of the three fault memory lists 62376, the poll 39520, the layout text 16385, the
+ * second source 5456; 267784 bytes calculated for a 32 bit target that aligns 64 bit numbers to 8 bytes,
  * not measured on the device): static storage or the external RAM, never a stack.
  * - settings: settings_defaults(), then the stored text if settings_from_json() takes it. A text that is not
  *   taken, and no text at all, leave the defaults - with them the web interface is released for good
@@ -236,6 +240,8 @@ typedef struct
  *   the release of ten minutes, given at the display. See "The release of the web interface" below.
  * - the built-in layout is parsed (has_builtin false if that fails or there is none: then the views are
  *   made from the catalogue, layout_from_catalog(), whenever the built-in ones would be used)
+ * - the built-in pages of the second source are parsed (has_builtin_gx false if that fails or there are
+ *   none: then no page is appended, whatever the address says - see the choice below)
  * - the layout in use: the stored text if there is one, safe_mode is false and layout_parse() takes it
  *   (source STORED); else the choice below. In safe mode the stored text is not even read: it may be what
  *   crashed the display. The app keeps no second copy of what is stored: a preview ends with a restart, a
@@ -250,6 +256,13 @@ typedef struct
  * pages start at the first page of the new layout; when it does not, the page shown stays (nav_tick() finds
  * the nearest if it is not shown any more). A layout the browser sends keeps the page shown where it has one
  * at that position (app_web.h).
+ * While the second source is on (cerbo_on(): its address is set, and it is not the safe mode) the choice goes
+ * on: the built-in pages of the Cerbo are appended to what was chosen (layout_append(): behind the pages of
+ * the vehicle, of which the last give way where the two are more than LAYOUT_PAGES_MAX), and layout_text is
+ * layout_to_json() of the whole. `source` goes on naming the part of the vehicle: BUILTIN or GENERATED. The
+ * choice is made anew when POST /api/settings switches the source on or off (app_web.h) - there, too, only
+ * while the source is not STORED and not PREVIEW: what the user stored or is looking at is never appended
+ * to. Without the source, and without built-in pages of it, the choice is the one above, byte for byte.
  */
 void app_init(app_t *app, const app_boot_t *boot, uint64_t now_ms);
 
@@ -295,6 +308,15 @@ void app_choose_layout(app_t *app);
  *   So cerbo_host(&app->cerbo) is settings.cerbo at every moment, and app->cerbo.network link_in_network()
  *   behind every app_net().
  * - the two info lines below, GET /api/info and GET /api/values (app_web.h) - while an address is set
+ * - the pages: while the source is on, the views the display chooses itself end with the built-in pages
+ *   of the Cerbo (see the choice of the layout above). A value page shows a value whose key begins with
+ *   CERBO_PREFIX from the store of the Cerbo, with the age and the words of that source, whatever views it
+ *   stands in - also in stored ones, and also while the source is off, which the page then says (scene.h)
+ * - the page the long press on a value page leads to (nav_world_t.home, app_world()): the first page of the
+ *   rotation that shows values right now, by the rule of the scene (scene_page_shows()) - in a parked
+ *   camper, with the adapter asleep and the Cerbo delivering, the first page of the Cerbo; on the road the
+ *   first page of the adapter; the first page of the rotation if none shows any. The display never goes
+ *   there by itself: it stays on the page it was on, also when another one begins to show values.
  *
  * What the app does NOT take from it - the values of the Cerbo lie in a store of their own (cerbo.values),
  * and no function of the fault memory is ever handed that store:
@@ -304,7 +326,8 @@ void app_choose_layout(app_t *app);
  * - the standby rule: values of the Cerbo are no reason to keep the light on - they are always there, and a
  *   display on permanent power would never go dark. "showing" (app_backlight()) asks the adapter alone
  * - app_busy(), the release of the web interface (access.h), nav and the idle times: a bundle is no input
- * - the screens: no page shows a value of the Cerbo yet
+ * - every screen but the value pages, and every value page that names no value of the Cerbo: they are made
+ *   from the adapter alone, as on a display without a second source
  */
 
 /*
@@ -513,14 +536,19 @@ const char *app_host(const app_t *app);
 void app_do(app_t *app, nav_do_t what, uint64_t now_ms);
 
 // The world as nav sees it right now (nav.h), filled from the state of the app: every byte of it is written.
+// `home` of it is named in every world (home_set): the first page of the rotation that shows values right now
+// (scene_page_shows() with the view of the connection and the second source), the first page of the rotation
+// if none does, -1 without one. On a display without a second source that is the first page of the rotation
+// at every moment - where the long press led before there was one.
 // `release_lasting` of it is access_is_lasting(), which is settings.web_open (see above).
 // `reverse` of it is settings.reverse, which is what the knob was told at every moment (app_init(),
 // NAV_DO_REVERSE_TOGGLE, app_web.h): the sign nav takes back on the brightness screen is the one the knob turned.
 void app_world(const app_t *app, nav_world_t *world, uint64_t now_ms);
 
-// What is on the screen (scene_build() with everything of the app). The lines of a list, of an outcome and
-// of the old list are passed only while the poll holds their result, the summary only with the list. The
-// address is "http://" and the ip of app_platform(), none without an ip. update_left_s is rounded up.
+// What is on the screen (scene_build() with everything of the app, the second source among it). The lines of
+// a list, of an outcome and of the old list are passed only while the poll holds their result, the summary
+// only with the list. The address is "http://" and the ip of app_platform(), none without an ip.
+// update_left_s is rounded up.
 void app_scene(const app_t *app, scene_t *scene, uint64_t now_ms);
 
 // The brightness of the backlight, 0 to 100: settings_backlight() - with the value being set while the
@@ -528,8 +556,10 @@ void app_scene(const app_t *app, scene_t *scene, uint64_t now_ms);
 // "showing" for the standby rule: the view of the connection is LIVE or SCAN, or it is NO_API and at least
 // one value is not gone (a firmware without the API tells nothing about the ignition; its values are the sign
 // of a vehicle that runs), or a screen other than the value pages is shown, or an overlay lies over it.
-// The second source is not asked: whatever the Cerbo delivers, the standby rule is the one of a display
-// without it.
+// The second source is not asked: whatever the Cerbo delivers and whatever page shows it, the standby rule is
+// the one of a display without it. In a parked camper the screen goes dark after the standby time while a page
+// of the Cerbo shows its values; an input wakes it, and the values are there at once - the session goes on in
+// the dark.
 int app_backlight(const app_t *app, uint64_t now_ms);
 
 // true while the web interface must not restart the display or replace its firmware: a fault memory request

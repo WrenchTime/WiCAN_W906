@@ -149,6 +149,10 @@ TICK_OWN = "\tif(screen == NAV_DTC_BUSY || screen == NAV_DTC_CONFIRM) return NAV
 TICK_RETURN = "\tenter(nav, NAV_PAGES, 0);\n\treturn screen == NAV_BRIGHTNESS ? NAV_DO_SETTINGS_STORE : NAV_DO_NOTHING;"
 IDLE_OVER = "nav->clock_ms - nav->last_input_ms >= NAV_IDLE_MS"
 
+# The page the long press on a value page leads to, where the world names one
+HOME_IF = "\t\t\tif(world->home_set && layout_page_shown(world->layout, world->home, world->catalog))\n"
+HOME_TAKEN = "\t\t\t\tnav->page = world->home;\n\t\t\t\tbreak;\n"
+
 MUTATIONS = [
     # the time of the module
     ("nav_time_steps_back_with_the_caller", T, F, CLOCK, "\tnav->clock_ms = now_ms;"),
@@ -866,4 +870,25 @@ MUTATIONS = [
      ACTS, ACTS.replace(";", " || (nav->screen == NAV_WEB && row == WEB_RELEASE && nav_overlay(world) != NAV_OVER_NONE);")),
     ("nav_acts_no_row_of_the_web_access_while_it_lasts", T, F, ACTS_ROW, ACTS_ROW + "\tif(nav->screen == NAV_WEB && world->release_lasting) return false;\n"),
     ("nav_acts_lasting_row_only_while_closed", T, F, ACTS_ROW, ACTS_ROW + "\tif(nav->screen == NAV_WEB && row == WEB_LASTING && world->release_open) return false;\n"),
+    # The named page: where the long press on a value page leads, and nothing else
+    ("nav_home_not_looked_at", T, F, HOME_IF, "\t\t\tif(false)\n"),
+    ("nav_home_without_being_named", T, F, HOME_IF, "\t\t\tif(layout_page_shown(world->layout, world->home, world->catalog))\n"),
+    ("nav_home_named_alone_is_enough", T, F, HOME_IF, "\t\t\tif(world->home_set && world->home >= 0 && world->home < world->layout->page_count)\n"),
+    ("nav_home_only_while_not_named", T, F, HOME_IF, "\t\t\tif(!world->home_set && layout_page_shown(world->layout, world->home, world->catalog))\n"),
+    ("nav_home_given_up_for_the_first_page", T, F, HOME_TAKEN, "\t\t\t\tnav->page = world->home;\n"),
+    ("nav_home_is_the_page_behind", T, F, HOME_TAKEN, "\t\t\t\tnav->page = world->home + 1;\n\t\t\t\tbreak;\n"),
+    ("nav_home_at_the_start", T, F, INIT_PAGE,
+     "\tnav->page = world->home_set && layout_page_shown(world->layout, world->home, world->catalog) ? world->home : layout_first_page(world->layout, world->catalog);\n\tnav->row = 0;\n"),
+    ("nav_home_by_the_long_press_in_the_menu", T, F, BACK_TO_PAGES,
+     BACK_TO_PAGES.replace("\t\t\tbreak;", "\t\t\tif(world->home_set && layout_page_shown(world->layout, world->home, world->catalog)) nav->page = world->home;\n\t\t\tbreak;")),
+    ("nav_home_by_the_tick", T, F, TICK_PAGE_IF,
+     "\tif(screen == NAV_PAGES && world->home_set && layout_page_shown(world->layout, world->home, world->catalog)) nav->page = world->home;\n" + TICK_PAGE_IF),
+    ("nav_home_by_the_tick_for_a_page_that_went", T, F, TICK_PAGE,
+     TICK_PAGE.replace("nearest_page(nav, world)", "world->home_set && layout_page_shown(world->layout, world->home, world->catalog) ? world->home : nearest_page(nav, world)")),
+    ("nav_home_by_the_idle_time", T, F, TICK_RETURN,
+     TICK_RETURN.replace("enter(nav, NAV_PAGES, 0);", "enter(nav, NAV_PAGES, 0);\n\tif(world->home_set && layout_page_shown(world->layout, world->home, world->catalog)) nav->page = world->home;")),
+    ("nav_home_by_a_turn_on_a_page_that_went", T, F, TURN_LOST,
+     TURN_LOST.replace("nearest_page(nav, world)", "world->home_set && layout_page_shown(world->layout, world->home, world->catalog) ? world->home : nearest_page(nav, world)")),
+    ("nav_home_by_the_short_press", T, F, PRESS_PAGES,
+     PRESS_PAGES.replace("\t\t\tbreak;", "\t\t\tif(world->home_set && layout_page_shown(world->layout, world->home, world->catalog)) nav->page = world->home;\n\t\t\tbreak;")),
 ]

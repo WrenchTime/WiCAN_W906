@@ -212,6 +212,21 @@ W_PAGES = "\tfor(int p = 0; p < layout->page_count; p++)\n\t{\n\t\tif(p > 0) put
 W_NO_ROOM = "\tif(size == 0) return -1;\n\tif(writer.failed || writer.length >= size)\n\t{\n\t\tout[0] = '\\0';\n\t\treturn -1;\n\t}\n"
 W_END = "\tout[writer.length] = '\\0';\n\treturn (int)writer.length;"
 
+# The second source: pages of values of the Cerbo, and the built-in pages of it
+GX_FILE = "layouts/gx_default.json"
+GX_KEY = "\t\tif(cerbo_key(shown->items[i].key)) return true;\n"
+SOURCES_CLEAR = "\t*wican = false;\n\t*gx = false;\n"
+SOURCES_RANGE = "\tif(page < 0 || page >= layout->page_count) return;\n\n\tfor(int i = 0; i < layout->pages[page].item_count; i++)"
+SOURCES_KEY = "\t\tif(cerbo_key(layout->pages[page].items[i].key)) *gx = true;\n\t\telse *wican = true;\n"
+APPEND_NONE = "\tif(from->page_count == 0) return;\n"
+APPEND_CLAMP = "\tif(kept > LAYOUT_PAGES_MAX - from->page_count) kept = LAYOUT_PAGES_MAX - from->page_count;\n"
+APPEND_COPY = "\tmemcpy(&to->pages[kept], from->pages, from->page_count * sizeof(to->pages[0]));\n"
+APPEND_COUNT = "\tto->page_count = (uint8_t)(kept + from->page_count);\n"
+APPEND_PAGES = (APPEND_CLAMP + "\t// Byte for byte, also what lies between the fields of a page: zeros there, as in every layout that was\n"
+                "\t// read or made (layout.h). No page of `to` stays behind them: the two have at least as many as `to` had.\n" + APPEND_COPY + APPEND_COUNT)
+APPEND_FITS = "\tif(own == 0 || added == 0 || own + (sizeof(plus) - 1) + added > LAYOUT_NAME_SIZE - 1) return;\n"
+APPEND_NAME = "\tmemcpy(to->name + own, plus, sizeof(plus) - 1);\n\tmemcpy(to->name + own + (sizeof(plus) - 1), from->name, added);\n"
+
 MUTATIONS = [
     # the numbers of the header
     ("layout_text_limit_one_less", T, H, "#define LAYOUT_TEXT_MAX     16384", "#define LAYOUT_TEXT_MAX     16383"),
@@ -951,4 +966,67 @@ MUTATIONS = [
     ("layout_written_item_behind_last", T, F, W_ITEMS, W_ITEMS.replace("i < page->item_count", "i <= page->item_count && i < LAYOUT_ITEMS_MAX")),
     ("layout_written_items_without_commas", T, F, W_ITEMS, W_ITEMS.replace("\t\tif(i > 0) put_char(writer, ',');\n", "")),
     ("layout_written_first_item_everywhere", T, F, W_ITEMS, W_ITEMS.replace("&page->items[i]", "&page->items[0]")),
+    # The second source: a value whose key begins with GX_ counts as one that is in the catalogue
+    ("layout_cerbo_page_not_shown", T, F, GX_KEY, ""),
+    ("layout_cerbo_key_counts_only_in_first_place", T, F, GX_KEY, "\t\tif(i == 0 && cerbo_key(shown->items[i].key)) return true;\n"),
+    ("layout_cerbo_key_hides_the_page", T, F, GX_KEY, "\t\tif(cerbo_key(shown->items[i].key)) return false;\n"),
+    ("layout_cerbo_page_shown_although_hidden", T, F, IS_HIDDEN, "\tif(shown->hidden && !cerbo_key(shown->items[0].key)) return false;"),
+    ("layout_cerbo_prefix_of_two_letters", T, F, GX_KEY, "\t\tif(strncmp(shown->items[i].key, CERBO_PREFIX, 2) == 0) return true;\n"),
+    ("layout_cerbo_prefix_anywhere_in_the_key", T, F, GX_KEY, "\t\tif(strstr(shown->items[i].key, CERBO_PREFIX) != NULL) return true;\n"),
+
+    # layout_page_sources
+    ("layout_sources_wican_not_cleared", T, F, SOURCES_CLEAR, "\t*gx = false;\n"),
+    ("layout_sources_gx_not_cleared", T, F, SOURCES_CLEAR, "\t*wican = false;\n"),
+    ("layout_sources_of_a_page_behind_the_layout", T, F, SOURCES_RANGE, "\tif(page < 0 || page >= LAYOUT_PAGES_MAX) return;\n\n\tfor(int i = 0; i < layout->pages[page].item_count; i++)"),
+    ("layout_sources_of_a_page_before_the_layout", T, F, SOURCES_RANGE, "\tif(page >= layout->page_count) return;\n\n\tfor(int i = 0; i < layout->pages[page].item_count; i++)"),
+    ("layout_sources_of_a_hidden_page_not_told", T, F, SOURCES_RANGE,
+     "\tif(page < 0 || page >= layout->page_count || layout->pages[page].hidden) return;\n\n\tfor(int i = 0; i < layout->pages[page].item_count; i++)"),
+    ("layout_sources_first_item_decides", T, F, SOURCES_RANGE, "\tif(page < 0 || page >= layout->page_count) return;\n\n\tfor(int i = 0; i < layout->pages[page].item_count && i < 1; i++)"),
+    ("layout_sources_sixth_item_not_asked", T, F, SOURCES_RANGE, "\tif(page < 0 || page >= layout->page_count) return;\n\n\tfor(int i = 0; i < layout->pages[page].item_count && i < 5; i++)"),
+    ("layout_sources_items_behind_the_last_count", T, F, SOURCES_RANGE, "\tif(page < 0 || page >= layout->page_count) return;\n\n\tfor(int i = 0; i < LAYOUT_ITEMS_MAX; i++)"),
+    ("layout_sources_every_key_is_of_the_adapter", T, F, SOURCES_KEY, "\t\tif(cerbo_key(layout->pages[page].items[i].key)) *gx = true;\n\t\t*wican = true;\n"),
+    ("layout_sources_every_key_is_of_the_cerbo", T, F, SOURCES_KEY, "\t\tif(!cerbo_key(layout->pages[page].items[i].key)) *wican = true;\n\t\t*gx = true;\n"),
+    ("layout_sources_swapped", T, F, SOURCES_KEY, "\t\tif(cerbo_key(layout->pages[page].items[i].key)) *wican = true;\n\t\telse *gx = true;\n"),
+    ("layout_sources_prefix_of_two_letters", T, F, SOURCES_KEY, "\t\tif(strncmp(layout->pages[page].items[i].key, CERBO_PREFIX, 2) == 0) *gx = true;\n\t\telse *wican = true;\n"),
+    ("layout_sources_prefix_without_case", T, F, SOURCES_KEY,
+     "\t\tif((layout->pages[page].items[i].key[0] | 0x20) == 'g' && (layout->pages[page].items[i].key[1] | 0x20) == 'x' && layout->pages[page].items[i].key[2] == '_') *gx = true;\n\t\telse *wican = true;\n"),
+
+    # layout_append
+    ("layout_append_names_without_pages", T, F, APPEND_NONE, ""),
+    ("layout_append_new_pages_find_no_room", T, F, APPEND_PAGES,
+     "\tint count = from->page_count;\n\n\tif(count > LAYOUT_PAGES_MAX - kept) count = LAYOUT_PAGES_MAX - kept;\n"
+     "\tmemcpy(&to->pages[kept], from->pages, (size_t)count * sizeof(to->pages[0]));\n\tto->page_count = (uint8_t)(kept + count);\n"),
+    ("layout_append_a_page_too_many_gives_way", T, F, APPEND_CLAMP,
+     "\tif(kept > LAYOUT_PAGES_MAX - from->page_count) kept = LAYOUT_PAGES_MAX - from->page_count > 0 ? LAYOUT_PAGES_MAX - from->page_count - 1 : 0;\n"),
+    ("layout_append_first_pages_give_way", T, F, APPEND_COPY,
+     "\tmemmove(to->pages, &to->pages[to->page_count - kept], (size_t)kept * sizeof(to->pages[0]));\n" + APPEND_COPY),
+    ("layout_append_only_the_first_page", T, F, APPEND_COPY, "\tmemcpy(&to->pages[kept], from->pages, sizeof(to->pages[0]));\n"),
+    ("layout_append_pages_not_counted", T, F, APPEND_COUNT, ""),
+    ("layout_append_counts_the_new_pages_alone", T, F, APPEND_COUNT, "\tto->page_count = from->page_count;\n"),
+    ("layout_append_name_stays", T, F, APPEND_NAME, ""),
+    ("layout_append_name_to_views_without_one", T, F, APPEND_FITS, APPEND_FITS.replace("own == 0 || ", "")),
+    ("layout_append_name_of_pages_without_one", T, F, APPEND_FITS, APPEND_FITS.replace("added == 0 || ", "")),
+    ("layout_append_name_cut_to_fit", T, F, APPEND_FITS,
+     "\tif(own == 0 || added == 0 || own + (sizeof(plus) - 1) >= LAYOUT_NAME_SIZE - 1) return;\n"
+     "\tif(added > LAYOUT_NAME_SIZE - 1 - own - (sizeof(plus) - 1)) added = LAYOUT_NAME_SIZE - 1 - own - (sizeof(plus) - 1);\n"),
+    ("layout_append_name_one_byte_too_soon_refused", T, F, APPEND_FITS, APPEND_FITS.replace("> LAYOUT_NAME_SIZE - 1) return;", ">= LAYOUT_NAME_SIZE - 1) return;")),
+    ("layout_append_name_replaced", T, F, APPEND_NAME, "\tmemset(to->name, 0, sizeof(to->name));\n\tmemcpy(to->name, from->name, added);\n"),
+    ("layout_append_name_without_blanks", T, F, "\tstatic const char plus[] = \" + \";\n", "\tstatic const char plus[] = \"+\";\n"),
+    ("layout_append_takes_the_profile_hint", T, F, APPEND_NAME, "\tmemcpy(to->profile_hint, from->profile_hint, sizeof(to->profile_hint));\n" + APPEND_NAME),
+
+    # The built-in pages of the Cerbo (display/layouts/gx_default.json): the file itself
+    ("gx_pages_a_key_the_contract_does_not_name", T, GX_FILE, "{\"key\":\"GX_LTE_RSRP\"", "{\"key\":\"GX_LTE_RSRX\""),
+    ("gx_pages_a_key_in_small_letters", T, GX_FILE, "{\"key\":\"GX_T_BOILER\"", "{\"key\":\"GX_t_boiler\""),
+    ("gx_pages_a_key_of_the_adapter", T, GX_FILE, "{\"key\":\"GX_STARTER_V\"", "{\"key\":\"ENGINE_RPM\""),
+    ("gx_pages_a_page_hidden", T, GX_FILE, "{\"title\":\"Klima\",", "{\"title\":\"Klima\",\"hidden\":true,"),
+    ("gx_pages_a_sixth_page", T, GX_FILE, "\"dec\":0}]}]}", "\"dec\":0}]},\n  {\"title\":\"Router\",\"items\":[{\"key\":\"GX_LTE_RSSI\",\"label\":\"RSSI\",\"unit\":\"dBm\"}]}]}"),
+    ("gx_pages_a_guessed_warn_limit", T, GX_FILE, "\"widget\":\"arc\",\"min\":0,\"max\":100}", "\"widget\":\"arc\",\"min\":0,\"max\":100,\"warn_lo\":20}"),
+    ("gx_pages_a_value_without_unit", T, GX_FILE, "{\"key\":\"GX_ALTITUDE\",\"label\":\"Höhe\",\"unit\":\"m\",", "{\"key\":\"GX_ALTITUDE\",\"label\":\"Höhe\","),
+    ("gx_pages_an_arc_without_range", T, GX_FILE, "\"widget\":\"arc\",\"min\":0,\"max\":100}", "\"widget\":\"arc\",\"max\":100}"),
+    ("gx_pages_mode_3_of_the_multiplus_is_off", T, GX_FILE, "\"3\":\"an\",\"4\":\"aus\"", "\"3\":\"aus\",\"4\":\"an\""),
+    ("gx_pages_a_switch_without_its_words", T, GX_FILE, "{\"key\":\"GX_SW_VALVE\",\"label\":\"Boiler-Ventil\",\"widget\":\"state\",\"map\":{\"on\":\"an\",\"off\":\"aus\"}}", "{\"key\":\"GX_SW_VALVE\",\"label\":\"Boiler-Ventil\"}"),
+    ("gx_pages_another_name", T, GX_FILE, "\"name\":\"Cerbo\"", "\"name\":\"Victron\""),
+    ("gx_pages_two_values_swapped", T, GX_FILE,
+     "    {\"key\":\"GX_T_DINETTE\",\"label\":\"Dinette\",\"unit\":\"°C\",\"dec\":1},\n    {\"key\":\"GX_T_GARAGE\",\"label\":\"Heckgarage\",\"unit\":\"°C\",\"dec\":1},",
+     "    {\"key\":\"GX_T_GARAGE\",\"label\":\"Heckgarage\",\"unit\":\"°C\",\"dec\":1},\n    {\"key\":\"GX_T_DINETTE\",\"label\":\"Dinette\",\"unit\":\"°C\",\"dec\":1},"),
 ]

@@ -164,6 +164,19 @@ ring_t ring_state(conn_view_t view, const wican_state_t *state, int level, bool 
 	return ring;
 }
 
+ring_kind_t ring_cerbo(cerbo_view_t view)
+{
+	switch(view)
+	{
+		case CERBO_VIEW_OFF:        return RING_GREY;
+		case CERBO_VIEW_CONNECTING:
+		case CERBO_VIEW_QUIET:      return RING_YELLOW;
+		case CERBO_VIEW_LIVE:       return RING_NONE;
+		// CERBO_VIEW_NO_WIFI, CERBO_VIEW_UNREACHABLE, CERBO_VIEW_SILENT, CERBO_VIEW_NEWER, and what is no view
+		default:                    return RING_RED;
+	}
+}
+
 const char *text_cerbo(cerbo_view_t view, bool safe_mode)
 {
 	switch(view)

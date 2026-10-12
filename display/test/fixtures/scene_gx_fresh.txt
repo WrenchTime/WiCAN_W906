@@ -1,0 +1,11 @@
+kind: values
+ring: none
+title: Batterie
+note:
+item: SOC | 87,5 | % | normal | arc | 875
+item: Spannung | 26,41 | V | normal | number | -1
+item: Strom | -6,2 | A | normal | number | -1
+item: Leistung | -164 | W | normal | number | -1
+item: Zelle min | 3,298 | V | normal | number | -1
+item: Zelle max | 3,304 | V | normal | number | -1
+dots: 2/5

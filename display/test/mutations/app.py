@@ -98,6 +98,18 @@ def clock(name, function, text):
     ]
 
 
+# The pages of the second source: the choice of the views, the page of the long press, the scene
+GX_HOME = "\t\tif(layout_page_shown(&app->layout, page, catalog) && scene_page_shows(&app->layout, page, view, &app->cerbo, now)) return page;\n"
+GX_HOME_NONE = "\treturn layout_first_page(&app->layout, catalog);\n}\n\nvoid app_choose_layout"
+GX_HOME_VIEW = "\tconn_view_t view = conn_view(&app->poll.conn, now);\n\n\tfor(int page = 0; page < app->layout.page_count; page++)"
+GX_APPEND_IF = "\tif(app->has_builtin_gx && cerbo_on(&app->cerbo))\n"
+GX_APPEND = "\t\tlayout_append(&app->layout, &app->builtin_gx);\n"
+GX_APPEND_TEXT = "\t\t(void)layout_to_json(&app->layout, app->layout_text, sizeof(app->layout_text));\n"
+GX_READ = ("\tif(boot->builtin_gx != NULL && layout_parse(boot->builtin_gx, boot->builtin_gx_length, &app->builtin_gx, NULL, app->work, app->work_count))\n"
+           "\t{\n\t\tapp->has_builtin_gx = true;\n\t}\n")
+GX_WORLD = "\tworld->home_set = true;\n\tworld->home = home_page(app, now);\n"
+GX_SCENE = "\tinput.cerbo = &app->cerbo;\n"
+
 MUTATIONS = [
     # the time of the module
     ("app_time_follows_the_caller_backwards", T, F, TIME_AT, "\treturn now_ms + 0 * app->clock_ms;"),
@@ -985,6 +997,32 @@ MUTATIONS += [
     ("app_world_release_for_good_while_it_is_open", T, F, WORLD_LASTING, "\tworld->release_lasting = world->release_open;\n"),
     ("app_world_release_for_good_only_outside_safe_mode", T, F, WORLD_LASTING, "\tworld->release_lasting = access_is_lasting(&app->access) && !app->safe_mode;\n"),
     ("app_world_release_for_good_only_without_a_question", T, F, WORLD_LASTING, "\tworld->release_lasting = access_is_lasting(&app->access) && world->asking == ACCESS_ASK_NONE;\n"),
-
+    # The pages of the second source
+    ("app_gx_home_is_the_first_page", T, F, GX_HOME, "\t\tif(layout_page_shown(&app->layout, page, catalog)) return page;\n\t\t(void)view;\n"),
+    ("app_gx_home_may_be_a_page_no_knob_shows", T, F, GX_HOME, "\t\tif(scene_page_shows(&app->layout, page, view, &app->cerbo, now)) return page;\n"),
+    ("app_gx_home_without_the_cerbo", T, F, GX_HOME, GX_HOME.replace("&app->cerbo", "NULL")),
+    ("app_gx_home_as_if_the_adapter_were_live", T, F, GX_HOME, GX_HOME.replace("page, view, &app->cerbo", "page, view == CONN_VIEW_NO_ANSWER ? CONN_VIEW_LIVE : view, &app->cerbo")),
+    ("app_gx_home_at_no_time", T, F, GX_HOME, GX_HOME.replace("&app->cerbo, now)", "&app->cerbo, 0)")),
+    ("app_gx_home_is_the_last_page_that_shows", T, F, GX_HOME_VIEW,
+     "\tconn_view_t view = conn_view(&app->poll.conn, now);\n\n\tfor(int page = app->layout.page_count - 1; page >= 0; page--)"),
+    ("app_gx_home_never_the_first_page_of_the_cerbo", T, F, GX_HOME_VIEW,
+     "\tconn_view_t view = conn_view(&app->poll.conn, now);\n\n\tfor(int page = 0; page < app->layout.page_count; page += page == 6 ? 2 : 1)"),
+    ("app_gx_home_is_no_page_where_none_shows", T, F, GX_HOME_NONE, "\t(void)catalog;\n\treturn -1;\n}\n\nvoid app_choose_layout"),
+    ("app_gx_home_not_named", T, F, GX_WORLD, "\tworld->home = home_page(app, now);\n"),
+    ("app_gx_home_always_page_0", T, F, GX_WORLD, "\tworld->home_set = true;\n\t(void)home_page;\n"),
+    ("app_gx_pages_appended_without_the_source", T, F, GX_APPEND_IF, "\tif(app->has_builtin_gx)\n"),
+    ("app_gx_pages_appended_in_safe_mode", T, F, GX_APPEND_IF, "\tif(app->has_builtin_gx && cerbo_host(&app->cerbo)[0] != '\\0')\n"),
+    ("app_gx_pages_appended_although_not_read", T, F, GX_APPEND_IF, "\tif(cerbo_on(&app->cerbo))\n"),
+    ("app_gx_pages_never_appended", T, F, GX_APPEND_IF, "\tif(app->has_builtin_gx && cerbo_on(&app->cerbo) && app->safe_mode)\n"),
+    ("app_gx_pages_not_appended_only_their_text", T, F, GX_APPEND, "\t\t(void)layout_append;\n"),
+    ("app_gx_pages_of_the_vehicle_appended", T, F, GX_APPEND, "\t\tlayout_append(&app->layout, &app->builtin);\n"),
+    ("app_gx_pages_without_their_text", T, F, GX_APPEND_TEXT, ""),
+    ("app_gx_pages_text_of_the_pages_alone", T, F, GX_APPEND_TEXT, "\t\t(void)layout_to_json(&app->builtin_gx, app->layout_text, sizeof(app->layout_text));\n"),
+    ("app_gx_pages_never_read", T, F, GX_READ, GX_READ.replace("\t\tapp->has_builtin_gx = true;\n", "\t\tapp->has_builtin_gx = false;\n")),
+    ("app_gx_pages_read_whatever_the_text", T, F, GX_READ,
+     "\tlayout_parse(boot->builtin_gx != NULL ? boot->builtin_gx : \"\", boot->builtin_gx_length, &app->builtin_gx, NULL, app->work, app->work_count);\n\tapp->has_builtin_gx = true;\n"),
+    ("app_gx_pages_read_from_the_views_of_the_vehicle", T, F, GX_READ, GX_READ.replace("layout_parse(boot->builtin_gx, boot->builtin_gx_length,", "layout_parse(boot->builtin_layout, boot->builtin_length,")),
+    ("app_gx_scene_without_the_source", T, F, GX_SCENE, ""),
+    ("app_gx_standby_kept_off_by_the_cerbo", T, F, SHOWN_VIEW, "\tif(view == CONN_VIEW_LIVE || view == CONN_VIEW_SCAN || cerbo_showing(&app->cerbo, now)) return true;"),
+    ("app_gx_display_goes_home_by_itself", T, F, TICK_NAV, TICK_NAV + "\n\tif(app->nav.screen == NAV_PAGES && world.home >= 0) app->nav.page = world.home;"),
 ]
-

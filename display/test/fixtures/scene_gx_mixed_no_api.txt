@@ -1,0 +1,9 @@
+kind: values
+ring: none
+title: Fahrt
+note: WiCAN-Firmware ohne Display-API – nur Live-Werte
+item: Drehzahl | 812 | 1/min | normal | arc | 162
+item: SOC | 87,5 | % | normal | number | -1
+item: Kühlwasser | 88 | °C | normal | number | -1
+item: Alternator | 0,0 | A | normal | number | -1
+dots: 4/5

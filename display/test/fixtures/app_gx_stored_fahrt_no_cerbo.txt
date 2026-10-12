@@ -1,0 +1,9 @@
+kind: values
+ring: none
+title: Fahrt
+note: Cerbo nicht eingerichtet
+item: Drehzahl | 0 | 1/min | normal | number | -1
+item: SOC | n. v. |  | dim | number | -1
+item: Bordnetz | 12,4 | V | normal | number | -1
+item: B2B | n. v. |  | dim | state | -1
+dots: 1/3

@@ -35,14 +35,15 @@ SIMS    := main_sim net_sim web_sim screen_sim gx_sim
 # board.h, store.h and ui.h are the real ones: main.c and screen.c are run against what they promise.
 INCLUDES := -Iidf -I$(MAIN) -I$(CORE) -I../../components/board -I../../components/store -I../../components/ui
 
-# What the build of the firmware embeds ($(MAIN)/CMakeLists.txt): the page, the page compressed and the
-# built-in layout, each between the two symbols web.c and main.c ask for, as it is and without a zero behind
-# it. The compressed page is no file of the repository: it is made here as the build of the firmware makes
-# it, by the same script, into the build directory.
+# What the build of the firmware embeds ($(MAIN)/CMakeLists.txt): the page, the page compressed, the
+# built-in layout and the built-in pages of the second source, each between the two symbols web.c and main.c
+# ask for, as it is and without a zero behind it. The compressed page is no file of the repository: it is
+# made here as the build of the firmware makes it, by the same script, into the build directory.
 PAGE    := $(MAIN)/web/index.html
 PAGE_GZ := $(BUILD)/index.html.gz
 PACK    := ../../tools/page_gz.py
 LAYOUT  := ../../layouts/w906_default.json
+LAYOUT_GX := ../../layouts/gx_default.json
 
 SOURCES := $(wildcard $(CORE)/*.c)
 HEADERS := sim.h $(wildcard idf/*.h idf/*/*.h $(CORE)/*.h $(MAIN)/*.h ../../components/board/*.h ../../components/store/*.h) \
@@ -65,9 +66,9 @@ $(PAGE_GZ): $(PAGE) $(PACK)
 	$(PYTHON) $(PACK) $(PAGE) $@
 
 # The same way display/host/Makefile embeds the font
-$(BUILD)/embed.o: $(PAGE) $(PAGE_GZ) $(LAYOUT)
+$(BUILD)/embed.o: $(PAGE) $(PAGE_GZ) $(LAYOUT) $(LAYOUT_GX)
 	@mkdir -p $(BUILD)
-	printf '#ifdef __ELF__\n\t.section .note.GNU-stack,"",%%progbits\n\t.section .rodata\n#else\n\t.const\n#endif\n\t.globl _binary_index_html_start\n_binary_index_html_start:\n\t.incbin "%s"\n\t.globl _binary_index_html_end\n_binary_index_html_end:\n\t.globl _binary_index_html_gz_start\n_binary_index_html_gz_start:\n\t.incbin "%s"\n\t.globl _binary_index_html_gz_end\n_binary_index_html_gz_end:\n\t.globl _binary_w906_default_json_start\n_binary_w906_default_json_start:\n\t.incbin "%s"\n\t.globl _binary_w906_default_json_end\n_binary_w906_default_json_end:\n' '$(PAGE)' '$(PAGE_GZ)' '$(LAYOUT)' \
+	printf '#ifdef __ELF__\n\t.section .note.GNU-stack,"",%%progbits\n\t.section .rodata\n#else\n\t.const\n#endif\n\t.globl _binary_index_html_start\n_binary_index_html_start:\n\t.incbin "%s"\n\t.globl _binary_index_html_end\n_binary_index_html_end:\n\t.globl _binary_index_html_gz_start\n_binary_index_html_gz_start:\n\t.incbin "%s"\n\t.globl _binary_index_html_gz_end\n_binary_index_html_gz_end:\n\t.globl _binary_w906_default_json_start\n_binary_w906_default_json_start:\n\t.incbin "%s"\n\t.globl _binary_w906_default_json_end\n_binary_w906_default_json_end:\n\t.globl _binary_gx_default_json_start\n_binary_gx_default_json_start:\n\t.incbin "%s"\n\t.globl _binary_gx_default_json_end\n_binary_gx_default_json_end:\n' '$(PAGE)' '$(PAGE_GZ)' '$(LAYOUT)' '$(LAYOUT_GX)' \
 		| $(CC) -c -x assembler-with-cpp -o $@ -
 
 clean:

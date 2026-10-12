@@ -1,0 +1,11 @@
+kind: values
+ring: none
+title: Energie
+note:
+item: Solar | 212 | W | normal | number | -1
+item: DC-System | 96 | W | normal | number | -1
+item: AC-Ausgang | – |  | dim | number | -1
+item: MultiPlus | aus |  | normal | state | -1
+item: Starterbatterie | 14,12 | V | normal | number | -1
+item: Alternator | 41,5 | A | normal | number | -1
+dots: 9/12

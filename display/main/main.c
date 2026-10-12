@@ -181,6 +181,9 @@ typedef struct
 // ends after the file, and puts no zero behind it
 extern const char builtin_start[] __asm__("_binary_w906_default_json_start");
 extern const char builtin_end[] __asm__("_binary_w906_default_json_end");
+// display/layouts/gx_default.json, the pages of the second source, embedded the same way
+extern const char builtin_gx_start[] __asm__("_binary_gx_default_json_start");
+extern const char builtin_gx_end[] __asm__("_binary_gx_default_json_end");
 
 app_t *platform_app;
 platform_info_t platform_info;
@@ -673,6 +676,8 @@ static void start(void)
 	boot.ap_ssid = ap_ssid;
 	boot.builtin_layout = builtin_start;
 	boot.builtin_length = (size_t)(builtin_end - builtin_start);
+	boot.builtin_gx = builtin_gx_start;
+	boot.builtin_gx_length = (size_t)(builtin_gx_end - builtin_gx_start);
 	boot.work = tokens;
 	boot.work_count = LAYOUT_TOKENS;
 	app_init(platform_app, &boot, platform_now_ms());

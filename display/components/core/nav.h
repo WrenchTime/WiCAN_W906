@@ -28,7 +28,8 @@
  *                on the brightness screen: one detent = NAV_BRIGHTNESS_STEP percent, clockwise is brighter
  *                everywhere else: moves the focus over the rows of the screen, hard ends
  *   short press  on the value pages: opens the menu; everywhere else: acts on the focused row
- *   long press   one level back; on a value page: back to the first page
+ *   long press   one level back; on a value page: back to the first page - or, where the caller knows one
+ *                (nav_world_t.home), to the first page that shows values
  * The value pages are passive: no page in the rotation of the knob has an action.
  * Touch is an addition: a swipe on a value page is a turn of one detent, a tap on a row is focus plus
  * short press. Everything works with the knob alone. In the two dialogs (NAV_DTC_CONFIRM, NAV_CONFIRM) the
@@ -162,6 +163,11 @@ typedef struct
 	int brightness;                 // the one in use: settings.night in night mode, else settings.brightness
 	bool reverse;                   // settings.reverse, with which knob_turn() turns the sign of the detents: the
 	                                // brightness screen takes that back (see above); nothing else looks at it
+	bool home_set;                  // `home` is named. false: the long press on a value page leads to the first
+	                                // page the layout shows, as it did before there was a second source
+	int home;                       // the page that long press leads to: the first page that shows values right
+	                                // now (app.h: parked, a page of the Cerbo; on the road, the first page of the
+	                                // adapter). Nothing else looks at it: the display never goes there by itself
 } nav_world_t;
 
 typedef struct
@@ -209,7 +215,8 @@ bool nav_row_acts(const nav_t *nav, int row, const nav_world_t *world);
  *                 the shown page with the smallest distance to `page`, of two equally near ones the one
  *                 behind it, -1 if none is shown
  *   short         -> NAV_MENU
- *   long          the first page the layout shows
+ *   long          the first page the layout shows; `home` of the world instead if home_set and the layout
+ *                 shows that page (layout_page_shown()) - a home that is no page of the rotation is none
  * NAV_MENU
  *   short on      0 -> the fault memory: NAV_DTC_BUSY if the own request is under way (READ_SENT, READING,
  *                 CLEAR_SENT, CLEARING), else NAV_DTC;  1 -> NAV_BRIGHTNESS with value = world brightness,

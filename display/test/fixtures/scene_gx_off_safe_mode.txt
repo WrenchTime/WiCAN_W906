@@ -1,0 +1,6 @@
+kind: notice
+ring: grey
+title:
+note: Sicherer Modus – eingebaute Ansichten
+dots: 2/5
+line: Cerbo aus (sicherer Modus)

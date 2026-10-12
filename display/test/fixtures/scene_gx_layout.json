@@ -1,0 +1,32 @@
+{"format":"wican-display-layout","v":1,"name":"Szenen mit Cerbo","pages":[
+{"title":"Motor","items":[
+ {"key":"ENGINE_RPM","label":"Drehzahl","unit":"1/min","widget":"arc","min":0,"max":5000},
+ {"key":"COOLANT_TMP","label":"Kühlwasser"}]},
+{"title":"Batterie","items":[
+ {"key":"GX_BATT_SOC","label":"SOC","unit":"%","dec":1,"widget":"arc","min":0,"max":100},
+ {"key":"GX_BATT_V","label":"Spannung","unit":"V","dec":2},
+ {"key":"GX_BATT_I","label":"Strom","unit":"A","dec":1},
+ {"key":"GX_BATT_P","label":"Leistung","unit":"W","dec":0},
+ {"key":"GX_CELL_MIN","label":"Zelle min","unit":"V","dec":3},
+ {"key":"GX_CELL_MAX","label":"Zelle max","unit":"V","dec":3}]},
+{"title":"Wasser","items":[
+ {"key":"GX_TANK_FRESH","label":"Frischwasser","unit":"%","dec":0,"widget":"bar","min":0,"max":100,"warn_lo":20,"crit_lo":10},
+ {"key":"GX_TANK_GRAY","label":"Grauwasser","unit":"%","dec":0,"widget":"bar","min":0,"max":100,"warn_hi":80,"crit_hi":95},
+ {"key":"GX_T_BOILER","label":"Boiler","unit":"°C","dec":0},
+ {"key":"GX_T_WATER"},
+ {"key":"GX_SW_BOILER","label":"E-Boiler","widget":"state","map":{"on":"an","off":"aus"}},
+ {"key":"GX_SW_VALVE","label":"Boiler-Ventil","unit":"x","widget":"state","map":{"on":"an","off":"aus"}}]},
+{"title":"Fahrt","items":[
+ {"key":"ENGINE_RPM","label":"Drehzahl","unit":"1/min","widget":"arc","min":0,"max":5000},
+ {"key":"GX_BATT_SOC","label":"SOC","unit":"%","dec":1},
+ {"key":"COOLANT_TMP","label":"Kühlwasser"},
+ {"key":"GX_ALT_I","label":"Alternator","unit":"A","dec":1}]},
+{"title":"Laden","items":[
+ {"key":"GX_ALT_I","label":"Alternator","unit":"A","dec":1},
+ {"key":"@BATT_V","label":"Bordnetz","dec":1},
+ {"key":"GX_SW_B2B","label":"B2B","widget":"state","map":{"on":"an","off":"aus"}},
+ {"key":"GX_STARTER_V","label":"Starterbatterie","unit":"V","dec":2}]},
+{"title":"Versteckt","hidden":true,"items":[
+ {"key":"GX_BATT_SOC","label":"SOC","unit":"%"}]},
+{"title":"Fremd","items":[
+ {"key":"TURBO_SPEED"}]}]}

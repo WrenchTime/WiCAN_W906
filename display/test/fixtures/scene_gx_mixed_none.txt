@@ -1,0 +1,7 @@
+kind: notice
+ring: grey
+title:
+note:
+dots: 4/5
+line: Zündung aus – Motorsteuergerät offline
+line: Bordnetz 12,4 V

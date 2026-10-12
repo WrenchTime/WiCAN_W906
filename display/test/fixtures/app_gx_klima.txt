@@ -1,0 +1,11 @@
+kind: values
+ring: none
+title: Klima
+note:
+item: Dinette | 20,4 | °C | normal | number | -1
+item: Heckgarage | 14,2 | °C | normal | number | -1
+item: Außen | 8,3 | °C | normal | number | -1
+item: Heizung Zuluft | 31,5 | °C | normal | number | -1
+item: Höhe | 412 | m | normal | number | -1
+item: LTE RSRP | -98 | dBm | normal | number | -1
+dots: 12/12

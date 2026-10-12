@@ -7,7 +7,7 @@ idf_component_register(SRCS "main.c" "screen.c" "net.c" "web.c" "gx.c"
                        INCLUDE_DIRS "."
                        REQUIRES core board store ui app_update esp_timer esp_wifi esp_netif esp_event
                                 esp_http_client esp_http_server nvs_flash esp_lcd esp_partition
-                       EMBED_FILES "web/index.html" "../layouts/w906_default.json")
+                       EMBED_FILES "web/index.html" "../layouts/w906_default.json" "../layouts/gx_default.json")
 
 # The page a second time, compressed: web.c sends it to every client that says it reads gzip, a third of the
 # bytes over a radio link that is slow. It is no file of the repository: the build makes it of web/index.html

@@ -185,6 +185,9 @@ bool web_forget_parse(const char *json, size_t length, char *ssid, json_token_t 
 // of the layout that are not in the catalogue, each once, in the order of their first use; it is empty
 // while the catalogue is not loaded (it holds nothing but CATALOG_BATTERY). layout and catalog are only
 // read if ok.
+// A key of the second source (cerbo_key(): it begins with CERBO_PREFIX) is never listed: it is in no
+// catalogue, and the editor in the browser would call the built-in pages of the Cerbo unknown as soon as
+// the catalogue of the adapter is loaded. Whether the Cerbo delivers such a value is not asked.
 // WEB_REPORT_SIZE is enough for every report and every layout, also when every byte of their texts has to
 // be written as \u00xx (15002 bytes with the zero). A layout that layout_parse() accepted holds no control
 // characters, so that only " and \ need an escape: at most 5108 bytes. With texts that need no escape 2772.

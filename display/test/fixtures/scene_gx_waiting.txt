@@ -1,0 +1,6 @@
+kind: notice
+ring: yellow
+title:
+note:
+dots: 2/5
+line: Warte auf Cerbo …

@@ -1,0 +1,11 @@
+kind: values
+ring: red
+title: Wasser
+note:
+item: Frischwasser | 15 | % | dim | bar | 150
+item: Grauwasser | 97 | % | dim | bar | 970
+item: Boiler | 45 | °C | dim | number | -1
+item: Gx T Water | 15 |  | dim | number | -1
+item: E-Boiler | aus |  | dim | state | -1
+item: Boiler-Ventil | an |  | dim | state | -1
+dots: 3/5

@@ -783,6 +783,122 @@ static void test_pages_inputs(void)
 	check(wrong == 0, "value pages: whatever the hold reports is nothing here");
 }
 
+// The page the long press on a value page leads to, where the caller names one (app.h: the first page that
+// shows values right now). In the views of the examples the pages 0, 2 and 4 are in the rotation of the knob,
+// page 1 is hidden and the value of page 3 is not in the catalogue.
+static void test_home(void)
+{
+	static const int no_pages[] = {-1, 5, 6, LAYOUT_PAGES_MAX, 1000, INT_MAX, INT_MIN};
+	nav_t before;
+	int wrong = 0;
+
+	start();
+	check(!world.home_set && world.home == 0, "the world of the examples names no page for the long press");
+	world.home_set = true;
+	world.home = 4;
+	check(long_press() == NAV_DO_NOTHING && page_is(4), "home: a long press on the first page leads to the page the world names, the last one here");
+	check(long_press() == NAV_DO_NOTHING && page_is(4), "home: a long press on that page stays there");
+	check(nav.last_input_ms == now, "home: the long press counts as an input like every other");
+	turn(-1);
+	check(page_is(2) && long_press() == NAV_DO_NOTHING && page_is(4), "home: a long press on a page between leads there as well, past the first page");
+	world.home = 2;
+	check(long_press() == NAV_DO_NOTHING && page_is(2), "home: another page is named: the next long press leads to that one");
+	world.home = 0;
+	check(long_press() == NAV_DO_NOTHING && page_is(0), "home: the first page is named: there the long press leads, as it did without a name");
+
+	// A home that is no page of the rotation is none
+	start();
+	turn(2);
+	world.home_set = true;
+	world.home = 1;
+	check(long_press() == NAV_DO_NOTHING && page_is(0), "home: a hidden page is named: the first page the layout shows, as without a name");
+	turn(2);
+	world.home = 3;
+	check(long_press() == NAV_DO_NOTHING && page_is(0), "home: a page whose value is not in the catalogue is named: the first page the layout shows");
+	for(size_t i = 0; i < sizeof(no_pages) / sizeof(no_pages[0]); i++)
+	{
+		start();
+		turn(1);
+		world.home_set = true;
+		world.home = no_pages[i];
+		if(long_press() != NAV_DO_NOTHING || !page_is(0)) wrong++;
+	}
+	check(wrong == 0, "home: what is no page of the layout is named - before it, behind it, far away: the first page the layout shows");
+	start();
+	turn(1);
+	world.home_set = true;
+	world.home = 4;
+	world.catalog = &cat_dpf;
+	check(long_press() == NAV_DO_NOTHING && page_is(2), "home: the named page is not shown any more, nor is the first one: the first that is");
+	start_with(&views, &cat_other);
+	world.home_set = true;
+	world.home = 0;
+	check(long_press() == NAV_DO_NOTHING && page_is(-1), "home: no page is shown at all and one is named all the same: no page, -1");
+	start();
+	world.layout = &views_none;
+	world.home_set = true;
+	world.home = 0;
+	check(long_press() == NAV_DO_NOTHING && page_is(-1), "home: a layout without pages: no page, -1");
+
+	// Not named: the page stands in the world all the same and is not looked at
+	start();
+	world.home = 4;
+	check(long_press() == NAV_DO_NOTHING && page_is(0), "home: a page that stands in the world without being named is not looked at");
+	turn(1);
+	world.home = 4;
+	check(long_press() == NAV_DO_NOTHING && page_is(0), "home: ... from whatever page the long press comes");
+
+	// The long press alone looks at it: the display never goes there by itself
+	quiet_world();
+	world.home_set = true;
+	world.home = 4;
+	now = 1000;
+	nav_init(&nav, &world, now);
+	check(page_is(0), "home: the display starts on the first page, whatever page is named");
+	before = nav;
+	check(tick() == NAV_DO_NOTHING && stays(&before) && tick_at(now + NAV_IDLE_MS) == NAV_DO_NOTHING && stays(&before), "home: no tick leads there, not after the idle time either");
+	check(turn(1) == NAV_DO_NOTHING && page_is(2) && turn(-1) == NAV_DO_NOTHING && page_is(0) && swipe(1) == NAV_DO_NOTHING && page_is(2), "home: turns and swipes go from page to page as without it");
+	check(press() == NAV_DO_NOTHING && at(NAV_MENU, 0) && nav.page == 2, "home: the short press opens the menu, the page is kept");
+	check(long_press() == NAV_DO_NOTHING && page_is(2), "home: the long press in the menu leads back to the page that was shown, not to the named one");
+	press();
+	turn(6);
+	check(press() == NAV_DO_NOTHING && page_is(2), "home: so does Zurück of the menu");
+	press();
+	check(tick_at(now + NAV_IDLE_MS) == NAV_DO_NOTHING && page_is(2), "home: and the idle time, which leaves the menu for the page that was shown");
+	world.catalog = &cat_engine;
+	check(tick() == NAV_DO_NOTHING && page_is(4), "home: a page that is not shown any more is left for the nearest one by the tick - here that happens to be the named one");
+	world.home = 0;
+	world.catalog = &cat_all;
+	turn(-1);
+	world.catalog = &cat_engine;
+	check(page_is(2) && tick() == NAV_DO_NOTHING && page_is(4), "home: ... and it is the nearest one also when the first page is named");
+	world.catalog = &cat_all;
+	turn(-1);
+	world.catalog = &cat_engine;
+	check(page_is(2) && turn(1) == NAV_DO_NOTHING && page_is(4) && swipe(-1) == NAV_DO_NOTHING && page_is(0), "home: a turn on a page that is not shown any more finds the nearest page, not the named one");
+	world.catalog = &cat_all;
+	turn(1);
+	world.catalog = &cat_engine;
+	world.home = 4;
+	check(page_is(2) && swipe(-1) == NAV_DO_NOTHING && page_is(4) && turn(-1) == NAV_DO_NOTHING && page_is(0), "home: so does a swipe there, and from the named page the knob turns on as from every page");
+
+	// What lies over the screen takes the long press
+	start();
+	turn(1);
+	world.home_set = true;
+	world.home = 4;
+	world.uploading = true;
+	check(long_press() == NAV_DO_NOTHING && page_is(2), "home: under an upload the long press leads nowhere");
+	world.uploading = false;
+	world.asking = ACCESS_ASK_WIFI;
+	check(long_press() == NAV_DO_ASK_REFUSE && page_is(2), "home: under a question of the browser it refuses the question and leads nowhere");
+	world.asking = ACCESS_ASK_NONE;
+	world.update_pending = true;
+	check(long_press() == NAV_DO_NOTHING && page_is(2), "home: under the update question it leads nowhere");
+	world.update_pending = false;
+	check(long_press() == NAV_DO_NOTHING && page_is(4), "home: with nothing over the screen it leads to the named page");
+}
+
 static void test_menu(void)
 {
 	//                                                   idle     read sent     reading       list     clear sent    clearing      cleared  failed   unknown  no phase
@@ -2745,6 +2861,8 @@ typedef struct
 	int list, cleared, old, info;   // lines as the header counts them: within 0 and INT_MAX - 3
 	int brightness;
 	bool reverse;                   // the knob reports a detent clockwise as positive, not as negative
+	bool home_set;                  // a page is named for the long press on a value page
+	int home;
 	nav_overlay_t over;
 } seen_t;
 
@@ -2978,7 +3096,12 @@ static nav_do_t model_press(model_t *model, const seen_t *seen, char input)
 
 	if(input == 'l' && model->screen == NAV_PAGES)
 	{
+		// The page that is named if it is one of the rotation, the first of the rotation otherwise
 		model->page = model_first(seen);
+		for(int page = 0; page < LAYOUT_PAGES_MAX; page++)
+		{
+			if(seen->home_set && page == seen->home && model_shown(seen, page)) model->page = page;
+		}
 		return NAV_DO_NOTHING;
 	}
 	for(size_t i = 0; i < sizeof(rules) / sizeof(rules[0]); i++)
@@ -3192,6 +3315,7 @@ static nav_do_t model_tick(model_t *model, const seen_t *seen, int *followed)
  * every call, and next to that what must hold whatever the model says.
  */
 #define WALKS       48
+#define HOME_WALKS  12      // more of them, in which the world names a page for the long press on a value page
 #define WALK_STEPS  40000
 
 typedef enum
@@ -3241,7 +3365,24 @@ static struct
 	long lasting_flips[2][2];           // short presses and taps on Dauerhaft frei: while the release does not last, and while it does
 	long lasting_calls;                 // calls with the release lasting
 	long acts_lasting;                  // times the row Freigabe was asked whether it acts while the release lasts
+	// The page named for the long press on a value page
+	long home_long[3];                  // long presses on a value page with nothing over it: no page named, one of the
+	                                    // rotation named, one named that is none of it
+	long home_led;                      // ... that led to a named page other than the first of the rotation
+	long home_calls;                    // calls with a page named
+	long home_wandered;                 // the page changed towards the named one by something else than that press: must not happen
 } walked;
+
+// The walks of the home page: in them the world names a page for the long press now and then. The die of it is
+// rolled in those walks alone, so the others are the walks they were.
+static bool home_walk;
+static uint32_t home_state;
+
+static uint32_t home_random(uint32_t below)
+{
+	home_state = home_state * 1664525u + 1013904223u;
+	return (home_state >> 8) % below;
+}
 
 static uint32_t walk_state;
 
@@ -3297,6 +3438,8 @@ static void see(seen_t *seen)
 	seen->lasting = world.release_lasting;
 	seen->brightness = world.brightness;
 	seen->reverse = world.reverse;
+	seen->home_set = world.home_set;
+	seen->home = world.home;
 	seen->over = world.uploading ? NAV_OVER_UPLOAD : world.asking != ACCESS_ASK_NONE ? NAV_OVER_ASK : world.update_pending ? NAV_OVER_UPDATE : NAV_OVER_NONE;
 	for(int i = 0; i < 4; i++)
 	{
@@ -3514,6 +3657,7 @@ static void walk(uint32_t seed)
 	walk_state = seed;
 	side_state = seed ^ 0xD1CEu;
 	web_state = seed ^ 0x0FFEu;
+	home_state = seed ^ 0x40BEu;
 	quiet_world();
 	walk_layout = 0;
 	walk_catalog = 3;
@@ -3578,6 +3722,15 @@ static void walk(uint32_t seed)
 		// The release lasts or does not, whatever the display did last: a restart with other settings, and worlds
 		// the display never is in - a release that is called lasting while it is closed
 		if(web_random(25) == 0) world.release_lasting = !world.release_lasting;
+		// The page the long press on a value page leads to is named, another one is, or none: a page of the rotation,
+		// one that is none of it, and numbers that are no page of any layout
+		if(home_walk && home_random(6) == 0)
+		{
+			static const int homes[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0, 2, 4, 6, 11, -1, 12, INT_MAX, INT_MIN};
+
+			world.home_set = home_random(5) != 0;
+			world.home = homes[home_random(sizeof(homes) / sizeof(homes[0]))];
+		}
 		see(&seen);
 		rows = model_rows(model.screen, &seen);
 		before = nav;
@@ -3611,6 +3764,13 @@ static void walk(uint32_t seed)
 			model_time(&model, at_ms, true);
 			action = nav_long(&nav, &world, at_ms);
 			expected = model_long(&model, &seen);
+			if(before.screen == NAV_PAGES && seen.over == NAV_OVER_NONE)
+			{
+				bool named = seen.home_set && seen.home >= 0 && seen.home < LAYOUT_PAGES_MAX && (seen.shown >> seen.home & 1) != 0;
+
+				walked.home_long[!seen.home_set ? 0 : named ? 1 : 2]++;
+				if(named && nav.page == seen.home && nav.page != model_first(&seen)) walked.home_led++;
+			}
 		}
 		else if(what < 87)
 		{
@@ -3712,6 +3872,18 @@ static void walk(uint32_t seed)
 
 		under_way = world.flow == DTC_FLOW_READ_SENT || world.flow == DTC_FLOW_READING || world.flow == DTC_FLOW_CLEAR_SENT || world.flow == DTC_FLOW_CLEARING;
 		in_dialog = before.screen == NAV_DTC_CONFIRM || before.screen == NAV_CONFIRM;
+
+		// The named page: the display never goes there by itself. No tick leaves a page of the rotation, and
+		// nothing but a turn, a swipe and the long press on a value page changes the page at all - and a new
+		// start, which begins on the first page whatever is named (the model says so).
+		if(world.home_set) walked.home_calls++;
+		if(nav.page != before.page)
+		{
+			bool was_shown = before.page >= 0 && before.page < LAYOUT_PAGES_MAX && (seen.shown >> before.page & 1) != 0;
+			bool by_hand = before.screen == NAV_PAGES && seen.over == NAV_OVER_NONE && (call == CALL_TURN || call == CALL_SWIPE || call == CALL_LONG);
+
+			if((call == CALL_TICK && was_shown) || (call != CALL_TICK && call != CALL_INIT && !by_hand)) walked.home_wandered++;
+		}
 
 		// Clearing: asked for only by a confirmed hold in the dialog with nothing lying over it
 		if(action == NAV_DO_CLEAR && !(call == CALL_HOLD && event == HOLD_CONFIRMED && before.screen == NAV_DTC_CONFIRM && seen.over == NAV_OVER_NONE &&
@@ -4197,6 +4369,7 @@ static void examples_of_the_screens(void)
 	test_rows();
 	test_pages_turn();
 	test_pages_inputs();
+	test_home();
 	test_menu();
 	test_dtc();
 	test_busy();
@@ -4235,6 +4408,29 @@ static void examples_of_the_tick(void)
 	test_tick_under_overlays();
 }
 
+// The walk told once more, with a page named for the long press on a value page in a world that changes it
+static void test_walk_home(void)
+{
+	memset(&walked, 0, sizeof(walked));
+	home_walk = true;
+	for(uint32_t seed = 1; seed <= HOME_WALKS; seed++) walk(seed * 104729u);
+	home_walk = false;
+
+	printf("  walks with a named page: long presses on a value page with no page named %ld, with one of the rotation named %ld, with one named that is none of it %ld; "
+	       "%ld led to a named page other than the first; a page named in %ld calls\n",
+	       walked.home_long[0], walked.home_long[1], walked.home_long[2], walked.home_led, walked.home_calls);
+	check(walked.home_long[0] >= 200 && walked.home_long[1] >= 200 && walked.home_long[2] >= 200 && walked.home_led >= 100 && walked.home_calls >= 100000,
+	      "the walks with a named page press long on value pages while no page is named, while one of the rotation is and while one is that is none of it, in numbers");
+	check(walked.differences == 0, "12 random walks of 40000 calls with a page named for the long press now and then: screen, page, row, value, what waits, the times, the rows and "
+	                               "the returned action are those of the model after every call");
+	check(walked.home_wandered == 0, "in these walks the page changes by a turn, a swipe or a long press on a value page with nothing over it, and by a tick only when the page shown "
+	                                 "left the rotation: the display never goes to the named page by itself");
+	check(walked.clears == 0 && walked.reads == 0 && walked.dialogs == 0 && walked.dangerous == 0 && walked.switched == 0 && walked.released == 0 && walked.touched == 0 &&
+	      walked.touch_confirms == 0 && walked.overlays == 0 && walked.rows == 0 && walked.values == 0 && walked.levels == 0 && walked.trapped == 0 && walked.acts_wrong == 0,
+	      "in these walks everything else that holds in the walks without a named page holds as well: clears, reads, dialogs, the dangerous actions, the access point, the "
+	      "release, touches, overlays, rows, the brightness, the ways back and the rows that act");
+}
+
 int main(void)
 {
 	make_views();
@@ -4242,5 +4438,6 @@ int main(void)
 	in_child(examples_of_overlays_and_time, 20, "the examples of the overlays and of the time ran to their end: no crash, no call that never returns");
 	in_child(examples_of_the_tick, 20, "the examples of the tick ran to their end: no crash, no call that never returns");
 	in_child(test_walk, 60, "the walk ran to its end: no crash, no call that never returns");
+	in_child(test_walk_home, 60, "the walk with a named page ran to its end: no crash, no call that never returns");
 	return test_end();
 }

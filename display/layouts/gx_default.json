@@ -1,0 +1,36 @@
+{"format":"wican-display-layout","v":1,"name":"Cerbo","profile_hint":"GX","pages":[
+  {"title":"Batterie","items":[
+    {"key":"GX_BATT_SOC","label":"SOC","unit":"%","dec":1,"widget":"arc","min":0,"max":100},
+    {"key":"GX_BATT_V","label":"Spannung","unit":"V","dec":2},
+    {"key":"GX_BATT_I","label":"Strom","unit":"A","dec":1},
+    {"key":"GX_BATT_P","label":"Leistung","unit":"W","dec":0},
+    {"key":"GX_CELL_MIN","label":"Zelle min","unit":"V","dec":3},
+    {"key":"GX_CELL_MAX","label":"Zelle max","unit":"V","dec":3}]},
+  {"title":"Energie","items":[
+    {"key":"GX_PV_P","label":"Solar","unit":"W","dec":0},
+    {"key":"GX_DC_P","label":"DC-System","unit":"W","dec":0},
+    {"key":"GX_AC_OUT_P","label":"AC-Ausgang","unit":"W","dec":0},
+    {"key":"GX_MULTI_MODE","label":"MultiPlus","widget":"state","map":{"1":"nur Laden","2":"nur Inverter","3":"an","4":"aus","*":"?"}},
+    {"key":"GX_STARTER_V","label":"Starterbatterie","unit":"V","dec":2},
+    {"key":"GX_ALT_I","label":"Alternator","unit":"A","dec":1}]},
+  {"title":"Alternator","items":[
+    {"key":"GX_SW_B2B","label":"B2B","widget":"state","map":{"on":"an","off":"aus"}},
+    {"key":"GX_ALT_I","label":"Strom","unit":"A","dec":1},
+    {"key":"GX_ALT_V","label":"Spannung","unit":"V","dec":2},
+    {"key":"GX_ALT_T_BOARD","label":"Platine","unit":"°C","dec":0},
+    {"key":"GX_ALT_T_FET1","label":"MOSFET 1","unit":"°C","dec":0},
+    {"key":"GX_ALT_T_FET2","label":"MOSFET 2","unit":"°C","dec":0}]},
+  {"title":"Wasser","items":[
+    {"key":"GX_TANK_FRESH","label":"Frischwasser","unit":"%","dec":0,"widget":"bar","min":0,"max":100},
+    {"key":"GX_TANK_GRAY","label":"Grauwasser","unit":"%","dec":0,"widget":"bar","min":0,"max":100},
+    {"key":"GX_T_BOILER","label":"Boiler","unit":"°C","dec":0},
+    {"key":"GX_T_WATER","label":"Wassertank","unit":"°C","dec":0},
+    {"key":"GX_SW_BOILER","label":"E-Boiler","widget":"state","map":{"on":"an","off":"aus"}},
+    {"key":"GX_SW_VALVE","label":"Boiler-Ventil","widget":"state","map":{"on":"an","off":"aus"}}]},
+  {"title":"Klima","items":[
+    {"key":"GX_T_DINETTE","label":"Dinette","unit":"°C","dec":1},
+    {"key":"GX_T_GARAGE","label":"Heckgarage","unit":"°C","dec":1},
+    {"key":"GX_T_OUTDOOR","label":"Außen","unit":"°C","dec":1},
+    {"key":"GX_T_HEATER_IN","label":"Heizung Zuluft","unit":"°C","dec":1},
+    {"key":"GX_ALTITUDE","label":"Höhe","unit":"m","dec":0},
+    {"key":"GX_LTE_RSRP","label":"LTE RSRP","unit":"dBm","dec":0}]}]}

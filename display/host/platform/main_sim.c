@@ -953,6 +953,10 @@ static void test_first_start(void)
 	CHECK(platform_app->heap_malloc == 77 && platform_app->heap_malloc_min == 55 && platform_app->heap_block == 44);
 	CHECK(platform_app->has_temp && platform_app->temp_c == 47);
 	CHECK(platform_app->has_builtin && platform_app->layout_length > 0 && platform_app->source != APP_LAYOUT_STORED);
+	// The second built-in file reached the app whole: the five pages of the Cerbo, of which a display that has
+	// no address of one shows none
+	CHECK(platform_app->has_builtin_gx && platform_app->builtin_gx.page_count == 5 && strcmp(platform_app->builtin_gx.name, "Cerbo") == 0);
+	CHECK(strcmp(platform_app->builtin_gx.pages[4].items[5].key, "GX_LTE_RSRP") == 0 && platform_app->layout.page_count == 7);
 	CHECK(!platform_app->safe_mode && !platform_app->update_pending && !platform_app->previous_firmware &&
 	      !platform_app->rolled_back);
 	CHECK(strcmp(platform_app->version, "display-v0.1.0-3-g1a2b3c4") == 0);

@@ -138,4 +138,13 @@ typedef struct
 // A view that is no member of the enum counts as NO_ANSWER.
 ring_t ring_state(conn_view_t view, const wican_state_t *state, int level, bool old);
 
+// The colour of the ring for the second source, where a page of its values has nothing to show and tells
+// why instead (scene.h): the same colours for the same kinds of trouble as above.
+//   OFF -> GREY (nothing is wrong: it is not set up, or the safe mode keeps it off)
+//   CONNECTING, QUIET -> YELLOW (the display waits)
+//   NO_WIFI, UNREACHABLE, SILENT, NEWER -> RED
+//   LIVE -> NONE
+// A view that is no member of the enum counts as UNREACHABLE.
+ring_kind_t ring_cerbo(cerbo_view_t view);
+
 #endif

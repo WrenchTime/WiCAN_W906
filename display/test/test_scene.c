@@ -24,7 +24,9 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include "test.h"
+#include "mqtt_harness.h"
 #include "scene.h"
+#include "fmt.h"
 
 #define COUNT(a)    ((int)(sizeof(a) / sizeof((a)[0])))
 #define FILL        0xAA
@@ -697,6 +699,120 @@ static void limit(layout_limit_t *of, double value)
 	of->value = value;
 }
 
+/* The second source ------------------------------------------------------------------------------------ */
+
+#define GX_HOST     "192.168.88.2"
+#define GX_FLOW_MS  86400000u   // the flow of the Cerbo runs since a day when the display starts
+#define QUIET_NOTE  "Warte auf Cerbo …"
+#define AWAY_NOTE   "Cerbo nicht erreichbar"
+#define OFF_NOTE    "Cerbo nicht eingerichtet"
+
+// The Cerbo of the scenes, made with the real module: its session, its bundles, its ends
+static cerbo_t gx;
+static json_token_t gx_work[CERBO_TOKENS];
+// The views of fixtures/scene_gx_layout.json: 0 Motor (adapter), 1 Batterie and 2 Wasser (Cerbo), 3 Fahrt (both,
+// the adapter first), 4 Laden (both, the Cerbo first), 5 Versteckt (Cerbo, hidden), 6 Fremd (a value nobody has)
+static layout_t gx_layout;
+// fixtures/gx_values_parked.json and gx_values_few.json, and the members of `values` of the first
+static char gx_parked[CERBO_BUNDLE_MAX + 1], gx_few[CERBO_BUNDLE_MAX + 1], gx_members[CERBO_BUNDLE_MAX + 1];
+
+static void gx_bytes(const uint8_t *bytes, size_t length, uint64_t ago)
+{
+	cerbo_bytes(&gx, bytes, length, NOW - ago, gx_work, COUNT(gx_work));
+}
+
+// A display that was given the address of the Cerbo and joined its network `ago` ms before NOW
+static void gx_joined(uint64_t ago)
+{
+	cerbo_init(&gx, GX_HOST, false, "WiCAN-Display", 0);
+	cerbo_network(&gx, true, NOW - ago);
+	input.cerbo = &gx;
+}
+
+// ... and whose session with the broker stands since then
+static void gx_session(uint64_t ago)
+{
+	uint8_t packet[8];
+
+	gx_joined(ago);
+	if(cerbo_next(&gx, NOW - ago) != CERBO_DO_OPEN) setup_failures++;
+	cerbo_opened(&gx, NOW - ago);
+	if(cerbo_next(&gx, NOW - ago) != CERBO_DO_SEND) setup_failures++;
+	gx_bytes(packet, broker_connack(packet, 0, 0), ago);
+	if(cerbo_next(&gx, NOW - ago) != CERBO_DO_SEND) setup_failures++;
+	gx_bytes(packet, broker_suback(packet, CERBO_PACKET_ID, 0), ago);
+	if(gx.phase != CERBO_SESSION) setup_failures++;
+}
+
+// A message on the topic of the bundles arrives `ago` ms before NOW
+static void gx_message(const char *json, uint64_t ago)
+{
+	static uint8_t packet[MQTT_SUB_PACKET_MAX];
+
+	gx_bytes(packet, broker_publish(packet, false, CERBO_TOPIC, json, strlen(json)), ago);
+}
+
+// ... a bundle of the contract, which is taken
+static void gx_taken(const char *json, uint64_t ago)
+{
+	uint32_t bundles = gx.bundles;
+
+	gx_message(json, ago);
+	if(gx.bundles != bundles + 1) setup_failures++;
+}
+
+// A bundle with these members of `values`, published by the flow `sent_ago` ms before NOW, arrives `ago` ms
+// before NOW
+static void gx_bundle(const char *members, uint64_t sent_ago, uint64_t ago)
+{
+	static char json[CERBO_BUNDLE_MAX + 128];
+
+	snprintf(json, sizeof(json), "{\"v\":1,\"boot\":7,\"t\":%llu,\"values\":{%s}}", (unsigned long long)(GX_FLOW_MS + NOW - sent_ago), members);
+	gx_taken(json, ago);
+}
+
+static void expect_gx(cerbo_view_t view)
+{
+	if(cerbo_view(&gx, NOW) != view) setup_failures++;
+}
+
+// The Cerbo delivers: a session since 90 s, and the bundle of the parked camper arrived `ago` ms before NOW
+static void gx_live(uint64_t ago)
+{
+	gx_session(90000);
+	gx_taken(gx_parked, ago);
+}
+
+// A session that answers its pings and brings no bundle: the flow does not run
+static void gx_silent(void)
+{
+	uint8_t packet[4];
+
+	gx_session(60000);
+	if(cerbo_next(&gx, NOW - 50000) != CERBO_DO_SEND) setup_failures++;
+	if(cerbo_next(&gx, NOW - 40000) != CERBO_DO_SEND) setup_failures++;
+	gx_bytes(packet, broker_pingresp(packet), 35000);
+	gx_bytes(packet, broker_pingresp(packet), 35000);
+	expect_gx(CERBO_VIEW_SILENT);
+}
+
+// No address was ever set
+static void gx_off(void)
+{
+	cerbo_init(&gx, "", false, "WiCAN-Display", 0);
+	cerbo_network(&gx, true, NOW - 30000);
+	input.cerbo = &gx;
+	expect_gx(CERBO_VIEW_OFF);
+}
+
+// The stage with the views of the Cerbo scenes, on one of their pages. The scene has no second source yet.
+static void gx_stage(int page)
+{
+	stage();
+	world.layout = &gx_layout;
+	nav.page = page;
+}
+
 static bool parse_result(const char *path, dtc_result_t *into)
 {
 	return read_fixture(path, file_text, sizeof(file_text)) && dtc_result_parse(file_text, strlen(file_text), into, work, COUNT(work));
@@ -726,6 +842,26 @@ static void test_inputs(void)
 	      "with that profile the layout shows its pages 0 to 5; the hidden page 6 and page 7 of foreign values are shown by no knob, page 7 only before the profile arrived");
 
 	check(read_fixture("fixtures/scene_values.json", base_values, sizeof(base_values)), "fixture scene_values.json can be read");
+
+	// The scenes with a second source
+	read = read_fixture("fixtures/scene_gx_layout.json", file_text, sizeof(file_text)) &&
+	       layout_parse(file_text, strlen(file_text), &gx_layout, &report, work, COUNT(work));
+	check(read && report.warnings == 0 && gx_layout.page_count == 7, "fixture scene_gx_layout.json is a layout of seven pages, taken without a warning");
+	check(layout_first_page(&gx_layout, &catalog) == 0 && layout_page_shown(&gx_layout, 1, &catalog) && layout_page_shown(&gx_layout, 2, &catalog) && layout_page_shown(&gx_layout, 3, &catalog) &&
+	      layout_page_shown(&gx_layout, 4, &catalog) && !layout_page_shown(&gx_layout, 5, &catalog) && !layout_page_shown(&gx_layout, 6, &catalog),
+	      "with the profile of the adapter that layout shows its pages 0 to 4 - the pages of the Cerbo count although the profile names none of their values; not the hidden one, not the foreign one");
+	read = read_fixture("fixtures/gx_values_parked.json", gx_parked, sizeof(gx_parked)) && read_fixture("fixtures/gx_values_few.json", gx_few, sizeof(gx_few));
+	if(read)
+	{
+		const char *members = strstr(gx_parked, "\"values\":{");
+
+		read = members != NULL && strlen(gx_parked) > 2;
+		// What stands between the braces of `values`: the text ends with "}}"
+		if(read) snprintf(gx_members, sizeof(gx_members), "%.*s", (int)(strlen(members) - 12), members + 10);
+	}
+	check(read && strncmp(gx_members, "\"GX_BATT_SOC\":87.5,", strlen("\"GX_BATT_SOC\":87.5,")) == 0 && strlen(gx_members) > 18 &&
+	      strcmp(gx_members + strlen(gx_members) - 18, "\"GX_LTE_CONN\":\"on\"") == 0,
+	      "fixtures gx_values_parked.json and gx_values_few.json can be read, and the members of the first begin with the state of charge and end with the connection of the router");
 
 	read = parse_result("fixtures/dtc_view_mixed.json", &result);
 	mixed_count = read ? dtc_view_list(&result, mixed_lines, COUNT(mixed_lines)) : 0;
@@ -5275,6 +5411,1109 @@ static void test_made_up_pages(void)
 	      "each value the text and the tone that what the display has of it gives - held during a scan whatever its age - and title, note and dots as the tables of the screens say");
 }
 
+/* Pages with values of the second source ---------------------------------------------------------------- */
+
+// The members of a bundle for the page Wasser: fresh water, grey water, and the rest as in the parked camper
+static const char *water(const char *fresh, const char *gray)
+{
+	static char members[256];
+
+	snprintf(members, sizeof(members), "\"GX_TANK_FRESH\":%s,\"GX_TANK_GRAY\":%s,\"GX_T_BOILER\":44.6,\"GX_T_WATER\":15.1,\"GX_SW_BOILER\":\"off\",\"GX_SW_VALVE\":\"on\"", fresh, gray);
+	return members;
+}
+
+static void test_cerbo_screens(void)
+{
+	char rule[512];
+
+	// A page of the Cerbo alone, in every view of the adapter
+	for(int v = 0; v < COUNT(VIEWS); v++)
+	{
+		gx_stage(1);
+		VIEWS[v].make();
+		gx_live(500);
+		// Not into `what`: screen() writes its own text there
+		snprintf(rule, sizeof(rule), "the page Batterie with a bundle half a second old while the adapter is %s: six fresh values of the Cerbo, no note%s", VIEWS[v].name,
+		         VIEWS[v].view == CONN_VIEW_SCAN ? ", and the progress of the scan as on every page" : ", no ring - whatever the adapter does");
+		screen(VIEWS[v].view == CONN_VIEW_SCAN ? "gx_fresh_scan" : "gx_fresh", rule);
+	}
+
+	gx_stage(1);
+	gx_live(7000);
+	expect_gx(CERBO_VIEW_LIVE);
+	screen("gx_old", "the bundle is 7 s old: the values stand dimmed under a yellow ring - the Cerbo still counts as delivering, so no note");
+	gx_stage(1);
+	gx_live(12000);
+	expect_gx(CERBO_VIEW_QUIET);
+	screen("gx_quiet", "no bundle for 12 s in a session that stands: dimmed values, the yellow ring, and the note that the display waits for the Cerbo");
+	gx_stage(1);
+	gx_live(31000);
+	cerbo_down(&gx, NOW - 30000);
+	expect_gx(CERBO_VIEW_UNREACHABLE);
+	screen("gx_ended", "the session ended 30 s ago: the values of its last bundle stand dimmed for up to a minute, and the note says that the Cerbo is not reachable");
+	gx_stage(1);
+	gx_live(61000);
+	cerbo_down(&gx, NOW - 60500);
+	screen("gx_gone", "61 s after the last bundle no value is left to show: the notice of the Cerbo in place of the page, and its red ring");
+	gx_stage(1);
+	gx_live(3000);
+	cerbo_network(&gx, false, NOW - 1000);
+	expect_gx(CERBO_VIEW_NO_WIFI);
+	screen("gx_no_wifi_values", "the display left the network a second ago: the values are 3 s old and still fresh, and the note says that there is no network");
+
+	gx_stage(1);
+	gx_session(90000);
+	gx_taken(gx_few, 500);
+	screen("gx_few", "a bundle that names two of the six values: the others are dashes without a unit, and the ring is off - the Cerbo does not have them, nothing went missing");
+	gx_stage(1);
+	gx_session(90000);
+	gx_bundle("\"GX_BATT_SOC\":1e999,\"GX_BATT_V\":2e12,\"GX_BATT_I\":-6.2,\"GX_BATT_P\":-164,\"GX_CELL_MIN\":3.298,\"GX_CELL_MAX\":3.304", 500, 500);
+	screen("gx_no_text", "a state of charge beyond every number and a voltage too large to print: dashes, and the ring is yellow - the bundle named them");
+	gx_stage(1);
+	gx_session(90000);
+	gx_bundle(gx_members, 20000, 20000);
+	gx_bundle(gx_members, 7000, 1000);
+	expect_gx(CERBO_VIEW_LIVE);
+	check(gx.lag_ms == 4100, "a bundle published 13 s after the one before arrives 19 s after it: 4100 ms of lag when the base gave way by a tenth of the time");
+	screen("gx_lagging", "that bundle arrived a second ago and is shown as 5.1 s old: dimmed under a yellow ring - never newer than it is");
+
+	// The Cerbo has nothing to show
+	gx_stage(1);
+	gx_joined(1000);
+	expect_gx(CERBO_VIEW_CONNECTING);
+	screen("gx_waiting", "a second in the network, no session yet: the notice that the display waits for the Cerbo, yellow");
+	gx_stage(1);
+	gx_session(5000);
+	expect_gx(CERBO_VIEW_QUIET);
+	screen("gx_waiting", "a session that brought no bundle yet: the same notice");
+	gx_stage(1);
+	cerbo_init(&gx, GX_HOST, false, "WiCAN-Display", 0);
+	input.cerbo = &gx;
+	expect_gx(CERBO_VIEW_NO_WIFI);
+	screen("gx_no_wifi", "the display is in no network: the notice says so, red");
+	gx_stage(1);
+	gx_joined(20000);
+	expect_gx(CERBO_VIEW_UNREACHABLE);
+	screen("gx_gone", "20 s in the network without a session: the Cerbo is not reachable, red");
+	gx_stage(1);
+	gx_silent();
+	screen("gx_silent", "a session that answers pings and brings no bundle for 25 s: the notice asks for the flow, red");
+	gx_stage(1);
+	gx_session(90000);
+	gx_message("{\"v\":2,\"boot\":7,\"t\":1,\"values\":{\"GX_BATT_SOC\":1}}", 500);
+	expect_gx(CERBO_VIEW_NEWER);
+	screen("gx_newer", "a bundle of a newer contract and none that could be read: the notice says that the flow is newer than the display, red");
+	gx_stage(1);
+	gx_live(6000);
+	gx_message("{\"v\":2,\"boot\":7,\"t\":1,\"values\":{\"GX_BATT_SOC\":1}}", 500);
+	expect_gx(CERBO_VIEW_NEWER);
+	screen("gx_newer_values", "the same behind a bundle that was read 6 s ago: its values stand dimmed, and the note says what is wrong");
+	gx_stage(1);
+	gx_off();
+	screen("gx_off", "no address is set: the page says that the Cerbo is not set up, grey - nothing is wrong");
+	gx_stage(1);
+	screen("gx_off", "a scene that is given no second source at all: the same notice");
+	gx_stage(1);
+	view_scan();
+	gx_off();
+	screen("gx_off_scan", "the same during a scan of the fault memory: the progress, as on every page");
+	gx_stage(1);
+	cerbo_init(&gx, GX_HOST, true, "WiCAN-Display", 0);
+	cerbo_network(&gx, true, NOW - 30000);
+	input.cerbo = &gx;
+	input.safe_mode = true;
+	expect_gx(CERBO_VIEW_OFF);
+	screen("gx_off_safe_mode", "the address is set and the display is in safe mode: the Cerbo is off for the safe mode, grey, under the note of the safe mode");
+	gx_stage(1);
+	gx_live(500);
+	input.heat = GUARD_HEAT_DIM;
+	screen("gx_hot", "the page Batterie while the display is hot: the values, and the note of the heat");
+
+	// Widgets, limits and what a page makes of a value without a label and without a unit
+	gx_stage(2);
+	gx_live(500);
+	screen("gx_water", "the page Wasser: two bars, a temperature, a value without label and unit - Gx T Water, and no unit from any catalogue -, two states without the unit one of them names");
+	gx_stage(2);
+	gx_session(90000);
+	gx_bundle(water("15", "35"), 500, 500);
+	screen("gx_water_warn", "15 percent of fresh water, at its warn limit of 20: the value in the warn tone, the ring yellow");
+	gx_stage(2);
+	gx_session(90000);
+	gx_bundle(water("15", "97"), 500, 500);
+	screen("gx_water_alarm", "97 percent of grey water as well, beyond its crit limit of 95: that value in the alarm tone, the ring red");
+	gx_stage(2);
+	gx_session(90000);
+	gx_bundle(water("15", "97"), 7000, 7000);
+	screen("gx_water_old_alarm", "the same bundle 7 s old: every value dimmed, and the ring stays red - a value that is shown counts with its level");
+
+	// A page of both sources
+	gx_stage(3);
+	gx_live(500);
+	screen("gx_mixed", "the page Fahrt, both sources delivering: the values of the adapter with the unit of its catalogue, those of the Cerbo with the unit of the page");
+	gx_stage(3);
+	view_no_wifi();
+	gx_live(500);
+	screen("gx_mixed_parked", "the parked camper - the adapter asleep, the Cerbo delivering: the values of the Cerbo, dashes for those of the adapter although the display still holds "
+	                          "them, the text of the adapter below, and no ring");
+	gx_stage(3);
+	view_ecu_offline();
+	gx_live(500);
+	screen("gx_mixed_ignition_off", "the same page with the ignition off: the note is the text of that view");
+	gx_stage(3);
+	view_ecu_offline();
+	gx_joined(1000);
+	screen("gx_mixed_none", "neither source has anything to show and the first value of the page is one of the adapter: the notice of the adapter with the battery voltage, grey");
+	gx_stage(3);
+	gx_joined(20000);
+	screen("gx_mixed_cerbo_away", "on the road with the Cerbo not reachable and nothing of it held: the values of the adapter, dashes for the Cerbo, its text below, no ring");
+	gx_stage(3);
+	gx_live(61000);
+	cerbo_down(&gx, NOW - 60500);
+	screen("gx_mixed_cerbo_gone", "the same a minute after the last bundle: the dashes are values that went missing, and the ring is yellow");
+	gx_stage(3);
+	gx_off();
+	screen("gx_mixed_off", "the same page on a display without the address: n. v. for the values of the Cerbo, and the note says that it is not set up");
+	gx_stage(3);
+	screen("gx_mixed_off", "... and in a scene that is given no second source at all");
+	gx_stage(3);
+	cerbo_init(&gx, GX_HOST, true, "WiCAN-Display", 0);
+	cerbo_network(&gx, true, NOW - 30000);
+	input.cerbo = &gx;
+	input.safe_mode = true;
+	screen("gx_mixed_safe_mode", "the same page in safe mode with the address stored: n. v., under the note of the safe mode");
+	gx_stage(3);
+	view_scan();
+	gx_live(500);
+	screen("gx_mixed_scan", "the page Fahrt during a scan of the fault memory: the values of the adapter stand dimmed, those of the Cerbo go on fresh, the note of the scan, its progress");
+	gx_stage(3);
+	view_no_api();
+	gx_live(500);
+	screen("gx_mixed_no_api", "the page Fahrt with a firmware without the API: all values, its note, and the ring by the values alone - not the grey of that view");
+
+	gx_stage(4);
+	gx_live(500);
+	screen("gx_laden", "the page Laden, both sources delivering: the battery voltage of the adapter between values of the Cerbo");
+	gx_stage(4);
+	view_ecu_offline();
+	gx_joined(1000);
+	screen("gx_laden_none", "neither source has anything to show and the first value of the page is one of the Cerbo: the notice of the Cerbo, yellow while the display waits for it");
+	gx_stage(5);
+	gx_live(500);
+	screen("gx_hidden", "a hidden page of the Cerbo that is shown all the same: its value, and no dot");
+}
+
+// A page of one value of the Cerbo, GX_BATT_SOC, to be changed by hand. The stage has to be set before.
+static layout_item_t *gx_probe(void)
+{
+	layout_item_t *item = probe();
+
+	SET(item->key, "GX_BATT_SOC");
+	return item;
+}
+
+static bool notice_is(ring_kind_t ring, const char *line)
+{
+	return scene->kind == SCENE_NOTICE && scene->ring.kind == ring && scene->ring.permille == 0 && scene->item_count == 0 && scene->title[0] == '\0' && lines_are(line, NULL, NULL, NULL);
+}
+
+static void test_cerbo_rules(void)
+{
+	static const struct
+	{
+		uint64_t age_ms;
+		scene_tone_t tone;
+		ring_kind_t ring;
+		bool shown;
+		const char *rule;
+	} ages[] = {
+		{0, SCENE_TONE_NORMAL, RING_NONE, true, "a value of the Cerbo seen this very millisecond is fresh"},
+		{4999, SCENE_TONE_NORMAL, RING_NONE, true, "one seen 4999 ms ago is fresh: the Cerbo has 5 s where the adapter has 3"},
+		{5000, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 5000 ms ago is old: dimmed, the ring yellow"},
+		{9999, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 9999 ms ago is old"},
+		{10000, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 10 s ago is still shown, dimmed: the Cerbo has a minute where the adapter has 10 s"},
+		{59999, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 59999 ms ago is still shown, dimmed"},
+		{60000, SCENE_TONE_DIM, RING_RED, false, "one seen 60 s ago is gone: the page has nothing left to show"},
+	};
+	layout_item_t *item;
+	catalog_t with_gx;
+	bool good;
+	int count;
+
+	check(CERBO_FRESH_MS == 5000 && CERBO_KEPT_MS == 60000 && VALUE_FRESH_MS == 3000 && VALUE_KEPT_MS == 10000, "the ages of the two sources: fresh for 5 s and kept for 60 with the Cerbo, 3 and 10 with the adapter");
+	for(int i = 0; i < COUNT(ages); i++)
+	{
+		stage();
+		gx_probe();
+		gx_session(90000);
+		gx_bundle("\"GX_BATT_SOC\":87.5", ages[i].age_ms, ages[i].age_ms);
+		// The session ended right behind the bundle: what is shown is what the store holds, not that it delivers
+		cerbo_down(&gx, NOW - ages[i].age_ms);
+		build();
+		check(ages[i].shown ? scene->kind == SCENE_VALUES && item_is(0, "Gx Batt Soc", "88", "", ages[i].tone, LAYOUT_WIDGET_NUMBER, -1) && scene->ring.kind == ages[i].ring :
+		      notice_is(ages[i].ring, AWAY_NOTE), ages[i].rule);
+	}
+	// The value on a page that is shown for another reason: a second value that is fresh
+	stage();
+	gx_probe();
+	probe_more("GX_BATT_V");
+	gx_session(90000);
+	gx_bundle("\"GX_BATT_SOC\":87.5", 60000, 60000);
+	gx_bundle("\"GX_BATT_SOC\":87.5,\"GX_BATT_V\":26.41", 0, 0);
+	// The second bundle renews both; a store that holds a value gone by its age is made by hand
+	gx.values.items[0].seen_ms = NOW - 60000;
+	build();
+	check(scene->kind == SCENE_VALUES && item_is(0, "Gx Batt Soc", SCENE_DASH, "", SCENE_TONE_DIM, LAYOUT_WIDGET_NUMBER, -1) && item_is(1, "Gx Batt V", "26", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1) &&
+	      scene->ring.kind == RING_YELLOW, "a value the store still holds 60 s after it was seen is a dash next to a fresh one, and it is missed: the ring is yellow");
+	gx.values.items[0].seen_ms = NOW - 59999;
+	build();
+	check(item_is(0, "Gx Batt Soc", "88", "", SCENE_TONE_DIM, LAYOUT_WIDGET_NUMBER, -1) && scene->ring.kind == RING_YELLOW, "... and dimmed with its number a millisecond before");
+
+	// A time before the bundle: the clock of another task
+	stage();
+	gx_probe();
+	gx_live(500);
+	input.now_ms = NOW - 30000;
+	build();
+	check(scene->kind == SCENE_VALUES && item_is(0, "Gx Batt Soc", "88", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1) && scene->ring.kind == RING_NONE && scene->note[0] == '\0',
+	      "a scene asked for at a time before the bundle arrived: no time passed, the value is fresh and the Cerbo delivers");
+
+	// The store of the Cerbo and nothing else
+	stage();
+	gx_probe();
+	seen("{\"GX_BATT_SOC\":12}", 500);
+	gx_live(500);
+	build();
+	check(values_find(&values, "GX_BATT_SOC") != NULL && item_is(0, "Gx Batt Soc", "88", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1),
+	      "an adapter that delivers a value under a key of the Cerbo: the page shows the value of the Cerbo, 87.5, not the 12 of the adapter");
+	stage();
+	gx_probe();
+	seen("{\"GX_BATT_SOC\":12}", 500);
+	gx_joined(1000);
+	build();
+	check(notice_is(RING_YELLOW, QUIET_NOTE), "... and while the Cerbo has nothing, the 12 of the adapter makes no page of values: the display waits for the Cerbo");
+	stage();
+	gx_probe();
+	probe_more("ENGINE_RPM");
+	seen("{\"GX_BATT_SOC\":12}", 500);
+	gx_off();
+	build();
+	check(scene->kind == SCENE_VALUES && item_is(0, "Gx Batt Soc", SCENE_UNAVAILABLE, "", SCENE_TONE_DIM, LAYOUT_WIDGET_NUMBER, -1) && item_is(1, "Engine Rpm", "812", "RPM", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1) &&
+	      scene->ring.kind == RING_NONE && strcmp(scene->note, OFF_NOTE) == 0, "... and without the source the key is n. v. next to a value of the adapter, whatever the adapter delivers under it");
+	// ... nor does the adapter fill in for a value the Cerbo does not name
+	stage();
+	gx_probe();
+	probe_more("GX_BATT_V");
+	seen("{\"GX_BATT_SOC\":12}", 500);
+	gx_session(90000);
+	gx_bundle("\"GX_BATT_V\":26.41", 500, 500);
+	build();
+	check(scene->kind == SCENE_VALUES && item_is(0, "Gx Batt Soc", SCENE_DASH, "", SCENE_TONE_DIM, LAYOUT_WIDGET_NUMBER, -1) && item_is(1, "Gx Batt V", "26", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1) &&
+	      scene->ring.kind == RING_NONE, "a bundle that does not name the state of charge while the adapter delivers something under that key: a dash, and nothing is missed");
+	// A source that is off holds no value to show, also if its store was not emptied: made by hand
+	stage();
+	gx_probe();
+	probe_more("ENGINE_RPM");
+	gx_live(500);
+	gx.safe_mode = true;
+	build();
+	check(gx.values.count == 43 && item_is(0, "Gx Batt Soc", SCENE_UNAVAILABLE, "", SCENE_TONE_DIM, LAYOUT_WIDGET_NUMBER, -1) && scene->ring.kind == RING_NONE && strcmp(scene->note, "Cerbo nicht eingerichtet") == 0,
+	      "a source that is off shows n. v. whatever its store holds - no value is looked up, and none is missed");
+
+	// The unit: the one of the item, never one of a catalogue
+	stage();
+	item = gx_probe();
+	memcpy(&with_gx, &catalog, sizeof(with_gx));
+	memset(&with_gx.entries[with_gx.count], 0, sizeof(with_gx.entries[0]));
+	SET(with_gx.entries[with_gx.count].name, "GX_BATT_SOC");
+	SET(with_gx.entries[with_gx.count].unit, "K");
+	with_gx.count++;
+	world.catalog = &with_gx;
+	gx_live(500);
+	build();
+	check(catalog_find(&with_gx, "GX_BATT_SOC") >= 0 && strcmp(layout_item_unit(item, &with_gx), "K") == 0 && item_is(0, "Gx Batt Soc", "88", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1),
+	      "a catalogue of the adapter that names a key of the Cerbo with a unit: the page shows no unit - no catalogue is asked for a value of the Cerbo");
+	item->has_unit = true;
+	SET(item->unit, "%");
+	build();
+	check(item_is(0, "Gx Batt Soc", "88", "%", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1), "... and the unit of the item where it has one");
+	item->widget = LAYOUT_WIDGET_STATE;
+	item->map_count = 1;
+	SET(item->map[0].raw, "*");
+	SET(item->map[0].text, "geladen");
+	build();
+	check(item_is(0, "Gx Batt Soc", "geladen", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_STATE, -1), "a state shows the text of its map and no unit, although the item names one");
+
+	// Label, widget and range
+	stage();
+	item = gx_probe();
+	SET(item->label, "Ladezustand");
+	item->widget = LAYOUT_WIDGET_ARC;
+	limit(&item->min, 50);
+	limit(&item->max, 100);
+	item->decimals = 1;
+	gx_live(500);
+	build();
+	check(item_is(0, "Ladezustand", "87,5", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_ARC, 750), "an arc from 50 to 100 shows 87.5 at 750 permille, under the label of the item");
+	limit(&item->min, 90);
+	build();
+	check(item_is(0, "Ladezustand", "87,5", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_ARC, 0), "below its range the arc stands at 0");
+	limit(&item->min, 0);
+	limit(&item->max, 50);
+	item->widget = LAYOUT_WIDGET_BAR;
+	build();
+	check(item_is(0, "Ladezustand", "87,5", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_BAR, 1000), "beyond its range a bar stands at 1000");
+	item->max.set = false;
+	build();
+	check(item_is(0, "Ladezustand", "87,5", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_BAR, -1), "a bar without a range has no position");
+	item->widget = (layout_widget_t)77;
+	build();
+	check(item_is(0, "Ladezustand", "87,5", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1), "what is no widget is shown as a number");
+	item->widget = LAYOUT_WIDGET_NUMBER;
+	limit(&item->max, 100);
+	build();
+	check(item_is(0, "Ladezustand", "87,5", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1), "a number has no position, also where the item names a range from 0 to 100");
+	item->max.set = false;
+	item->scale = 0.01;
+	item->decimals = 3;
+	build();
+	check(item_is(0, "Ladezustand", "0,875", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1), "the scale of the item counts as for every value");
+	stage();
+	item = gx_probe();
+	SET(item->key, "GX_ABCDEFGHIJKLMNOPQRSTUVWXY");
+	gx_session(90000);
+	gx_bundle("\"GX_ABCDEFGHIJKLMNOPQRSTUVWXY\":3", 500, 500);
+	build();
+	check(scene->kind == SCENE_VALUES && item_is(0, "", "3", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1) && all_bytes(scene->items[0].label, sizeof(scene->items[0].label), 0),
+	      "a key whose label would have 28 bytes has none, and no byte of one that was begun");
+	stage();
+	item = gx_probe();
+	SET(item->key, "GX_SW_B2B");
+	gx_live(500);
+	build();
+	check(item_is(0, "Gx Sw B2b", "0", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1), "a switch that is off is 0 where the page shows it as a number");
+
+	// Levels
+	stage();
+	item = gx_probe();
+	limit(&item->warn_hi, 80);
+	gx_live(500);
+	build();
+	check(item_is(0, "Gx Batt Soc", "88", "", SCENE_TONE_WARN, LAYOUT_WIDGET_NUMBER, -1) && scene->ring.kind == RING_YELLOW, "a fresh value of the Cerbo at a warn limit: the warn tone, the ring yellow");
+	limit(&item->crit_hi, 85);
+	build();
+	check(item_is(0, "Gx Batt Soc", "88", "", SCENE_TONE_ALARM, LAYOUT_WIDGET_NUMBER, -1) && scene->ring.kind == RING_RED, "at a crit limit: the alarm tone, the ring red");
+	stage();
+	item = gx_probe();
+	limit(&item->crit_hi, 85);
+	probe_more("GX_BATT_V");
+	gx_session(90000);
+	gx_bundle("\"GX_BATT_SOC\":1e999,\"GX_BATT_V\":26.41", 500, 500);
+	build();
+	check(item_is(0, "Gx Batt Soc", SCENE_DASH, "", SCENE_TONE_DIM, LAYOUT_WIDGET_NUMBER, -1) && scene->ring.kind == RING_YELLOW,
+	      "a value beyond every number is a dash that raises no level, however far beyond its limit it is: the ring is yellow for a value that is missed, not red");
+
+	// What the adapter does on a page of both: its values only while it shows, its text while it is not live
+	for(int v = 0; v < COUNT(VIEWS); v++)
+	{
+		bool scan = VIEWS[v].view == CONN_VIEW_SCAN;
+
+		gx_stage(3);
+		VIEWS[v].make();
+		gx_live(500);
+		build();
+		good = scene->kind == SCENE_VALUES && strcmp(scene->note, VIEWS[v].text) == 0 && scene->ring.kind == (scan ? RING_PROGRESS : RING_NONE) &&
+		       item_is(1, "SOC", "87,5", "%", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1) && item_is(3, "Alternator", "0,0", "A", SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1);
+		if(VIEWS[v].values) good = good && item_is(0, "Drehzahl", "812", "1/min", scan ? SCENE_TONE_DIM : SCENE_TONE_NORMAL, LAYOUT_WIDGET_ARC, 162) &&
+			                          item_is(2, "Kühlwasser", "88", "°C", scan ? SCENE_TONE_DIM : SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1);
+		else good = good && item_is(0, "Drehzahl", SCENE_DASH, "", SCENE_TONE_DIM, LAYOUT_WIDGET_ARC, -1) && item_is(2, "Kühlwasser", SCENE_DASH, "", SCENE_TONE_DIM, LAYOUT_WIDGET_NUMBER, -1);
+		snprintf(what, sizeof(what), "the page Fahrt with the Cerbo delivering while the adapter is %s: %s, the note \"%s\"", VIEWS[v].name,
+		         VIEWS[v].values ? "the values of both" : "the values of the Cerbo and dashes for the adapter, no ring", VIEWS[v].text);
+		check(good, what);
+
+		// The adapter alone: values while it shows, with the text of the Cerbo below; else its own notice
+		gx_stage(3);
+		VIEWS[v].make();
+		gx_joined(20000);
+		build();
+		if(VIEWS[v].values) good = scene->kind == SCENE_VALUES && strcmp(scene->note, VIEWS[v].view == CONN_VIEW_LIVE ? AWAY_NOTE : VIEWS[v].text) == 0 &&
+			                       item_is(1, "SOC", SCENE_DASH, "", SCENE_TONE_DIM, LAYOUT_WIDGET_NUMBER, -1) && scene->ring.kind == (scan ? RING_PROGRESS : RING_NONE);
+		else good = scene->kind == SCENE_NOTICE && scene->ring.kind == VIEWS[v].ring && scene->note[0] == '\0' && strcmp(scene->lines[0], VIEWS[v].text) == 0;
+		snprintf(what, sizeof(what), "the page Fahrt with the Cerbo not reachable while the adapter is %s: %s", VIEWS[v].name,
+		         VIEWS[v].values ? "the values of the adapter and dashes for the Cerbo" : "the notice and the ring of the adapter, whose value comes first");
+		check(good, what);
+
+		// The page whose first value is one of the Cerbo: the notice is the one of the Cerbo
+		gx_stage(4);
+		VIEWS[v].make();
+		gx_joined(20000);
+		build();
+		if(VIEWS[v].values) good = scene->kind == SCENE_VALUES && item_is(1, "Bordnetz", "14,1", "V", scan ? SCENE_TONE_DIM : SCENE_TONE_NORMAL, LAYOUT_WIDGET_NUMBER, -1);
+		else good = scene->kind == SCENE_NOTICE && scene->ring.kind == RING_RED && scene->line_count == 1 && strcmp(scene->lines[0], AWAY_NOTE) == 0;
+		snprintf(what, sizeof(what), "the page Laden with the Cerbo not reachable while the adapter is %s: %s", VIEWS[v].name,
+		         VIEWS[v].values ? "the value of the adapter among dashes" : "the notice and the red ring of the Cerbo, whose value comes first - one line, no battery voltage");
+		check(good, what);
+	}
+
+	// A dash for the adapter that is away is no value that went missing: the ring stays off, whatever the display holds
+	gx_stage(3);
+	view_fell_silent();
+	gx_live(500);
+	build();
+	check(values_find(&values, "ENGINE_RPM") != NULL && values_age(values_find(&values, "ENGINE_RPM"), NOW) == VALUE_AGE_FRESH && item_is(0, "Drehzahl", SCENE_DASH, "", SCENE_TONE_DIM, LAYOUT_WIDGET_ARC, -1) &&
+	      scene->ring.kind == RING_NONE && strcmp(scene->note, "WiCAN antwortet nicht") == 0,
+	      "an adapter that fell silent while the display holds a fresh engine speed of it: a dash on the page of both, the note says why, and the ring is off");
+	// ... and it raises no level
+	gx_stage(3);
+	limit(&gx_layout.pages[3].items[0].crit_hi, 100);
+	view_no_wifi();
+	gx_live(500);
+	build();
+	good = scene->ring.kind == RING_NONE;
+	view_live();
+	build();
+	check(good && scene->ring.kind == RING_RED && item_is(0, "Drehzahl", "812", "1/min", SCENE_TONE_ALARM, LAYOUT_WIDGET_ARC, 162),
+	      "an engine speed beyond its crit limit makes the ring red while the adapter shows it, and says nothing while the adapter is away");
+	gx_layout.pages[3].items[0].crit_hi.set = false;
+	gx_layout.pages[3].items[0].crit_hi.value = 0;
+
+	// The notes of a page that shows values, in their order
+	gx_stage(3);
+	view_scan();
+	gx_joined(20000);
+	input.safe_mode = true;
+	input.heat = GUARD_HEAT_DIM;
+	build();
+	check(strcmp(scene->note, SAFE_NOTE) == 0, "safe mode, heat, a scan and a Cerbo that is away: the note is the one of the safe mode");
+	input.safe_mode = false;
+	build();
+	check(strcmp(scene->note, HOT_NOTE) == 0, "without the safe mode: the heat");
+	input.heat = GUARD_HEAT_NORMAL;
+	build();
+	check(strcmp(scene->note, SCAN_NOTE) == 0, "without the heat: the scan, before the Cerbo");
+	gx_stage(3);
+	gx_joined(20000);
+	build();
+	check(strcmp(scene->note, AWAY_NOTE) == 0, "with the adapter live: the Cerbo");
+	gx_live(500);
+	build();
+	check(scene->note[0] == '\0' && all_bytes(scene->note, sizeof(scene->note), 0), "with both delivering: no note, and no byte of one");
+	// A page of the Cerbo alone has no word of the adapter
+	gx_stage(1);
+	view_no_api();
+	gx_live(500);
+	build();
+	check(scene->kind == SCENE_VALUES && all_bytes(scene->note, sizeof(scene->note), 0) && scene->ring.kind == RING_NONE, "a page of the Cerbo alone says nothing of a firmware without the API: no note, no byte of one, no grey ring");
+	gx_stage(1);
+	view_scan();
+	gx_live(12000);
+	build();
+	check(strcmp(scene->note, QUIET_NOTE) == 0 && scene->ring.kind == RING_PROGRESS && scene->ring.permille == 277, "nor of a scan: its note is the one of the Cerbo, and the ring is the progress");
+	// The notice of the Cerbo keeps the notes of the display and has none of the adapter
+	gx_stage(1);
+	view_no_api();
+	gx_joined(1000);
+	build();
+	good = notice_is(RING_YELLOW, QUIET_NOTE) && all_bytes(scene->note, sizeof(scene->note), 0);
+	input.heat = GUARD_HEAT_DIM;
+	build();
+	good = good && notice_is(RING_YELLOW, QUIET_NOTE) && strcmp(scene->note, HOT_NOTE) == 0;
+	input.safe_mode = true;
+	build();
+	check(good && scene->kind == SCENE_NOTICE && strcmp(scene->note, SAFE_NOTE) == 0, "the notice of the Cerbo stands without a note of the adapter, under the note of the heat, and under the one of the safe mode before it");
+
+	// Every view of the Cerbo with nothing to show, on a page of it alone
+	{
+		static const char *const texts[] = {OFF_NOTE, "Kein WLAN – Cerbo nicht erreichbar", QUIET_NOTE, AWAY_NOTE, QUIET_NOTE, "Cerbo sendet keine Werte – Flow Display aktiv?",
+		                                    "Cerbo-Flow ist neuer als dieses Display"};
+		static const ring_kind_t rings[] = {RING_GREY, RING_RED, RING_YELLOW, RING_RED, RING_YELLOW, RING_RED, RING_RED};
+
+		count = 0;
+		for(int view = CERBO_VIEW_OFF; view < CERBO_VIEW_LIVE; view++)
+		{
+			gx_stage(2);
+			switch(view)
+			{
+				case CERBO_VIEW_OFF:         gx_off(); break;
+				case CERBO_VIEW_NO_WIFI:     cerbo_init(&gx, GX_HOST, false, "WiCAN-Display", 0); input.cerbo = &gx; break;
+				case CERBO_VIEW_CONNECTING:  gx_joined(14999); break;
+				case CERBO_VIEW_UNREACHABLE: gx_joined(15000); break;
+				case CERBO_VIEW_QUIET:       gx_session(19000); break;
+				case CERBO_VIEW_SILENT:      gx_silent(); break;
+				default:                     gx_session(90000); gx_message("{\"v\":9,\"boot\":7,\"t\":1,\"values\":{}}", 500); break;
+			}
+			expect_gx((cerbo_view_t)view);
+			build();
+			if(notice_is(rings[view], texts[view]) && scene->dots == 5 && scene->dot == 2) count++;
+		}
+		check(count == 7, "a page of the Cerbo with nothing to show, in each of the seven views that do not deliver: one line, the text of that view, and its ring - grey off, yellow waiting, red else");
+	}
+}
+
+// The pages without a value of the Cerbo are the pages they were, whatever the second source does
+static void test_cerbo_apart(void)
+{
+	static scene_t without, with_live, with_none;
+	int pages = 0, same = 0;
+
+	for(int v = 0; v < COUNT(VIEWS); v++)
+	{
+		for(int page = -1; page <= 8; page++)
+		{
+			stage();
+			VIEWS[v].make();
+			nav.page = page;
+			build();
+			memcpy(&without, scene, sizeof(without));
+			gx_live(500);
+			build();
+			memcpy(&with_live, scene, sizeof(with_live));
+			gx_joined(20000);
+			build();
+			memcpy(&with_none, scene, sizeof(with_none));
+			pages++;
+			if(memcmp(&without, &with_live, sizeof(without)) == 0 && memcmp(&without, &with_none, sizeof(without)) == 0) same++;
+		}
+		// ... and the page of the adapter among pages of the Cerbo
+		gx_stage(0);
+		VIEWS[v].make();
+		build();
+		memcpy(&without, scene, sizeof(without));
+		gx_live(500);
+		build();
+		pages++;
+		if(memcmp(&without, scene, sizeof(without)) == 0) same++;
+	}
+	check(pages == 110 && same == pages, "every page of the views without a value of the Cerbo, in every view of the adapter: the same scene byte for byte without a second source, "
+	                                      "with one that delivers and with one that is not reachable - and so the page Motor among pages of the Cerbo");
+	for(int on = NAV_MENU; on <= NAV_CONFIRM; on++)
+	{
+		stage_on((nav_screen_t)on, 0);
+		world.layout = &gx_layout;
+		nav.page = 1;
+		build();
+		memcpy(&without, scene, sizeof(without));
+		gx_live(500);
+		build();
+		pages++;
+		if(memcmp(&without, scene, sizeof(without)) == 0) same++;
+	}
+	check(pages == 123 && same == pages, "every other screen over a page of the Cerbo is the same scene with and without the second source: the source has a say on the value pages alone");
+}
+
+static void test_page_shows(void)
+{
+	int wrong = 0, asked = 0;
+
+	for(int v = 0; v < COUNT(VIEWS); v++)
+	{
+		bool adapter_shows = VIEWS[v].values;
+
+		for(int state = 0; state < 5; state++)
+		{
+			const cerbo_t *source = &gx;
+			bool gx_shows = state >= 3;
+
+			gx_stage(0);
+			VIEWS[v].make();
+			switch(state)
+			{
+				case 0:  source = NULL; break;
+				case 1:  gx_off(); break;
+				case 2:  gx_joined(20000); break;
+				case 3:  gx_live(500); break;
+				// Not delivering any more, and a value still to show
+				default: gx_live(31000); cerbo_down(&gx, NOW - 30000); break;
+			}
+			// By hand: the pages of the adapter, the pages of the Cerbo, the pages of both, and what is no page
+			if(scene_page_shows(&gx_layout, 0, VIEWS[v].view, source, NOW) != adapter_shows) wrong++;
+			if(scene_page_shows(&gx_layout, 6, VIEWS[v].view, source, NOW) != adapter_shows) wrong++;
+			if(scene_page_shows(&gx_layout, 1, VIEWS[v].view, source, NOW) != gx_shows) wrong++;
+			if(scene_page_shows(&gx_layout, 2, VIEWS[v].view, source, NOW) != gx_shows) wrong++;
+			if(scene_page_shows(&gx_layout, 5, VIEWS[v].view, source, NOW) != gx_shows) wrong++;
+			if(scene_page_shows(&gx_layout, 3, VIEWS[v].view, source, NOW) != (adapter_shows || gx_shows)) wrong++;
+			if(scene_page_shows(&gx_layout, 4, VIEWS[v].view, source, NOW) != (adapter_shows || gx_shows)) wrong++;
+			if(scene_page_shows(&gx_layout, 7, VIEWS[v].view, source, NOW) || scene_page_shows(&gx_layout, -1, VIEWS[v].view, source, NOW) ||
+			   scene_page_shows(&gx_layout, LAYOUT_PAGES_MAX, VIEWS[v].view, source, NOW) || scene_page_shows(&gx_layout, INT_MAX, VIEWS[v].view, source, NOW) ||
+			   scene_page_shows(&gx_layout, INT_MIN, VIEWS[v].view, source, NOW)) wrong++;
+			asked += 8;
+
+			// What the function says is what the scene does, page for page
+			for(int page = 0; page < gx_layout.page_count; page++)
+			{
+				nav.page = page;
+				input.cerbo = source;
+				build();
+				if((scene->kind == SCENE_VALUES) != scene_page_shows(&gx_layout, page, VIEWS[v].view, source, NOW)) wrong++;
+				asked++;
+			}
+		}
+	}
+	check(asked == 750 && wrong == 0, "scene_page_shows(): a page of the adapter by the view of the adapter alone, a page of the Cerbo by the Cerbo alone - delivering, or a value "
+	                                  "still to show -, a page of both by either, and no page outside of the layout; the hidden page and the foreign one are told like every page. "
+	                                  "And the scene of each page is a page of values exactly when it says so");
+	gx_stage(1);
+	gx_live(59999);
+	cerbo_down(&gx, NOW - 59000);
+	check(scene_page_shows(&gx_layout, 1, CONN_VIEW_NO_WIFI, &gx, NOW) && !scene_page_shows(&gx_layout, 1, CONN_VIEW_NO_WIFI, &gx, NOW + 1) && scene_page_shows(&gx_layout, 1, CONN_VIEW_LIVE, &gx, NOW - 5),
+	      "scene_page_shows() takes the time it is asked for: the last value of a Cerbo that is away goes with its sixtieth second");
+	check(!scene_page_shows(&gx_layout, 0, (conn_view_t)77, &gx, NOW) && !scene_page_shows(&gx_layout, 0, (conn_view_t)-1, NULL, NOW), "a view that is none shows no page of the adapter");
+}
+
+/* Made-up pages with values of the second source -------------------------------------------------------- */
+
+// The values of the Cerbo on the made-up pages: as the flow sends them, and beyond a limit of the page, of
+// another kind or not to be printed
+static const struct
+{
+	const char *key;
+	const char *usual;
+	const char *strange;
+} GX_VALUES[] = {
+	{"GX_BATT_SOC", "87.5", "1e999"}, {"GX_BATT_V", "26.41", "2e12"}, {"GX_BATT_I", "-6.2", "-1e13"}, {"GX_BATT_P", "-164", "1e300"}, {"GX_CELL_MIN", "3.298", "\"on\""},
+	{"GX_CELL_MAX", "3.304", "0"}, {"GX_TANK_FRESH", "62", "5"}, {"GX_TANK_GRAY", "35", "97"}, {"GX_T_BOILER", "44.6", "-12.5"}, {"GX_T_WATER", "15.1", "1e15"},
+	{"GX_SW_BOILER", "\"off\"", "\"on\""}, {"GX_SW_VALVE", "\"on\"", "3"}, {"GX_ALT_I", "0", "41.5"}, {"GX_SW_B2B", "\"off\"", "\"on\""}, {"GX_STARTER_V", "12.71", "1e12"},
+};
+
+// What texts.h says of each view of the Cerbo, written down here once more: the line, and the ring of a page
+// that has nothing to show
+static const char *const CERBO_LINES[] = {OFF_NOTE, "Kein WLAN – Cerbo nicht erreichbar", QUIET_NOTE, AWAY_NOTE, QUIET_NOTE, "Cerbo sendet keine Werte – Flow Display aktiv?",
+                                          "Cerbo-Flow ist neuer als dieses Display", ""};
+static const ring_kind_t CERBO_RINGS[] = {RING_GREY, RING_RED, RING_YELLOW, RING_RED, RING_YELLOW, RING_RED, RING_RED, RING_NONE};
+
+// What the made-up Cerbo did, for the counts of the test
+static bool gx_lagged;
+
+// The members of a bundle: each value of the table usual, strange or left out
+static const char *any_members(void)
+{
+	static char members[CERBO_BUNDLE_MAX];
+	size_t length = 0;
+
+	members[0] = '\0';
+	for(int i = 0; i < COUNT(GX_VALUES); i++)
+	{
+		int kind = pick(8);
+
+		// Left out: the Cerbo does not have the value right now
+		if(kind == 0) continue;
+		length += (size_t)snprintf(members + length, sizeof(members) - length, "%s\"%s\":%s", length > 0 ? "," : "", GX_VALUES[i].key, kind < 3 ? GX_VALUES[i].strange : GX_VALUES[i].usual);
+	}
+	return members;
+}
+
+// A second source of every kind: none, one that is off, one without a network, without a session, with a
+// session that brings nothing, bundles of every age, a session that ended, a network that went, a flow that is
+// newer, a bundle that lagged
+static void any_cerbo(void)
+{
+	static const uint64_t ages[] = {0, 1, 4999, 5000, 5001, 9999, 10000, 10001, 59999, 60000, 60001, 75000};
+	uint64_t age = pick(2) == 0 ? ages[pick(COUNT(ages))] : (uint64_t)pick(70000);
+	uint64_t behind;
+	int kind = pick(14);
+
+	gx_lagged = false;
+	switch(kind)
+	{
+		case 0:
+			input.cerbo = NULL;
+			break;
+		case 1:
+			gx_off();
+			break;
+		case 2:
+			// The address is stored and the safe mode keeps the source off
+			cerbo_init(&gx, GX_HOST, true, "WiCAN-Display", 0);
+			cerbo_network(&gx, true, NOW - 30000);
+			input.cerbo = &gx;
+			input.safe_mode = true;
+			break;
+		case 3:
+			cerbo_init(&gx, GX_HOST, false, "WiCAN-Display", 0);
+			input.cerbo = &gx;
+			break;
+		case 4:
+			gx_joined(pick(2) == 0 ? 1000 : 20000);
+			break;
+		case 5:
+			gx_session(pick(2) == 0 ? 3000 : 19000);
+			break;
+		case 6:
+			gx_silent();
+			break;
+		case 7:
+			// A flow of a newer contract, behind a bundle that could be read or behind none
+			gx_session(90000);
+			if(pick(2) == 0) gx_bundle(any_members(), age + 600, age + 600);
+			gx_message("{\"v\":2,\"boot\":7,\"t\":1,\"values\":{\"GX_BATT_SOC\":1}}", 500);
+			break;
+		case 8:
+			// The session ended behind its last bundle, a while ago or just now
+			gx_session(90000);
+			gx_bundle(any_members(), age, age);
+			behind = (uint64_t)pick(20000);
+			cerbo_down(&gx, NOW - (age > behind ? age - behind : 0));
+			break;
+		case 9:
+			// The display left the network behind its last bundle
+			gx_session(90000);
+			gx_bundle(any_members(), age, age);
+			cerbo_network(&gx, false, NOW - (age > 1000 ? age - 1000 : 0));
+			break;
+		case 10:
+			// A bundle that waited on its way: published up to 20 s before it arrived, behind one that did not wait
+			gx_session(90000);
+			gx_bundle(any_members(), 30000, 30000);
+			behind = (uint64_t)pick(20000);
+			age = (uint64_t)pick(9000);
+			gx_bundle(any_members(), age + behind, age);
+			gx_lagged = gx.lag_ms > 0;
+			break;
+		default:
+			// It delivers, or did until a while ago
+			gx_session(90000);
+			gx_bundle(any_members(), age, age);
+			break;
+	}
+}
+
+static bool of_cerbo(const char *key)
+{
+	return key[0] == 'G' && key[1] == 'X' && key[2] == '_';
+}
+
+// What a page that names a value of the Cerbo has to be: the rules of scene.h a second way - the tables of the
+// header as tables, the ages reckoned from the times the store holds, each item for itself. The modules below
+// are asked what they hold: the two stores, the views, the text and the level of a value.
+static const char *model_cerbo_page(int *shown_values, int *missed_values)
+{
+	const layout_page_t *page = &world.layout->pages[nav.page];
+	conn_view_t view = conn_view(&conn, input.now_ms);
+	bool adapter_shows = (unsigned)view < COUNT(VIEWS) && VIEWS[view].values;
+	bool source = input.cerbo != NULL;
+	bool on = source && input.cerbo->host[0] != '\0' && !input.cerbo->safe_mode;
+	cerbo_view_t gx_view = source ? cerbo_view(input.cerbo, input.now_ms) : CERBO_VIEW_OFF;
+	bool first_of_cerbo = of_cerbo(page->items[0].key);
+	bool gx_shows = source && gx_view == CERBO_VIEW_LIVE;
+	bool scanning = view == CONN_VIEW_SCAN;
+	bool shows, old = false;
+	int of_adapter = 0, level = 0, dots = 0, dot = -1;
+	const char *note = "";
+	ring_kind_t ring;
+	char text[SCENE_VALUE_SIZE], label[LAYOUT_TITLE_SIZE];
+
+	for(int i = 0; i < page->item_count; i++)
+	{
+		if(!of_cerbo(page->items[i].key)) of_adapter++;
+	}
+	// A value of the store that is younger than a minute is one to show, whatever became of the session
+	for(int i = 0; source && i < input.cerbo->values.count; i++)
+	{
+		uint64_t seen_ms = input.cerbo->values.items[i].seen_ms;
+
+		if(input.now_ms < seen_ms || input.now_ms - seen_ms < 60000) gx_shows = true;
+	}
+	shows = gx_shows || (of_adapter > 0 && adapter_shows);
+
+	for(int i = 0; i < world.layout->page_count; i++)
+	{
+		if(!layout_page_shown(world.layout, i, world.catalog)) continue;
+		if(i == nav.page) dot = dots;
+		dots++;
+	}
+	if(scene->dots != dots || scene->dot != dot) return "the dots are not those of the layout";
+	if(scene->over != SCENE_OVER_NONE || scene->row_count != 0 || scene->big[0] != '\0' || scene->permille != -1) return "a value page has something of another screen";
+
+	if(!shows)
+	{
+		// The notice of the source of the first value
+		if(scene->kind != SCENE_NOTICE || scene->item_count != 0 || scene->title[0] != '\0') return "a page with nothing to show is no notice";
+		if(first_of_cerbo)
+		{
+			const char *line = gx_view == CERBO_VIEW_OFF && input.safe_mode ? "Cerbo aus (sicherer Modus)" : CERBO_LINES[gx_view];
+
+			if(scene->line_count != 1 || strcmp(scene->lines[0], line) != 0) return "the notice of a page whose first value is one of the Cerbo is not the line of the Cerbo";
+			ring = CERBO_RINGS[gx_view];
+		}
+		else
+		{
+			int lines = view == CONN_VIEW_ECU_OFFLINE && conn_state(&conn)->batt_mv >= 0 ? 2 : 1;
+
+			if(scene->line_count != lines || strcmp(scene->lines[0], VIEWS[view].text) != 0) return "the notice of a page whose first value is one of the adapter is not the one of the adapter";
+			ring = VIEWS[view].ring;
+		}
+		if(strcmp(scene->note, input.safe_mode ? SAFE_NOTE : input.heat != GUARD_HEAT_NORMAL ? HOT_NOTE : "") != 0) return "the note of a notice is not the one of the safe mode or of the heat, or there is one without them";
+		if(scanning) ring = RING_PROGRESS;
+		if(scene->ring.kind != ring) return "the ring of a notice is not the one of the source that speaks, or not the progress of a scan";
+		if(scene->ring.permille != (scanning ? ring_state(view, conn_state(&conn), 0, false).permille : 0)) return "the ring of a notice has another progress than the scan";
+		return NULL;
+	}
+
+	if(scene->kind != SCENE_VALUES || scene->line_count != 0) return "a page that has something to show is no page of values";
+	if(strcmp(scene->title, page->title) != 0) return "the title is not the one of the page";
+	if(scene->item_count != page->item_count) return "the page does not show the values of the layout";
+	for(int i = 0; i < page->item_count; i++)
+	{
+		const layout_item_t *item = &page->items[i];
+		const scene_item_t *shown = &scene->items[i];
+		layout_widget_t widget = item->widget == LAYOUT_WIDGET_ARC || item->widget == LAYOUT_WIDGET_BAR || item->widget == LAYOUT_WIDGET_STATE ? item->widget : LAYOUT_WIDGET_NUMBER;
+		const value_t *value = NULL;
+		bool there = false, fresh = false, missed = false;
+		const char *wanted = SCENE_DASH;
+		const char *unit = "";
+		scene_tone_t tone = SCENE_TONE_DIM;
+		int reached = 0;
+
+		if(of_cerbo(item->key))
+		{
+			value = on ? values_find(&input.cerbo->values, item->key) : NULL;
+			if(value != NULL)
+			{
+				uint64_t age_ms = input.now_ms > value->seen_ms ? input.now_ms - value->seen_ms : 0;
+
+				fresh = age_ms < 5000;
+				there = age_ms < 60000 && layout_item_text(item, value, text, sizeof(text));
+				missed = !there;
+			}
+			if(!on) wanted = SCENE_UNAVAILABLE;
+			// The unit of the page, and no other
+			if(there && widget != LAYOUT_WIDGET_STATE && item->has_unit) unit = item->unit;
+		}
+		else if(adapter_shows)
+		{
+			// As on every page of the adapter: held during a scan whatever its age, n. v. where the profile lacks it
+			value_age_t age;
+			bool kept, lacking;
+
+			value = values_find(&values, item->key);
+			age = values_age(value, input.now_ms);
+			kept = value != NULL && (scanning || age != VALUE_AGE_GONE);
+			there = kept && layout_item_text(item, value, text, sizeof(text));
+			lacking = !kept && world.catalog != &unloaded && catalog_find(world.catalog, item->key) < 0;
+			fresh = !scanning && age == VALUE_AGE_FRESH;
+			missed = !there && value != NULL && (age != VALUE_AGE_GONE || world.catalog == &unloaded || catalog_find(world.catalog, item->key) >= 0);
+			if(lacking) wanted = SCENE_UNAVAILABLE;
+			if(there && widget != LAYOUT_WIDGET_STATE) unit = layout_item_unit(item, world.catalog);
+		}
+		// else: the adapter is away, and its value is a dash nobody counts
+
+		if(there)
+		{
+			wanted = text;
+			reached = layout_item_level(item, value);
+			if(reached > level) level = reached;
+			if(fresh) tone = reached >= 2 ? SCENE_TONE_ALARM : reached == 1 ? SCENE_TONE_WARN : SCENE_TONE_NORMAL;
+			else old = true;
+			(*shown_values)++;
+		}
+		if(missed)
+		{
+			old = true;
+			(*missed_values)++;
+		}
+
+		if(item->label[0] != '\0') snprintf(label, sizeof(label), "%s", item->label);
+		else if(!fmt_label(item->key, label, sizeof(label))) label[0] = '\0';
+		if(strcmp(shown->label, label) != 0) return "the label of a value is not the one of the item, or not the one made from its key";
+		if(shown->widget != widget) return "the widget of a value is not the one of the item";
+		if(strcmp(shown->text, wanted) != 0) return "a value does not show what its source has of it: its text, the dash, or n. v.";
+		if(shown->tone != tone) return "the tone of a value is not that of its age and its limits";
+		if(strcmp(shown->unit, unit) != 0) return "the unit of a value is not the one of its page - or, for the adapter, of its catalogue";
+		if(!there && shown->permille != -1) return "a value that is not shown has a place in a range";
+		if(there && widget != LAYOUT_WIDGET_ARC && widget != LAYOUT_WIDGET_BAR && shown->permille != -1) return "a number or a state has a place in a range";
+		if(there && (widget == LAYOUT_WIDGET_ARC || widget == LAYOUT_WIDGET_BAR) && item->min.set && item->max.set && item->min.value < item->max.value)
+		{
+			double number = (value->kind == VALUE_NUMBER ? value->number : value->kind == VALUE_ON ? 1 : 0) * item->scale;
+			double part = (number - item->min.value) * 1000 / (item->max.value - item->min.value);
+
+			if(isfinite(part) && shown->permille != (part <= 0 ? 0 : part >= 1000 ? 1000 : (int)part)) return "an arc or a bar does not stand where its value lies in its range";
+		}
+	}
+
+	// The note: the first that has something to say
+	if(input.safe_mode) note = SAFE_NOTE;
+	else if(input.heat != GUARD_HEAT_NORMAL) note = HOT_NOTE;
+	else if(of_adapter > 0 && view != CONN_VIEW_LIVE) note = VIEWS[view].text;
+	else note = gx_view == CERBO_VIEW_OFF && input.safe_mode ? "Cerbo aus (sicherer Modus)" : CERBO_LINES[gx_view];
+	if(strcmp(scene->note, note) != 0) return "the note of a page of values is not the first of: safe mode, heat, the adapter if the page names it and it is not live, the Cerbo if it does not deliver";
+
+	ring = scanning ? RING_PROGRESS : level >= 2 ? RING_RED : level == 1 || old ? RING_YELLOW : RING_NONE;
+	if(scene->ring.kind != ring) return "the ring of a page of values is not the progress of a scan, or else what its values say alone";
+	if(scene->ring.permille != (scanning ? ring_state(view, conn_state(&conn), 0, false).permille : 0)) return "the ring of a page of values has another progress than the scan";
+	return NULL;
+}
+
+// Value pages that name a value of the Cerbo: every view of the adapter, a second source of every kind, values
+// of both that are fresh, old, gone, never seen, beyond their limits or not to be printed; the pages of the
+// fixture or a page of one to six values of either source with limits of its own
+static void test_made_up_cerbo_pages(void)
+{
+	static const uint32_t seeds[] = {7, 2473, 20261011, 0xC0FFEE};
+	static const uint64_t ages[] = {0, 1, 2999, 3000, 3001, 9999, 10000, 10001, 60000};
+	static const int fixture_pages[] = {1, 2, 3, 4, 5};
+	// Pages of the Cerbo alone and of both, each as values and as a notice
+	static int kinds[2][2];
+	// Notices by the view of the Cerbo that speaks, and notices in which the adapter speaks
+	static int notices[CERBO_VIEW_LIVE + 1], adapter_notices;
+	// Pages of values by their ring, and by the view of the Cerbo below them
+	static int rings[5], below[CERBO_VIEW_LIVE + 1];
+	int differences = 0, scenes = 0, back = 0, lagged = 0, unavailable = 0, values_shown = 0, values_missed = 0, parked = 0, no_source = 0, borrowed = 0;
+	bool reached = true;
+
+	for(int s = 0; s < COUNT(seeds); s++)
+	{
+		random_state = seeds[s];
+		for(int n = 0; n < 4000; n++)
+		{
+			const char *wrong;
+			const layout_page_t *page;
+			bool mixed = false, counted = pick(2) == 0;
+			int v;
+
+			stage();
+			values_init(&values);
+			for(int i = 0; i < COUNT(VALUES); i++)
+			{
+				char json[64];
+				uint64_t age_ms;
+
+				if(pick(5) == 0) continue;
+				snprintf(json, sizeof(json), "{\"%s\":%s}", VALUES[i].key, pick(4) == 0 ? VALUES[i].strange : VALUES[i].usual);
+				age_ms = pick(2) == 0 ? ages[pick(COUNT(ages))] : (uint64_t)pick(13000);
+				if(counted) seen_counted(json, age_ms, (uint32_t)i + 1);
+				else seen(json, age_ms);
+			}
+			// Now and then the adapter delivers something under a key of the Cerbo: no page may show it
+			if(pick(6) == 0)
+			{
+				if(counted) seen_counted("{\"GX_BATT_SOC\":12,\"GX_SW_B2B\":\"on\"}", 500, 99);
+				else seen("{\"GX_BATT_SOC\":12,\"GX_SW_B2B\":\"on\"}", 500);
+				borrowed++;
+			}
+
+			if(pick(2) == 0)
+			{
+				world.layout = &gx_layout;
+				nav.page = fixture_pages[pick(COUNT(fixture_pages))];
+			}
+			else
+			{
+				layout_item_t *item = probe();
+				int count = 1 + pick(LAYOUT_ITEMS_MAX);
+				int of_the_cerbo = pick(count);
+
+				for(int i = 0; i < count; i++)
+				{
+					// A value of the Cerbo in one place at least; elsewhere of either source. One key more than each
+					// table has: a value that never arrives
+					bool cerbo_key_here = i == of_the_cerbo || pick(2) == 0;
+					int which = pick(COUNT(GX_VALUES) + 1);
+					int other = pick(COUNT(VALUES) + 1);
+
+					if(i > 0) item = probe_more("");
+					if(cerbo_key_here) SET(item->key, which < COUNT(GX_VALUES) ? GX_VALUES[which].key : "GX_NEVER_SENT");
+					else SET(item->key, other < COUNT(VALUES) ? VALUES[other].key : "TURBO_SPEED");
+					item->widget = (layout_widget_t)pick(5);
+					item->decimals = (uint8_t)pick(4);
+					if(pick(3) == 0)
+					{
+						item->has_unit = true;
+						SET(item->unit, "Einh.");
+					}
+					if(pick(3) == 0) SET(item->label, "Beschriftung");
+					if(pick(2) == 0)
+					{
+						limit(&item->min, -20);
+						limit(&item->max, 100);
+					}
+					if(item->widget == LAYOUT_WIDGET_STATE && pick(2) == 0)
+					{
+						item->map_count = 2;
+						SET(item->map[0].raw, "on");
+						SET(item->map[0].text, "an");
+						SET(item->map[1].raw, "*");
+						SET(item->map[1].text, "anders");
+					}
+					// Most values of the tables that can be printed lie beyond these
+					if(pick(6) == 0) limit(&item->warn_hi, 0);
+					if(pick(12) == 0) limit(&item->crit_hi, 0);
+				}
+			}
+			world.catalog = pick(4) == 0 ? &unloaded : &catalog;
+
+			// The adapter in one of its ten views, mostly live or asleep
+			v = pick(COUNT(VIEWS));
+			if(pick(4) == 0) v = CONN_VIEW_NO_WIFI;
+			if(pick(3) == 0) v = CONN_VIEW_LIVE;
+			any_adapter();
+			VIEWS[v].make();
+			input.safe_mode = pick(10) == 0;
+			input.heat = pick(10) == 0 ? GUARD_HEAT_DIM : GUARD_HEAT_NORMAL;
+			any_cerbo();
+			// Mostly the time everything was seen by; a later one; one before, the clock of another task
+			if(pick(8) == 0) input.now_ms = NOW + (uint64_t)pick(12000);
+			if(pick(16) == 0)
+			{
+				input.now_ms = NOW - (uint64_t)pick(70000);
+				back++;
+			}
+
+			build();
+			scenes++;
+			page = &world.layout->pages[nav.page];
+			for(int i = 0; i < page->item_count; i++)
+			{
+				if(!of_cerbo(page->items[i].key)) mixed = true;
+			}
+			wrong = model_cerbo_page(&values_shown, &values_missed);
+			if(wrong != NULL)
+			{
+				if(differences < 10) printf("  seed %lu, page %d: %s\n", (unsigned long)seeds[s], n, wrong);
+				differences++;
+			}
+
+			kinds[mixed][scene->kind == SCENE_VALUES]++;
+			if(input.cerbo == NULL) no_source++;
+			if(gx_lagged) lagged++;
+			if(scene->kind == SCENE_NOTICE && of_cerbo(page->items[0].key)) notices[input.cerbo != NULL ? cerbo_view(input.cerbo, input.now_ms) : CERBO_VIEW_OFF]++;
+			if(scene->kind == SCENE_NOTICE && !of_cerbo(page->items[0].key)) adapter_notices++;
+			if(scene->kind == SCENE_VALUES)
+			{
+				bool nv = false, dash_of_adapter = false;
+
+				rings[scene->ring.kind]++;
+				below[input.cerbo != NULL ? cerbo_view(input.cerbo, input.now_ms) : CERBO_VIEW_OFF]++;
+				for(int i = 0; i < scene->item_count; i++)
+				{
+					if(of_cerbo(page->items[i].key) && strcmp(scene->items[i].text, SCENE_UNAVAILABLE) == 0) nv = true;
+					if(!of_cerbo(page->items[i].key) && strcmp(scene->items[i].text, SCENE_DASH) == 0) dash_of_adapter = true;
+				}
+				if(nv) unavailable++;
+				// The parked camper: values of the Cerbo next to dashes of an adapter that is away
+				if(dash_of_adapter && conn_view(&conn, input.now_ms) != CONN_VIEW_LIVE && conn_view(&conn, input.now_ms) != CONN_VIEW_SCAN && conn_view(&conn, input.now_ms) != CONN_VIEW_NO_API) parked++;
+			}
+		}
+	}
+
+	printf("  made-up pages with values of the Cerbo: of the Cerbo alone %d of values and %d notices, of both %d and %d; notices of the adapter %d, of the Cerbo by its view",
+	       kinds[0][1], kinds[0][0], kinds[1][1], kinds[1][0], adapter_notices);
+	for(int i = 0; i < CERBO_VIEW_LIVE; i++) printf(" %d", notices[i]);
+	printf("\n  pages of values: ring off %d, yellow %d, red %d, progress %d; by the view of the Cerbo", rings[RING_NONE], rings[RING_YELLOW], rings[RING_RED], rings[RING_PROGRESS]);
+	for(int i = 0; i <= CERBO_VIEW_LIVE; i++) printf(" %d", below[i]);
+	printf("\n  values shown %d, missed %d; pages with n. v. for the Cerbo %d, with dashes for an adapter that is away %d; without a source %d, behind a bundle that lagged %d, "
+	       "at a time before everything %d, with the adapter delivering under keys of the Cerbo %d\n", values_shown, values_missed, unavailable, parked, no_source, lagged, back, borrowed);
+	for(int i = 0; i < CERBO_VIEW_LIVE; i++) reached = reached && notices[i] >= 50;
+	for(int i = 0; i <= CERBO_VIEW_LIVE; i++) reached = reached && below[i] >= 50;
+	reached = reached && kinds[0][0] >= 500 && kinds[0][1] >= 500 && kinds[1][0] >= 500 && kinds[1][1] >= 500 && adapter_notices >= 200 && rings[RING_NONE] >= 500 && rings[RING_YELLOW] >= 500 &&
+	          rings[RING_RED] >= 500 && rings[RING_PROGRESS] >= 200 && rings[RING_GREY] == 0;
+	check(scenes == 16000 && reached, "16000 made-up pages with values of the Cerbo reach pages of the Cerbo alone and of both sources, each as values and as a notice, notices of the adapter, "
+	      "the notice of every view of the Cerbo that does not deliver, pages of values under every view of it, and the ring off, yellow, red and as the progress of a scan - never grey");
+	check(values_shown >= 10000 && values_missed >= 1000 && unavailable >= 500 && parked >= 500 && no_source >= 500 && lagged >= 200 && back >= 500 && borrowed >= 1000,
+	      "they show values and miss values in thousands, n. v. for a source that is off, dashes for an adapter that is away, scenes without any source, bundles that lagged, "
+	      "the clock stepping back, and an adapter that delivers under keys of the Cerbo");
+	check(differences == 0, "each of these pages is what the rules of scene.h give when they are followed a second way: values or the notice of the source of its first value, each value "
+	      "from the store of its own source with the age and the unit of that source, the note, the dots, and the ring by the values alone");
+}
+
 /* In child processes ----------------------------------------------------------------------------------- */
 
 // Runs a group of checks in a child process. The checks print as always; the parent learns whether one of
@@ -5309,6 +6548,14 @@ static void group_values(void)
 	test_items();
 	test_ranges();
 	test_notices();
+}
+
+static void group_cerbo(void)
+{
+	test_cerbo_screens();
+	test_cerbo_rules();
+	test_cerbo_apart();
+	test_page_shows();
 }
 
 static void group_menu(void)
@@ -5352,11 +6599,13 @@ int main(void)
 	if(test_failures != 0) return test_end();
 
 	in_child(group_values, "value pages", 60);
+	in_child(group_cerbo, "value pages with values of the Cerbo", 60);
 	in_child(group_menu, "menu, fault memory start, progress, brightness, web access, settings and their dialogs", 60);
 	in_child(group_lists, "lists, clear dialog and failure", 60);
 	in_child(group_overlays, "overlays, screens in every view and long texts", 60);
 	in_child(group_dump, "dump", 60);
 	in_child(test_made_up, "made-up inputs", 120);
 	in_child(test_made_up_pages, "made-up value pages", 120);
+	in_child(test_made_up_cerbo_pages, "made-up value pages with values of the Cerbo", 120);
 	return test_end();
 }

@@ -787,3 +787,15 @@ MUTATIONS += [
     ("web_json_cerbo_size_changed", T, H, "#define WEB_VALUES_CERBO_SIZE   4672", "#define WEB_VALUES_CERBO_SIZE   4673"),
 ]
 
+# PUT /api/layout: a key of the second source is never unknown
+UNKNOWN_GX = "\t\t\t\tif(cerbo_key(key)) continue;\n"
+
+MUTATIONS += [
+    ("web_json_report_cerbo_keys_unknown", T, F, UNKNOWN_GX, ""),
+    ("web_json_report_cerbo_keys_unknown_once_the_catalogue_names_one", T, F, UNKNOWN_GX, "\t\t\t\tif(cerbo_key(key) && catalog_find(catalog, key) < 0 && catalog_find(catalog, \"GX_BATT_SOC\") < 0) continue;\n"),
+    ("web_json_report_cerbo_key_ends_the_page", T, F, UNKNOWN_GX, "\t\t\t\tif(cerbo_key(key)) break;\n"),
+    ("web_json_report_cerbo_prefix_of_two_letters", T, F, UNKNOWN_GX, "\t\t\t\tif(strncmp(key, CERBO_PREFIX, 2) == 0) continue;\n"),
+    ("web_json_report_cerbo_prefix_without_case", T, F, UNKNOWN_GX, "\t\t\t\tif((key[0] | 0x20) == 'g' && (key[1] | 0x20) == 'x' && key[2] == '_') continue;\n"),
+    ("web_json_report_cerbo_prefix_anywhere", T, F, UNKNOWN_GX, "\t\t\t\tif(strstr(key, CERBO_PREFIX) != NULL) continue;\n"),
+    ("web_json_report_cerbo_keys_only_on_shown_pages", T, F, UNKNOWN_GX, "\t\t\t\tif(cerbo_key(key) && !layout->pages[p].hidden) continue;\n"),
+]

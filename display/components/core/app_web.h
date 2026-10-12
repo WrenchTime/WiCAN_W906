@@ -187,6 +187,12 @@ int app_web_wifi(app_t *app, web_route_t route, const char *body, size_t body_le
 // the same address nothing of the source changes), APP_EVENT_STORE_SETTINGS - also when the text changed nothing -, 200 with
 // settings_to_json(). The address of the Cerbo is set and taken away here alone, with the release and
 // without the knob: a wrong one locks nobody out.
+// If the request switched the second source on or off (cerbo_on() before and behind it: the first address, or
+// the last one taken away; never in safe mode, and not by one address in place of another) and the views are
+// neither stored nor a preview, they are chosen anew (app_choose_layout()): the built-in pages of the Cerbo
+// come behind those of the vehicle, or go. The page shown stays if the new views show one at its position
+// (layout_page_shown()), else the value pages start at the first page - as behind a layout the browser sends.
+// Views that are stored or looked at stay as they are, with or without pages of the Cerbo in them.
 // web_open - whether the web interface is released for good - can only be changed at the display
 // (NAV_DO_WEB_OPEN_TOGGLE). A text that names the value in use, or does not name the member, is taken as every
 // other: a page may send back the settings it got. A text that names the other value changes nothing, not

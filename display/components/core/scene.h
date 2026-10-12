@@ -25,6 +25,7 @@
 #include "access.h"
 #include "guard.h"
 #include "texts.h"
+#include "cerbo.h"
 
 /*
  * What is on the screen, as plain data: every text, every number, every state the drawing code needs,
@@ -142,6 +143,8 @@ typedef struct
 	const nav_world_t *world;           // the same that was passed to nav (layout and catalogue are in it)
 	const conn_t *conn;
 	const values_t *values;
+	const cerbo_t *cerbo;               // the second source, for the values whose key begins with CERBO_PREFIX; may
+	                                    // be NULL: there is none, which counts as one that is switched off
 	const dtc_flow_t *flow;
 	dtc_flow_block_t read_block;        // dtc_flow_read_block()
 	dtc_flow_block_t clear_block;       // dtc_flow_clear_block()
@@ -244,6 +247,47 @@ typedef struct
  *   nav_tick() leaves it).
  *   note, the first that applies: "Sicherer Modus – eingebaute Ansichten" in safe mode; "Zu heiß – Anzeige
  *   gedimmt" if heat is not GUARD_HEAT_NORMAL; text_view(view) for SCAN and NO_API; else empty.
+ *   A PAGE THAT NAMES A VALUE OF THE SECOND SOURCE (an item whose key begins with CERBO_PREFIX, cerbo.h;
+ *   layout_page_sources() says gx) is made by rules of its own, next to those above and in place of them. A
+ *   page without such a value is made as above, whatever `cerbo` is. Dots and dot are those of every page.
+ *     wican shows   the view of the connection is LIVE, SCAN or NO_API
+ *     gx shows      cerbo_showing(): the Cerbo delivers, or a value of its store is not gone yet. Never
+ *                   without a source (`cerbo` NULL).
+ *     The page shows values if one of its sources shows: the Cerbo, or - if it names a value of the adapter
+ *     as well - the adapter. scene_page_shows() is this rule.
+ *   It shows values: SCENE_VALUES, title = title of the page, label, widget and permille as above, and
+ *     a value of the adapter   as above (with the rule of the view SCAN) while the adapter shows. While it
+ *                              does not: SCENE_DASH, tone DIM, no unit - whatever the display still holds of
+ *                              it: the adapter is away, and what is known of that is said by the note. Such
+ *                              a dash raises no level and does not count as old.
+ *     a value of the Cerbo     from the store of the Cerbo (cerbo->values) alone, by its age there
+ *                              (cerbo_age(): CERBO_FRESH_MS, CERBO_KEPT_MS): fresh as LIVE above, old as OLD
+ *                              above (tone DIM), gone or not in the store SCENE_DASH, tone DIM. A value whose
+ *                              text cannot be made is a dash as well. While the source is off (`cerbo` NULL,
+ *                              or cerbo_on() false) SCENE_UNAVAILABLE, tone DIM: no key of it is looked up.
+ *                              unit = the unit of the item if it has one, else empty - no catalogue is asked;
+ *                              empty for a state widget and when the text is no value. The rule of the view
+ *                              SCAN does not count for it: the Cerbo delivers through a scan of the adapter.
+ *     level and old, for the ring: as above. A value of the Cerbo is old if it is shown dimmed, or is a dash
+ *     while the store of the Cerbo still holds it (gone by its age, or without a text). A key the last bundle
+ *     did not name is not in that store: the Cerbo does not have the value, nothing went missing, and it does
+ *     not count - nor does SCENE_UNAVAILABLE.
+ *     note, the first that applies: the safe mode and the heat as above; text_view(view) if the page names a
+ *     value of the adapter and the view is not LIVE (a scan, a firmware without the API, or an adapter that is
+ *     away while the Cerbo shows); text_cerbo() of cerbo_view() and safe_mode if that view is not LIVE (the
+ *     values stand dimmed while the Cerbo is away, or the source is off); else empty.
+ *   It shows none: SCENE_NOTICE by the source of its FIRST item. The adapter: the notice of the view as
+ *     above, with the line of the battery voltage. The Cerbo: line 1 text_cerbo() of cerbo_view() and
+ *     safe_mode (CERBO_VIEW_OFF without a source). note: the safe mode and the heat as above, else empty.
+ *   ring, in place of the one above, the first that applies:
+ *     the view of the connection is SCAN   the progress, as on every page
+ *     the page shows values                what they say alone: RED if level is 2 or more, YELLOW if level
+ *                                          is 1 or old, else NONE - whatever the view of the adapter is
+ *     it shows none                        by the source of its first item: the adapter as above
+ *                                          (ring_state()), the Cerbo ring_cerbo() of its view
+ *   What that gives in a parked camper - the adapter asleep, the Cerbo delivering: a page of the adapter is
+ *   its notice with the red ring, as before; a page of the Cerbo shows its values without a ring; a page of
+ *   both shows the values of the Cerbo, dashes for those of the adapter, and the text of the adapter below.
  * NAV_MENU       SCENE_LIST "Menü": "Fehlerspeicher"; "Helligkeit" detail "80 %" (world->brightness);
  *                "Nachtmodus" detail "an" / "aus"; "Web-Zugriff" detail "frei" / "gesperrt"
  *                (world->release_open); "Info"; "Einstellungen"; "Zurück"
@@ -352,6 +396,15 @@ typedef struct
  * The screen below is filled as without the overlay.
  */
 void scene_build(const scene_input_t *input, scene_t *scene);
+
+// Whether value page `page` of the layout shows values right now (SCENE_VALUES) or a notice in their place:
+// the rule of scene_build() for NAV_PAGES, for whoever has to know it without a scene (app.h: the page the
+// long press leads to). view: conn_view(). cerbo: the second source, may be NULL (none).
+//   a page that names no value of the Cerbo   the view is LIVE, SCAN or NO_API
+//   a page that names one                     cerbo_showing(), or - if it names a value of the adapter as
+//                                             well - the view is LIVE, SCAN or NO_API
+// false for a page outside of the layout. Whether the page is in the rotation of the knob is not asked.
+bool scene_page_shows(const layout_t *layout, int page, conn_view_t view, const cerbo_t *cerbo, uint64_t now_ms);
 
 // The scene as text, for the tests and for a look at a screen without a display: one "name: value" line per
 // field that is in use, in the order of the struct; items and rows one line each. Every line ends with "\n".

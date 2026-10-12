@@ -151,6 +151,7 @@ typedef struct
 	bool previous_firmware;
 	bool rolled_back;
 	bool no_builtin;        // the built-in layout is damaged
+	bool no_builtin_gx;     // the built-in pages of the Cerbo are damaged or not there: no page is appended
 } machine_t;
 
 // What the platform was asked to carry out since the counters were cleared
@@ -273,6 +274,11 @@ static json_token_t gx_work[CERBO_TOKENS];
 // Every story begins with a display that has the address of a Cerbo that sends bundles, rubbish and breaks off
 // (gx_script()): for the stories of the fault memory, which run a second time that way
 static bool gx_everywhere;
+// The firmware of the stories without the built-in pages of the Cerbo (display/layouts/gx_default.json), as one
+// whose file is damaged: a display that has the address then has the source alone and no page of it - the
+// display on which every screen and every byte outside of the source is the one of a display without a Cerbo.
+// For the stories that are told twice to show exactly that. Every other story has the firmware as it is built.
+static bool firmware_without_gx_pages;
 static done_t done;
 static wifi_t wifi;
 static adapter_t wican;
@@ -296,6 +302,7 @@ static char clear_path[POLL_PATH_SIZE]; // and its path
 
 // Hand-written texts
 static char builtin_text[LAYOUT_TEXT_MAX + 1];
+static char builtin_gx_text[LAYOUT_TEXT_MAX + 1];
 static char w906_config[4096];
 static char w906_values[2048];
 static char other_config[512];
@@ -810,6 +817,11 @@ static void start_at(uint64_t at_ms)
 		boot.builtin_layout = builtin_text;
 		boot.builtin_length = strlen(builtin_text);
 	}
+	if(!machine.no_builtin_gx)
+	{
+		boot.builtin_gx = builtin_gx_text;
+		boot.builtin_gx_length = strlen(builtin_gx_text);
+	}
 	if(flash.has_catalog)
 	{
 		boot.catalog_json = flash.catalog;
@@ -1307,15 +1319,33 @@ static int light(void)
 	return app_backlight(app, now);
 }
 
+// The stories run on a display whose built-in views end with the five pages of the Cerbo: where a fixture counts
+// the seven pages of the vehicle ("dots: 3/7") the screen has to count twelve ("dots: 3/12"), and every other
+// byte of every screen has to be the one of the fixture. dots_rewritten counts the fixtures read that way.
+static bool dots_of_twelve;
+static long dots_rewritten;
+
 // The screen is the text of fixtures/app_<name>.txt, byte for byte
 static bool screen_is(const char *name)
 {
 	char path[160];
+	char *dots;
 
 	snprintf(path, sizeof(path), "fixtures/app_%s.txt", name);
-	if(!read_fixture(path, wanted, sizeof(wanted) - 1)) return false;
+	// Room is left for two bytes more: the line break below, and the digit a "12" has more than a "7"
+	if(!read_fixture(path, wanted, sizeof(wanted) - 2)) return false;
 	// Every line of a dump ends with a line break; read_fixture() took the last one away
 	strcat(wanted, "\n");
+	dots = dots_of_twelve ? strstr(wanted, "\ndots: ") : NULL;
+	// "\ndots: 3/7\n": the position has one digit, so the slash is byte 8 and the 7 byte 9 from the line break before
+	// them, and the line ends with byte 10
+	if(dots != NULL && dots[8] == '/' && dots[9] == '7' && dots[10] == '\n')
+	{
+		// "7" becomes "12": one byte more, and what follows moves behind it
+		memmove(dots + 11, dots + 10, strlen(dots + 10) + 1);
+		memcpy(dots + 9, "12", 2);
+		dots_rewritten++;
+	}
 
 	if(strcmp(screen(), wanted) == 0) return true;
 	printf("  %s wants\n%s  the screen is\n%s", path, wanted, dumped);
@@ -1362,6 +1392,7 @@ static dtc_flow_phase_t phase(void)
 static void load_fixtures(void)
 {
 	bool loaded = read_fixture("../layouts/w906_default.json", builtin_text, sizeof(builtin_text)) &&
+	              read_fixture("../layouts/gx_default.json", builtin_gx_text, sizeof(builtin_gx_text)) &&
 	              read_fixture("../../tools/w906/fixtures/car_config_w906.json", w906_config, sizeof(w906_config)) &&
 	              read_fixture("../../tools/w906/fixtures/autopid_data_ignition_on.json", w906_values, sizeof(w906_values)) &&
 	              read_fixture("fixtures/app_config_other.json", other_config, sizeof(other_config)) &&
@@ -1445,6 +1476,7 @@ static void factory(void)
 		strcpy(flash.settings, GX_SETTINGS);
 		flash.has_settings = true;
 	}
+	machine.no_builtin_gx = firmware_without_gx_pages;
 }
 
 // The display as it comes: its stored settings do not say whether the web interface is released for good, so
@@ -1518,6 +1550,10 @@ static inline void app_harness_unused(void)
 	(void)gx_seen;
 	(void)gx_work;
 	(void)gx_everywhere;
+	(void)firmware_without_gx_pages;
+	(void)dots_of_twelve;
+	(void)dots_rewritten;
+	(void)builtin_gx_text;
 	(void)gx_send;
 	(void)gx_publish;
 	(void)gx_bundle_of;

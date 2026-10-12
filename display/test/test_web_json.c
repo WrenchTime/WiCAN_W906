@@ -419,6 +419,8 @@ static void model_report(bool ok, const layout_report_t *report, const layout_t 
 			{
 				if(strcmp(catalog->entries[k].name, key) == 0) known = true;
 			}
+			// A value of the Cerbo is in no catalogue, and not unknown for that: G, X and _ at the beginning
+			if(key[0] == 'G' && key[1] == 'X' && key[2] == '_') known = true;
 			if(known) continue;
 			at += (size_t)snprintf(expected + at, sizeof(expected) - at, "%s%s", first ? "" : ",", q(key));
 			first = false;
@@ -4099,6 +4101,91 @@ static void test_random_report(void)
 	check(invalid == 0, "report: every one of the 3000 random answers is JSON for the reader of the project");
 }
 
+// PUT /api/layout never calls a value of the Cerbo unknown: the editor in the browser would mark the built-in
+// pages of the Cerbo as soon as the catalogue of the adapter is loaded
+static void test_report_cerbo(void)
+{
+	no_catalog();
+	entry("@BATT_V");
+	entry("ENGINE_RPM");
+	no_layout("L");
+	page("GX_BATT_SOC ENGINE_RPM GX_SW_B2B", false);
+	check(unknown_gives(1, 3, ""), "report: values of the Cerbo next to one of the catalogue: nothing is unknown, although the catalogue names neither of them");
+	no_layout("L");
+	page("GX_BATT_SOC A GX_SW_B2B", false);
+	page("B GX_BATT_SOC GX_T_BOILER", true);
+	check(unknown_gives(2, 6, "\"A\",\"B\""), "report: between values of the Cerbo the keys nobody has are unknown as before, on a hidden page as well");
+	no_layout("L");
+	page("GX_BATT_SOC GX_BATT_V GX_BATT_I GX_BATT_P GX_CELL_MIN GX_CELL_MAX", false);
+	page("GX_PV_P GX_DC_P GX_AC_OUT_P GX_MULTI_MODE GX_STARTER_V GX_ALT_I", false);
+	check(unknown_gives(2, 12, ""), "report: two pages of the Cerbo alone: nothing is unknown");
+	no_layout("L");
+	page("GX gx_A Gx_A XGX_A GX-A GXA", false);
+	check(unknown_gives(1, 6, "\"GX\",\"gx_A\",\"Gx_A\",\"XGX_A\",\"GX-A\",\"GXA\""),
+	      "report: the prefix is GX_ at the beginning and in capitals: six keys that only look like it are unknown");
+	no_layout("L");
+	page("GX_ GX_a _GX_A", false);
+	check(unknown_gives(1, 3, "\"_GX_A\""), "report: the prefix alone decides: GX_ with nothing or with small letters behind it is a key of the Cerbo");
+	no_catalog();
+	entry("@BATT_V");
+	no_layout("L");
+	page("GX_BATT_SOC A", false);
+	check(unknown_gives(1, 2, ""), "report: before the catalogue is loaded nothing is unknown, with or without values of the Cerbo");
+	no_catalog();
+	entry("GX_BATT_SOC");
+	no_layout("L");
+	page("GX_BATT_SOC GX_BATT_V A", false);
+	check(unknown_gives(1, 3, "\"A\""), "report: a catalogue that names a key of the Cerbo is loaded: the keys of the Cerbo are not unknown, in it or not");
+}
+
+// The random reports once more, with keys of the Cerbo among the keys
+static void test_random_report_cerbo(void)
+{
+	static const char *const keys[] = {"A", "B", "GX_BATT_SOC", "GX_SW_B2B", "ENGINE_RPM", "@BATT_V", "GX_", "GX", "gx_A", "XGX_A", "GX_a\"b", "GX_N34567890123456789012345678901"};
+	int different = 0, invalid = 0, unknown = 0, none = 0, of_cerbo = 0;
+	int round, p, i;
+
+	for(round = 0; round < 3000; round++)
+	{
+		int entries = (int)rnd(6);
+
+		no_report();
+		memset(&layout, 0, sizeof(layout));
+		strcpy(layout.name, "L");
+		layout.page_count = (uint8_t)rnd(LAYOUT_PAGES_MAX + 1);
+		for(p = 0; p < layout.page_count; p++)
+		{
+			layout.pages[p].hidden = rnd(3) == 0;
+			layout.pages[p].item_count = (uint8_t)(1 + rnd(LAYOUT_ITEMS_MAX));
+			for(i = 0; i < layout.pages[p].item_count; i++)
+			{
+				const char *key = keys[rnd(12)];
+
+				strcpy(layout.pages[p].items[i].key, key);
+				if(strncmp(key, "GX_", 3) == 0) of_cerbo++;
+			}
+		}
+		no_catalog();
+		if(rnd(4) != 0) entry("@BATT_V");
+		for(i = 0; i < entries; i++) entry(keys[rnd(12)]);
+
+		model_report(true, &report, &layout, &catalog);
+		report_now.ok = true;
+		report_now.report = &report;
+		report_now.layout = &layout;
+		report_now.catalog = &catalog;
+		if(!gives(call_report, expected) || !room_is_right(call_report, expected, rnd(700))) different++;
+		if(!is_json_object(expected)) invalid++;
+		if(strstr(expected, "\"GX_") != NULL) different++;
+		if(strstr(expected, "\"unknown\":[]") == NULL) unknown++;
+		else none++;
+	}
+	printf("  reports of layouts with keys of the Cerbo: %d keys of it, %d reports with unknown keys, %d with none\n", of_cerbo, unknown, none);
+	check(of_cerbo > 10000 && unknown > 1000 && none > 100, "report: 3000 random layouts with keys of the Cerbo among their keys give reports with and without unknown keys");
+	check(different == 0, "report: each of them is written as the format of the header says, and none of them names a key of the Cerbo as unknown");
+	check(invalid == 0, "report: every one of these 3000 answers is JSON for the reader of the project");
+}
+
 // A room far larger than any answer is a room like every other
 static void test_large_room(void)
 {
@@ -4358,6 +4445,7 @@ int main(void)
 	test_forget_request();
 	in_child(test_request_model, "requests: 30 walks of 1000 random texts each: no crash, no hang");
 	test_report();
+	test_report_cerbo();
 	test_report_size();
 	test_every_text_member();
 	test_ticket();
@@ -4371,6 +4459,7 @@ int main(void)
 	test_info_cerbo();
 	in_child(test_random_info_cerbo, "info with a Cerbo: 3000 random infos: no crash, no hang");
 	in_child(test_random_values_cerbo, "values with a Cerbo: 3000 random pairs of stores: no crash, no hang");
+	in_child(test_random_report_cerbo, "report with keys of the Cerbo: 3000 random reports: no crash, no hang");
 
 	check(work[WEB_WIFI_TOKENS].start == 0x5A5A5A5A && work[WEB_WIFI_TOKENS + 1].start == 0x5A5A5A5A,
 	      "no call wrote behind the WEB_WIFI_TOKENS tokens it was given");

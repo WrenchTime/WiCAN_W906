@@ -355,6 +355,8 @@ int app_web_settings(app_t *app, const char *body, size_t body_length, char *out
 	// What the text makes of the settings, looked at before it is taken
 	settings_t wanted;
 	bool taken;
+	// Whether the second source is on, before the text may have given or taken its address
+	bool had_cerbo = cerbo_on(&app->cerbo);
 
 	if(!access_write(&app->access, advance(app, now_ms))) return refuse(403, "locked", out, length);
 
@@ -382,6 +384,14 @@ int app_web_settings(app_t *app, const char *body, size_t body_length, char *out
 	// The second source follows its address at once: another one, or none, forgets the values of the old one.
 	// Settings that leave the address as it is leave every byte of the source as it is.
 	if(strcmp(app->settings.cerbo, cerbo_host(&app->cerbo)) != 0) cerbo_set_host(&app->cerbo, app->settings.cerbo, app->clock_ms);
+	// The source was switched on or off: the views the display chose itself get its pages, or lose them. What
+	// the user stored or is looking at stays. The page shown stays where the views still show one there; the
+	// first page otherwise - a page of the Cerbo is gone with them.
+	if(cerbo_on(&app->cerbo) != had_cerbo && app->source != APP_LAYOUT_STORED && app->source != APP_LAYOUT_PREVIEW)
+	{
+		app_choose_layout(app);
+		if(!layout_page_shown(&app->layout, app->nav.page, &app->poll.catalog)) app->nav.page = layout_first_page(&app->layout, &app->poll.catalog);
+	}
 	app->events |= APP_EVENT_STORE_SETTINGS;
 	return answer(200, settings_to_json(&app->settings, out, APP_WEB_OUT_SIZE), out, length);
 }

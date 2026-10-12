@@ -12,6 +12,7 @@
 #include <string.h>
 #include "layout.h"
 #include "fmt.h"
+#include "cerbo.h"
 
 // Of layout_from_catalog()
 #define ITEMS_PER_PAGE  4
@@ -375,9 +376,24 @@ bool layout_page_shown(const layout_t *layout, int page, const catalog_t *catalo
 
 	for(int i = 0; i < shown->item_count; i++)
 	{
+		// A value of the second source is in no catalogue: its prefix is all there is to know of it
+		if(cerbo_key(shown->items[i].key)) return true;
 		if(catalog_find(catalog, shown->items[i].key) >= 0) return true;
 	}
 	return false;
+}
+
+void layout_page_sources(const layout_t *layout, int page, bool *wican, bool *gx)
+{
+	*wican = false;
+	*gx = false;
+	if(page < 0 || page >= layout->page_count) return;
+
+	for(int i = 0; i < layout->pages[page].item_count; i++)
+	{
+		if(cerbo_key(layout->pages[page].items[i].key)) *gx = true;
+		else *wican = true;
+	}
 }
 
 int layout_first_page(const layout_t *layout, const catalog_t *catalog)
@@ -495,6 +511,29 @@ void layout_from_catalog(const catalog_t *catalog, layout_t *layout)
 		if(i != battery) add_item(layout, &catalog->entries[i]);
 	}
 	if(battery >= 0) add_item(layout, &catalog->entries[battery]);
+}
+
+void layout_append(layout_t *to, const layout_t *from)
+{
+	// " + " between the two names
+	static const char plus[] = " + ";
+	size_t own = strlen(to->name);
+	size_t added = strlen(from->name);
+	int kept = to->page_count;
+
+	if(from->page_count == 0) return;
+
+	// The pages of `from` all find room: the last ones of `to` give way
+	if(kept > LAYOUT_PAGES_MAX - from->page_count) kept = LAYOUT_PAGES_MAX - from->page_count;
+	// Byte for byte, also what lies between the fields of a page: zeros there, as in every layout that was
+	// read or made (layout.h). No page of `to` stays behind them: the two have at least as many as `to` had.
+	memcpy(&to->pages[kept], from->pages, from->page_count * sizeof(to->pages[0]));
+	to->page_count = (uint8_t)(kept + from->page_count);
+
+	// A name that would be cut says something else than the two names
+	if(own == 0 || added == 0 || own + (sizeof(plus) - 1) + added > LAYOUT_NAME_SIZE - 1) return;
+	memcpy(to->name + own, plus, sizeof(plus) - 1);
+	memcpy(to->name + own + (sizeof(plus) - 1), from->name, added);
 }
 
 layout_item_state_t layout_item_state(const layout_item_t *item, const catalog_t *catalog,

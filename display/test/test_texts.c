@@ -727,6 +727,57 @@ static void test_ring(void)
 	check(good, "progress of every step from 0 to two behind the end for totals of 1 to 40: step times 1000 by total, rounded down, at most 1000");
 }
 
+// The ring where a page of values of the Cerbo has nothing to show: the colour of what is wrong with the source
+static void test_ring_cerbo(void)
+{
+	// By hand, from the header: nothing wrong grey, waiting yellow, trouble red
+	static const struct
+	{
+		cerbo_view_t view;
+		ring_kind_t ring;
+		const char *colour;
+	} rings[] = {
+		{CERBO_VIEW_OFF, RING_GREY, "grey: nothing is wrong, the source is not set up or the safe mode keeps it off"},
+		{CERBO_VIEW_NO_WIFI, RING_RED, "red"},
+		{CERBO_VIEW_CONNECTING, RING_YELLOW, "yellow: the display waits"},
+		{CERBO_VIEW_UNREACHABLE, RING_RED, "red"},
+		{CERBO_VIEW_QUIET, RING_YELLOW, "yellow: the display waits"},
+		{CERBO_VIEW_SILENT, RING_RED, "red"},
+		{CERBO_VIEW_NEWER, RING_RED, "red"},
+		{CERBO_VIEW_LIVE, RING_NONE, "nothing: it delivers"},
+	};
+	bool good = true, waits = true;
+	int red = 0, yellow = 0, grey = 0, none = 0;
+
+	check(COUNT(rings) == CERBO_VIEW_LIVE + 1, "the test knows the ring of every view of the Cerbo");
+	for(int i = 0; i < COUNT(rings); i++)
+	{
+		snprintf(what, sizeof(what), "ring of the Cerbo view %s is %s", CERBO_VIEWS[i].name, rings[i].colour);
+		check(rings[i].view == (cerbo_view_t)i && ring_cerbo(rings[i].view) == rings[i].ring, what);
+		red += ring_cerbo((cerbo_view_t)i) == RING_RED;
+		yellow += ring_cerbo((cerbo_view_t)i) == RING_YELLOW;
+		grey += ring_cerbo((cerbo_view_t)i) == RING_GREY;
+		none += ring_cerbo((cerbo_view_t)i) == RING_NONE;
+		// The two views that say "Warte auf Cerbo …" are the yellow ones, and no other is
+		if((strcmp(text_cerbo((cerbo_view_t)i, false), "Warte auf Cerbo …") == 0) != (ring_cerbo((cerbo_view_t)i) == RING_YELLOW)) waits = false;
+	}
+	check(red == 4 && yellow == 2 && grey == 1 && none == 1, "of the eight views of the Cerbo four are red, two yellow, one grey and one shows no ring");
+	check(waits, "the ring of the Cerbo is yellow exactly for the views whose text says that the display waits");
+	check(ring_cerbo(CERBO_VIEW_OFF) == ring_state(CONN_VIEW_ECU_OFFLINE, NULL, 0, false).kind && ring_cerbo(CERBO_VIEW_CONNECTING) == ring_state(CONN_VIEW_CONNECTING, NULL, 0, false).kind &&
+	      ring_cerbo(CERBO_VIEW_UNREACHABLE) == ring_state(CONN_VIEW_NO_ANSWER, NULL, 0, false).kind && ring_cerbo(CERBO_VIEW_NO_WIFI) == ring_state(CONN_VIEW_NO_WIFI, NULL, 0, false).kind,
+	      "the same colours as for the adapter: off like the ignition off, waiting like connecting, not reachable like no answer, no network like no network");
+	for(int value = -300; value <= 300; value++)
+	{
+		if((value < 0 || value > CERBO_VIEW_LIVE) && ring_cerbo((cerbo_view_t)value) != RING_RED) good = false;
+		if(ring_cerbo((cerbo_view_t)value) == RING_PROGRESS) good = false;
+	}
+	for(int i = 0; i < COUNT(OUTSIDE); i++)
+	{
+		if(ring_cerbo((cerbo_view_t)OUTSIDE[i]) != RING_RED) good = false;
+	}
+	check(good, "ring of every number that is no view of the Cerbo is red like UNREACHABLE - never the nothing of a source that delivers -, and no view of it is a progress");
+}
+
 int main(void)
 {
 	test_nothing_given();
@@ -737,5 +788,6 @@ int main(void)
 	test_cerbo();
 	test_every_text();
 	test_ring();
+	test_ring_cerbo();
 	return test_end();
 }

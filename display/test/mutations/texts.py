@@ -333,3 +333,31 @@ MUTATIONS += [
      cerbo_line("SILENT", '"keine Werte"'), cerbo_line("SILENT", '"keine Werte, obwohl die Sitzung steht"')),
 ]
 
+# The ring of the second source
+RING_OFF = "\t\tcase CERBO_VIEW_OFF:        return RING_GREY;\n"
+RING_WAIT = "\t\tcase CERBO_VIEW_CONNECTING:\n\t\tcase CERBO_VIEW_QUIET:      return RING_YELLOW;\n"
+RING_LIVE = "\t\tcase CERBO_VIEW_LIVE:       return RING_NONE;\n"
+RING_DEFAULT = "\t\tdefault:                    return RING_RED;\n"
+
+MUTATIONS += [
+    ("texts_ring_cerbo_off_forgotten", T, F, RING_OFF, ""),
+    ("texts_ring_cerbo_off_is_red", T, F, RING_OFF, RING_OFF.replace("RING_GREY", "RING_RED")),
+    ("texts_ring_cerbo_off_is_yellow", T, F, RING_OFF, RING_OFF.replace("RING_GREY", "RING_YELLOW")),
+    ("texts_ring_cerbo_off_shows_nothing", T, F, RING_OFF, RING_OFF.replace("RING_GREY", "RING_NONE")),
+    ("texts_ring_cerbo_connecting_forgotten", T, F, RING_WAIT, RING_WAIT.replace("\t\tcase CERBO_VIEW_CONNECTING:\n", "")),
+    ("texts_ring_cerbo_quiet_forgotten", T, F, RING_WAIT, RING_WAIT.replace("\t\tcase CERBO_VIEW_QUIET:      return RING_YELLOW;\n", "\t\t                            return RING_YELLOW;\n")),
+    ("texts_ring_cerbo_waiting_is_red", T, F, RING_WAIT, RING_WAIT.replace("RING_YELLOW", "RING_RED")),
+    ("texts_ring_cerbo_waiting_is_grey", T, F, RING_WAIT, RING_WAIT.replace("RING_YELLOW", "RING_GREY")),
+    ("texts_ring_cerbo_waiting_shows_nothing", T, F, RING_WAIT, RING_WAIT.replace("RING_YELLOW", "RING_NONE")),
+    ("texts_ring_cerbo_live_forgotten", T, F, RING_LIVE, ""),
+    ("texts_ring_cerbo_live_is_yellow", T, F, RING_LIVE, RING_LIVE.replace("RING_NONE", "RING_YELLOW")),
+    ("texts_ring_cerbo_live_is_grey", T, F, RING_LIVE, RING_LIVE.replace("RING_NONE", "RING_GREY")),
+    ("texts_ring_cerbo_unknown_shows_nothing", T, F, RING_DEFAULT, RING_DEFAULT.replace("RING_RED", "RING_NONE")),
+    ("texts_ring_cerbo_unknown_is_yellow", T, F, RING_DEFAULT, RING_DEFAULT.replace("RING_RED", "RING_YELLOW")),
+    ("texts_ring_cerbo_unknown_is_grey", T, F, RING_DEFAULT, RING_DEFAULT.replace("RING_RED", "RING_GREY")),
+    ("texts_ring_cerbo_unknown_is_a_progress", T, F, RING_DEFAULT, RING_DEFAULT.replace("RING_RED", "RING_PROGRESS")),
+]
+for name in ("NO_WIFI", "UNREACHABLE", "SILENT", "NEWER"):
+    for colour in ("YELLOW", "GREY", "NONE"):
+        MUTATIONS.append(("texts_ring_cerbo_%s_is_%s" % (name.lower(), colour.lower()), T, F, RING_DEFAULT,
+                          "\t\t" + ("case CERBO_VIEW_%s:" % name).ljust(28) + "return RING_%s;\n" % colour + RING_DEFAULT))

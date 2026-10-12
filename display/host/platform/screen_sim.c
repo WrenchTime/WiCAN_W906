@@ -1081,6 +1081,9 @@ BaseType_t xTaskDelayUntil(TickType_t *const previous, const TickType_t incremen
 
 extern const char builtin_start[] __asm__("_binary_w906_default_json_start");
 extern const char builtin_end[] __asm__("_binary_w906_default_json_end");
+// ... and the pages of the second source, which the app appends once it has the address of a Cerbo
+extern const char builtin_gx_start[] __asm__("_binary_gx_default_json_start");
+extern const char builtin_gx_end[] __asm__("_binary_gx_default_json_end");
 
 static void state(void)
 {
@@ -1160,6 +1163,8 @@ static void power_on_at(uint64_t ms)
 	boot.git = "sim";
 	boot.builtin_layout = builtin_start;
 	boot.builtin_length = (size_t)(builtin_end - builtin_start);
+	boot.builtin_gx = builtin_gx_start;
+	boot.builtin_gx_length = (size_t)(builtin_gx_end - builtin_gx_start);
 	boot.work = work;
 	boot.work_count = LAYOUT_TOKENS;
 	app_init(platform_app, &boot, now_ms());

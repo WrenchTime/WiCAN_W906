@@ -348,6 +348,21 @@ static void follow_request(app_t *app, const nav_world_t *world, uint64_t now)
 	if(app->heat != GUARD_HEAT_OFF) app->last_input_ms = now;
 }
 
+// The page a long press on a value page leads to (nav.h): the first page of the rotation that shows values
+// right now, by the rule of the scene - in a parked camper a page of the Cerbo, on the road the first page of
+// the adapter. The first page of the rotation if none shows any, -1 if there is none.
+static int home_page(const app_t *app, uint64_t now)
+{
+	const catalog_t *catalog = &app->poll.catalog;
+	conn_view_t view = conn_view(&app->poll.conn, now);
+
+	for(int page = 0; page < app->layout.page_count; page++)
+	{
+		if(layout_page_shown(&app->layout, page, catalog) && scene_page_shows(&app->layout, page, view, &app->cerbo, now)) return page;
+	}
+	return layout_first_page(&app->layout, catalog);
+}
+
 void app_choose_layout(app_t *app)
 {
 	const catalog_t *catalog = &app->poll.catalog;
@@ -364,6 +379,14 @@ void app_choose_layout(app_t *app)
 		layout_from_catalog(catalog, &app->layout);
 		// A text that could not be written is an empty one
 		layout_to_json(&app->layout, app->layout_text, sizeof(app->layout_text));
+	}
+	// The pages of the second source behind those of the vehicle, while that source is on. The text is then
+	// the one of the whole: the browser gets the views in use, and no text of the two was read as one.
+	if(app->has_builtin_gx && cerbo_on(&app->cerbo))
+	{
+		layout_append(&app->layout, &app->builtin_gx);
+		// An empty text if it could not be written, as above; its length is counted below
+		(void)layout_to_json(&app->layout, app->layout_text, sizeof(app->layout_text));
 	}
 	app->layout_length = strlen(app->layout_text);
 
@@ -431,6 +454,12 @@ void app_init(app_t *app, const app_boot_t *boot, uint64_t now_ms)
 		app->has_builtin = true;
 		app->builtin_text = boot->builtin_layout;
 		app->builtin_length = boot->builtin_length;
+	}
+	// The pages of the second source, read once: they are appended whenever the choice below is made while
+	// that source is on
+	if(boot->builtin_gx != NULL && layout_parse(boot->builtin_gx, boot->builtin_gx_length, &app->builtin_gx, NULL, app->work, app->work_count))
+	{
+		app->has_builtin_gx = true;
 	}
 	// In safe mode the stored layout is not even read: it may be what crashed the display
 	if(!app->safe_mode && boot->layout_text != NULL &&
@@ -784,6 +813,9 @@ void app_world(const app_t *app, nav_world_t *world, uint64_t now_ms)
 	// What the knob does with the sign of its detents (knob_init(), knob_set_reverse()): the brightness
 	// screen takes it back
 	world->reverse = app->settings.reverse;
+	// Where the long press on a value page leads: named with every world, and looked at by that press alone
+	world->home_set = true;
+	world->home = home_page(app, now);
 }
 
 void app_scene(const app_t *app, scene_t *scene, uint64_t now_ms)
@@ -806,6 +838,7 @@ void app_scene(const app_t *app, scene_t *scene, uint64_t now_ms)
 	input.world = &world;
 	input.conn = &poll->conn;
 	input.values = &poll->values;
+	input.cerbo = &app->cerbo;
 	input.flow = &poll->flow;
 	input.read_block = dtc_flow_read_block(&poll->flow, &poll->conn, &poll->values, &poll->catalog, now);
 	input.clear_block = dtc_flow_clear_block(&poll->flow, &poll->conn, &poll->values, &poll->catalog, hold_is_stuck(&app->hold), now);

@@ -163,6 +163,7 @@ static bool browser_forget(const char *ssid)
 static bool browser_settings(const char *json)
 {
 	settings_t wanted;
+	bool had_cerbo = cerbo_on(&app->cerbo);
 
 	// As bytes, there and back: what is copied into the app has no byte that only lay on the stack
 	memcpy(&wanted, &app->settings, sizeof(wanted));
@@ -174,6 +175,12 @@ static bool browser_settings(const char *json)
 	knob_set_reverse(&app->knob, app->settings.reverse);
 	// The second source follows its address
 	if(strcmp(app->settings.cerbo, cerbo_host(&app->cerbo)) != 0) cerbo_set_host(&app->cerbo, app->settings.cerbo, now);
+	// ... and the views the display chose itself follow the source: its pages come, or go (app_web.h)
+	if(cerbo_on(&app->cerbo) != had_cerbo && app->source != APP_LAYOUT_STORED && app->source != APP_LAYOUT_PREVIEW)
+	{
+		app_choose_layout(app);
+		if(!layout_page_shown(&app->layout, app->nav.page, &app->poll.catalog)) app->nav.page = layout_first_page(&app->layout, &app->poll.catalog);
+	}
 	app->events |= APP_EVENT_STORE_SETTINGS;
 	return true;
 }
@@ -202,12 +209,12 @@ static void test_constants(void)
 	      APP_EVENT_ERASE_LAYOUT == 0x10 && APP_EVENT_STORE_CATALOG == 0x20 && APP_EVENT_STORE_OLD == 0x40 && APP_EVENT_MARK_VALID == 0x80 &&
 	      APP_EVENT_REBOOT == 0x100 && APP_EVENT_FACTORY_RESET == 0x200 && APP_EVENT_PREVIOUS_FIRMWARE == 0x400 && APP_EVENT_INSTALL_FIRMWARE == 0x800,
 	      "the events are twelve different bits");
-	printf("  sizeof(app_t) is %lu: poll %lu, three layouts %lu, three lists of lines %lu, layout text %lu\n", (unsigned long)sizeof(app_t),
-	       (unsigned long)sizeof(app->poll), (unsigned long)(3 * sizeof(layout_t)), (unsigned long)(3 * sizeof(app->list)), (unsigned long)sizeof(app->layout_text));
-	check(sizeof(void *) != 8 || sizeof(app_t) == 232768, "app_t has the 232768 bytes app.h names (on a 64 bit host)");
-	check(sizeof(app->poll) == 39520 && 3 * sizeof(layout_t) == 105360 && 3 * sizeof(app->list) == 62376 && sizeof(app->layout_text) == 16385 &&
+	printf("  sizeof(app_t) is %lu: poll %lu, four layouts %lu, three lists of lines %lu, layout text %lu\n", (unsigned long)sizeof(app_t),
+	       (unsigned long)sizeof(app->poll), (unsigned long)(4 * sizeof(layout_t)), (unsigned long)(3 * sizeof(app->list)), (unsigned long)sizeof(app->layout_text));
+	check(sizeof(void *) != 8 || sizeof(app_t) == 267896, "app_t has the 267896 bytes app.h names (on a 64 bit host)");
+	check(sizeof(app->poll) == 39520 && 4 * sizeof(layout_t) == 140480 && 3 * sizeof(app->list) == 62376 && sizeof(app->layout_text) == 16385 &&
 	      sizeof(app->cerbo) == 5456,
-	      "the large parts of app_t have the sizes app.h names: the poll, the two layouts and the room for a third, the lines of three lists, the layout text, the second source");
+	      "the large parts of app_t have the sizes app.h names: the poll, the three layouts and the room for a fourth, the lines of three lists, the layout text, the second source");
 }
 
 
@@ -5544,9 +5551,10 @@ static void test_cerbo_info(void)
 	scene_cerbo();
 	check(app->info_count == 15 && info_is(0, "WLAN: –") && info_is(1, "Adresse: –") && info_is(2, "WiCAN: –") && info_is(3, "WiCAN-ID: " OWN) && info_is(4, "WiCAN-Firmware: –") &&
 	      info_is(5, "Cerbo: 192.168.88.2 (kein WLAN)") && info_is(6, "MQTT: 0 ok, 0 verworfen, 0 Verb.") && info_is(7, "Version: 0.1.0 (–)") &&
-	      info_is(8, "Ansichten: W906 OM651 Standard (eingebaut)") && info_is(9, "Speicher: 0 frei, min. 0") && info_is(10, "PSRAM: 0 frei, min. 0") && info_is(11, "HTTP: 0 ok, 0 Fehler") &&
+	      info_is(8, "Ansichten: W906 OM651 Standard + Cerbo (eingebaut)") && info_is(9, "Speicher: 0 frei, min. 0") && info_is(10, "PSRAM: 0 frei, min. 0") && info_is(11, "HTTP: 0 ok, 0 Fehler") &&
 	      info_is(12, "Neuverbindungen: 0") && info_is(13, "Temperatur: –") && info_is(14, "Letzter Neustart: –"),
-	      "the info lines of a display with a Cerbo: fifteen from the start, the two of the source behind the firmware of the adapter, every other line as without it");
+	      "the info lines of a display with a Cerbo: fifteen from the start, the two of the source behind the firmware of the adapter, the views named with the pages of the Cerbo, "
+	      "every other line as without it");
 	check(all_bytes(app->info[15], APP_INFO_SIZE, 0), "the info lines: the sixteenth line is not in use and empty");
 	app_world(app, &seen, now);
 	check(seen.info_lines == 15, "nav is told of fifteen info lines");
@@ -5847,6 +5855,12 @@ typedef struct
 static trace_t trace_plain, trace_cerbo;
 static trace_t *tracing;
 static int trace_every = TRACE_EVERY;
+// The display with the Cerbo has the built-in pages of it behind its views: the views in use, their text and the
+// number of dots are then not compared - everything else is
+static bool trace_pages;
+// The two tellings are of one display in one world: every byte of the app is compared, the source and the info
+// lines among them
+static bool trace_whole;
 
 static uint64_t mix(uint64_t number, uint64_t word)
 {
@@ -5878,6 +5892,8 @@ static uint64_t mix_app(uint64_t number)
 {
 	const unsigned char *bytes = (const unsigned char *)app;
 	size_t nav_end = offsetof(app_t, nav) + sizeof(app->nav);
+
+	if(trace_whole) return mix_bytes(number, bytes, sizeof(*app));
 	size_t settings_end = offsetof(app_t, settings) + sizeof(app->settings);
 	size_t cerbo_end = offsetof(app_t, cerbo) + sizeof(app->cerbo);
 
@@ -5885,6 +5901,16 @@ static uint64_t mix_app(uint64_t number)
 	if(app->nav.screen != NAV_INFO) number = mix_bytes(number, &app->nav, sizeof(app->nav));
 	number = mix_bytes(number, bytes + nav_end, offsetof(app_t, settings) + offsetof(settings_t, cerbo) - nav_end);
 	number = mix_bytes(number, bytes + settings_end, offsetof(app_t, cerbo) - settings_end);
+	if(trace_pages)
+	{
+		// Without the views in use and their text: the one has the pages of the Cerbo behind them
+		size_t layout_end = offsetof(app_t, layout) + sizeof(app->layout);
+		size_t text_end = offsetof(app_t, layout_length) + sizeof(app->layout_length);
+
+		number = mix_bytes(number, bytes + cerbo_end, offsetof(app_t, layout) - cerbo_end);
+		number = mix_bytes(number, bytes + layout_end, offsetof(app_t, layout_text) - layout_end);
+		return mix_bytes(number, bytes + text_end, offsetof(app_t, info) - text_end);
+	}
 	return mix_bytes(number, bytes + cerbo_end, offsetof(app_t, info) - cerbo_end);
 }
 
@@ -5941,6 +5967,8 @@ static void trace_step(void)
 		if(app->nav.screen != NAV_INFO)
 		{
 			app_scene(app, &shown, now);
+			// Twelve dots where the display without the Cerbo has seven: the position among them is compared
+			if(trace_pages) shown.dots = 0;
 			number = mix_bytes(number, &shown, sizeof(shown));
 		}
 	}
@@ -5980,6 +6008,11 @@ static bool told_twice(void (*story)(void))
 	trace_cerbo.count = 0;
 	watch_trace = trace_step;
 
+	// Both on a firmware without the built-in pages of the Cerbo, unless the telling is the one with them
+	// (trace_pages): there the display with the address has the source and no page of it, and nothing outside
+	// of the source may differ by a byte. With the pages the views differ, as they are meant to, and with them
+	// the number of dots: told_twice_with_pages() compares everything else.
+	firmware_without_gx_pages = !trace_pages;
 	// Each telling over another byte on the stack (stack_dirt): a byte the display keeps without having
 	// written it is then not the same in the two
 	gx_everywhere = false;
@@ -5995,6 +6028,7 @@ static bool told_twice(void (*story)(void))
 
 	stack_dirt = 0;
 	gx_everywhere = false;
+	firmware_without_gx_pages = false;
 	tracing = NULL;
 	watch_trace = NULL;
 	same = trace_plain.count > 0 && same_story(&trace_plain, &trace_cerbo);
@@ -6097,6 +6131,19 @@ static void story_for_good(void)
 	run(3000);
 }
 
+// The same on the firmware as it is built: the display with the Cerbo has its pages behind those of the vehicle.
+// For the stories that never go to those pages: everything is compared but the views in use, their text and the
+// number of dots.
+static bool told_twice_with_pages(void (*story)(void))
+{
+	bool same;
+
+	trace_pages = true;
+	same = told_twice(story);
+	trace_pages = false;
+	return same && app->layout.page_count == 12 && app->has_builtin_gx;
+}
+
 static void test_cerbo_twice(void)
 {
 	check(told_twice(story_read_and_clear),
@@ -6116,6 +6163,20 @@ static void test_cerbo_twice(void)
 	      "... at the end of which the display with the Cerbo is released for good with its address and the brightness of the browser, as stored before the restart");
 	check(told_twice(story_network_goes), "a clear whose network goes, and an adapter that has restarted when it is back, are the same story step for step with such a Cerbo");
 	check(gx_seen.closed >= 1, "... during which the source lost its network as well");
+	check(!app->has_builtin_gx && app->layout.page_count == 7, "these stories were told on a firmware without the built-in pages of the Cerbo: the display with the address has the source alone, "
+	                                                           "and so every byte outside of the source could be compared");
+
+	// On the firmware as it is built the display with the Cerbo has twelve pages. The stories of the fault memory
+	// and of the release never go to the last five: they are the same stories still, step for step
+	check(told_twice_with_pages(story_read_and_clear), "a read, the list, the clear dialog, the hold, the clear and its outcome are the same story step for step on the display with the pages of "
+	                                                   "the Cerbo: screen but for the number of dots, flow, requests, events, backlight, and once a second every byte of the app but the source "
+	                                                   "and the views in use");
+	check(gx_seen.taken >= 15 && gx_seen.during_request >= 5 && gx_seen.during_dialog >= 1, "... during which the source took bundles while the read and the clear were under way and while the dialog showed");
+	check(told_twice_with_pages(story_read_given_up), "a read whose adapter falls silent until it is given up is the same story step for step on the display with the pages of the Cerbo");
+	check(told_twice_with_pages(story_release), "the release of the web interface, given at the knob and ended by its time, is the same story step for step on the display with the pages of the Cerbo");
+	check(told_twice_with_pages(story_for_good), "the display as it comes - a network confirmed at the knob, the switch Dauerhaft frei turned off and on, a restart - is the same story step for step "
+	                                             "on the display with the pages of the Cerbo");
+	check(told_twice_with_pages(story_network_goes), "a clear whose network goes, and an adapter that has restarted when it is back, are the same story step for step on the display with the pages of the Cerbo");
 }
 
 // The stories of the fault memory once more: each begins with a display that has the address of a Cerbo that
@@ -6229,6 +6290,11 @@ typedef struct
 	long gx_opens, gx_lost, gx_unreachable; // orders to open, connections the broker ended, attempts that failed
 	long gx_rounds, gx_looked;  // rounds of its task, and those around which every byte of the app outside of it was compared
 	long gx_set, gx_moved, gx_cleared;      // settings of the browser that gave the address, another one, or took it away
+	long gx_paged;              // looks at views the display chose itself that end with the pages of the Cerbo
+	long gx_looks;              // times the driver turned on to where the pages of the Cerbo are
+	long gx_values;             // values of the Cerbo on the screen that its store holds
+	long gx_homes;              // worlds in which the long press leads to a page of the Cerbo behind the pages of the vehicle
+	long gx_firmwares[2];       // runs on a firmware with the built-in pages of the Cerbo, and without them
 	long gx_healed;             // runs behind which a source that is on and has the address of the Cerbo delivered again
 	long gx_wrong;              // ... of them those that ended without such a source - no address, safe mode, another address -
 	                            // and got there by a restart with the address
@@ -6323,6 +6389,8 @@ typedef struct
 	char layout_text[LAYOUT_TEXT_MAX + 1];  // the layout of the user, as the browser sent or the flash held it
 	bool wifi_good;             // the network the browser asked for is one net_store() takes
 	bool info_cerbo;            // the info lines of the last tick, or of the start, had the two of the Cerbo
+	bool gx_pages;              // the views of the display end with the built-in pages of the Cerbo, as last looked at
+	bool layout_unseen;         // the views of this start were not looked at yet
 
 	// Around the round of the task of the second source that is going on
 	int gx_opens;               // orders to open before it
@@ -6384,6 +6452,8 @@ static void model_start(void)
 	m.sum = app->catalog_sum;
 	m.page = app->nav.page;
 	m.info_cerbo = m.settings.cerbo[0] != '\0';
+	// The views of the start are looked at with the first look, with or without pages of the Cerbo
+	m.layout_unseen = true;
 	if(flash.has_layout) strcpy(m.layout_text, flash.layout);
 	// In safe mode the stored layout is not used; every layout the runs store is one that can be read
 	if((app->source == APP_LAYOUT_STORED) != (flash.has_layout && !machine.safe_mode)) broke(PROMISE_LAYOUT, "the start does not use the stored layout, or uses it in safe mode");
@@ -6619,14 +6689,23 @@ static void honest(void)
 			const value_t *value = values_find(&poll->values, page->items[i].key);
 			// During a scan the adapter delivers no values, and the age of one the poll holds does not count (scene.h)
 			bool gone = value == NULL || (values_age(value, now) == VALUE_AGE_GONE && view() != CONN_VIEW_SCAN);
+			bool of_cerbo = strncmp(page->items[i].key, "GX_", 3) == 0;
 			char text[SCENE_VALUE_SIZE];
 
 			if(strcmp(shown.items[i].text, SCENE_DASH) == 0 || strcmp(shown.items[i].text, SCENE_UNAVAILABLE) == 0) continue;
 
+			if(of_cerbo)
+			{
+				// A value of the Cerbo: from the store of the source alone, while the source is on, for a minute
+				value = values_find(&app->cerbo.values, page->items[i].key);
+				gone = value == NULL || m.settings.cerbo[0] == '\0' || machine.safe_mode || (now > value->seen_ms && now - value->seen_ms >= 60000);
+			}
 			if(gone || !layout_item_text(&page->items[i], value, text, sizeof(text)) || strcmp(shown.items[i].text, text) != 0)
 			{
-				broke(PROMISE_SCENE, "a value is shown that the poll does not hold, or does not hold any more");
+				broke(PROMISE_SCENE, of_cerbo ? "a value of the Cerbo is shown that its store does not hold, or does not hold any more" :
+				                                "a value is shown that the poll does not hold, or does not hold any more");
 			}
+			else if(of_cerbo) tally->gx_values++;
 			else tally->values++;
 		}
 	}
@@ -6693,6 +6772,31 @@ static void world_holds(void)
 		broke(PROMISE_WORLD, "nav is told another brightness than the one stored");
 	}
 	if(seen.reverse != m.settings.reverse) broke(PROMISE_HAND, "nav is told another direction of the knob than the one stored");
+	// The page of the long press: the first page of the rotation that has something to show right now - a page
+	// of the adapter while the adapter shows values, a page of the Cerbo while the Cerbo does, a page of both
+	// while either does -, and the first page of the rotation if none has
+	{
+		conn_view_t at = view();
+		bool adapter_shows = at == CONN_VIEW_LIVE || at == CONN_VIEW_SCAN || at == CONN_VIEW_NO_API;
+		bool cerbo_shows = cerbo_showing(&app->cerbo, now);
+		int first = -1, home = -1;
+
+		for(int page = app->layout.page_count - 1; page >= 0; page--)
+		{
+			bool of_adapter = false, of_cerbo = false;
+
+			if(!layout_page_shown(&app->layout, page, &poll->catalog)) continue;
+			for(int i = 0; i < app->layout.pages[page].item_count; i++)
+			{
+				if(strncmp(app->layout.pages[page].items[i].key, "GX_", 3) == 0) of_cerbo = true;
+				else of_adapter = true;
+			}
+			first = page;
+			if((of_cerbo && cerbo_shows) || ((of_adapter || !of_cerbo) && adapter_shows)) home = page;
+		}
+		if(!seen.home_set || seen.home != (home >= 0 ? home : first)) broke(PROMISE_WORLD, "nav is not told the first page that shows values as the page of the long press, or the first page where none does");
+		if(seen.home_set && seen.home >= 7 && app->source != APP_LAYOUT_STORED && app->source != APP_LAYOUT_PREVIEW) tally->gx_homes++;
+	}
 	// The own access point cannot be switched in the safe mode of this start and while no network is stored
 	if(seen.ap_kept != (machine.safe_mode || flash.profile_count == 0)) broke(PROMISE_WORLD, "nav is told that the own access point can be switched while it is kept on, or the other way round");
 	tally->kept[seen.ap_kept]++;
@@ -6712,8 +6816,37 @@ static void world_holds(void)
 }
 
 static char layout_a[LAYOUT_TEXT_MAX + 1], layout_b[LAYOUT_TEXT_MAX + 1];
+// The built-in pages of the Cerbo as a layout and as the text layout_to_json() writes for them
+static layout_t builtin_gx_layout;
+static char gx_pages_text[LAYOUT_TEXT_MAX + 1];
 
-// The layout in use is the choice of app.h for the catalogue of the poll, or the one of the user
+// The text of views with the pages of the Cerbo behind them, put together from two texts: the text of the
+// views of the vehicle - of which the last pages give way where the two are more than twelve - without its end,
+// then the pages of the Cerbo as their own text has them, and "<name> + Cerbo" where the views have a name.
+// The names of the runs need no escape.
+static bool whole_text(const layout_t *vehicle, char *out, size_t size)
+{
+	static layout_t cut;
+	static char first[LAYOUT_TEXT_MAX + 1];
+	static const char pages[] = ",\"pages\":[";
+	const char *gx_pages = strstr(gx_pages_text, pages);
+	const char *after_name;
+	int kept = vehicle->page_count > LAYOUT_PAGES_MAX - 5 ? LAYOUT_PAGES_MAX - 5 : vehicle->page_count;
+	size_t length;
+
+	memcpy(&cut, vehicle, sizeof(cut));
+	cut.page_count = (uint8_t)kept;
+	if(gx_pages == NULL || layout_to_json(&cut, first, sizeof(first)) < 0) return false;
+	length = strlen(first);
+	// "]}" at its end goes
+	first[length - 2] = '\0';
+	after_name = vehicle->name[0] != '\0' ? strstr(first, vehicle->name) + strlen(vehicle->name) : first;
+	return snprintf(out, size, "%.*s%s%s%s%s", (int)(after_name - first), first, vehicle->name[0] != '\0' ? " + Cerbo" : "", after_name, kept > 0 ? "," : "",
+	                gx_pages + strlen(pages)) < (int)size;
+}
+
+// The layout in use is the choice of app.h for the catalogue of the poll - with the built-in pages of the Cerbo
+// behind it while the display has the address and is not in safe mode -, or the one of the user
 static void layout_holds(bool stepped)
 {
 	static layout_t made;
@@ -6721,28 +6854,54 @@ static void layout_holds(bool stepped)
 	uint32_t sum = catalog_checksum(catalog);
 	bool own = app->source == APP_LAYOUT_BUILTIN || app->source == APP_LAYOUT_GENERATED;
 	bool builtin = !machine.no_builtin && layout_suits(&builtin_layout, catalog);
+	// What the run knows: the firmware has the pages, the stored settings name the address, and no safe mode
+	bool pages = !machine.no_builtin_gx && m.settings.cerbo[0] != '\0' && !machine.safe_mode;
 
 	if(app->catalog_sum != sum) broke(PROMISE_LAYOUT, "the check sum the choice was made with is not the one of the catalogue");
 	if(stepped && app->source != m.source && (m.source == APP_LAYOUT_STORED || m.source == APP_LAYOUT_PREVIEW))
 	{
 		broke(PROMISE_LAYOUT, "the layout of the user went by itself: only the web interface takes it away");
 	}
-	if(sum != m.sum || app->source != m.source)
+	if(app->has_builtin_gx == machine.no_builtin_gx) broke(PROMISE_LAYOUT, "the display does not hold the built-in pages of the Cerbo its firmware has, or holds some it has not");
+	if(sum != m.sum || app->source != m.source || pages != m.gx_pages || m.layout_unseen)
 	{
 		if(own)
 		{
+			const layout_t *vehicle = builtin ? &builtin_layout : &made;
+			bool written;
+
 			if(!builtin) layout_from_catalog(catalog, &made);
+			// The text of the choice: the built-in text itself or the text of the views made from the catalogue; with
+			// the pages of the Cerbo the text of the two put together
+			written = pages ? whole_text(vehicle, layout_b, sizeof(layout_b)) : layout_to_json(vehicle, layout_b, sizeof(layout_b)) >= 0;
 			if(app->source != (builtin ? APP_LAYOUT_BUILTIN : APP_LAYOUT_GENERATED)) broke(PROMISE_LAYOUT, "not the built-in views where they suit, or not generated ones where they do not");
-			else if(layout_to_json(&app->layout, layout_a, sizeof(layout_a)) < 0 || layout_to_json(builtin ? &builtin_layout : &made, layout_b, sizeof(layout_b)) < 0 ||
-			        strcmp(layout_a, layout_b) != 0 || strcmp(app->layout_text, builtin ? builtin_text : layout_b) != 0)
+			else if(!written || layout_to_json(&app->layout, layout_a, sizeof(layout_a)) < 0 || strcmp(layout_a, layout_b) != 0 ||
+			        strcmp(app->layout_text, builtin && !pages ? builtin_text : layout_b) != 0)
 			{
-				broke(PROMISE_LAYOUT, "the layout in use or its text is not the one of the choice");
+				broke(PROMISE_LAYOUT, "the layout in use or its text is not the one of the choice, or not the one of the choice with the pages of the Cerbo behind it");
+			}
+			if(app->layout.page_count != (pages ? (vehicle->page_count > 7 ? 12 : vehicle->page_count + 5) : vehicle->page_count))
+			{
+				broke(PROMISE_LAYOUT, "the views do not end with the five pages of the Cerbo exactly while the display has its address outside the safe mode");
 			}
 			if(stepped && app->source != m.source && app->nav.page != layout_first_page(&app->layout, catalog)) broke(PROMISE_LAYOUT, "other views do not start at their first page");
 			if(stepped && app->source == m.source && app->nav.page != m.page) broke(PROMISE_LAYOUT, "the same views made anew do not keep the page");
+			// The source was switched on or off: the page stays where the views still show one, else the first one
+			if(!m.layout_unseen && pages != m.gx_pages && app->source == m.source && sum == m.sum &&
+			   app->nav.page != (layout_page_shown(&app->layout, m.page, catalog) ? m.page : layout_first_page(&app->layout, catalog)))
+			{
+				broke(PROMISE_LAYOUT, "the pages of the Cerbo came or went, and the page shown did not stay where it still is one, or did not become the first where it is none");
+			}
+			if(pages) tally->gx_paged++;
+		}
+		else if(pages != m.gx_pages && !m.layout_unseen && strcmp(app->layout_text, m.layout_text) != 0)
+		{
+			broke(PROMISE_LAYOUT, "the pages of the Cerbo were appended to views of the user, or taken from them");
 		}
 		m.sum = sum;
 		m.source = app->source;
+		m.gx_pages = pages;
+		m.layout_unseen = false;
 	}
 	m.page = app->nav.page;
 	if(!own && strcmp(app->layout_text, m.layout_text) != 0) broke(PROMISE_LAYOUT, "the layout of the user was replaced");
@@ -8349,10 +8508,29 @@ static void intent(void)
 }
 
 // One thing the run does
+// On a display whose firmware has the pages of the Cerbo the driver turns on to them now and then, where a value
+// page shows: seven to twelve detents - past the pages of the vehicle, where there are the pages of the Cerbo
+// behind them. What the run does next, it does from there. Rolled with the die of the Cerbo: the runs that are
+// told twice have no such firmware and never come here. No time passes and no screen is left for it: the run
+// goes on as it would have, on another page.
+static void to_cerbo_pages(void)
+{
+	int detents = 7 + gx_pick(6);
+
+	if(!on(NAV_PAGES) || over_at(now) != NAV_OVER_NONE || light() == 0) return;
+
+	doing = "to the pages of the Cerbo";
+	// Forward is the positive sign the knob reports, and the setting turns the sign of what the hand does
+	turn(m.settings.reverse ? -detents : detents);
+	tally->gx_looks++;
+}
+
 static void one(void)
 {
 	int what_now = pick(100);
 	bool valid;
+
+	if(gx_world && !machine.no_builtin_gx && gx_chance(12)) to_cerbo_pages();
 
 	// In the runs of the switch: now and then the owner changes his mind about "Dauerhaft frei", or leaves the
 	// display alone for longer than a release of ten minutes lasts, whatever else he is about to do
@@ -8737,6 +8915,8 @@ static void test_random_runs(void)
 		close(ends[0]);
 		alarm(300);
 		if(!layout_parse(builtin_text, strlen(builtin_text), &builtin_layout, NULL, work, LAYOUT_TOKENS)) _exit(2);
+		if(!layout_parse(builtin_gx_text, strlen(builtin_gx_text), &builtin_gx_layout, NULL, work, LAYOUT_TOKENS) ||
+		   layout_to_json(&builtin_gx_layout, gx_pages_text, sizeof(gx_pages_text)) < 0) _exit(2);
 		watch_trace = trace_step;
 		trace_every = TWIN_EVERY;
 		for(uint32_t number = 1; number <= RUNS; number++)
@@ -8744,6 +8924,12 @@ static void test_random_runs(void)
 			static run_result_t apart;
 			bool twin = number % TWIN_RUNS == 0;
 			int turn_before = trouble_turn, turn_after;
+
+			// The runs that are told twice, and one run in eight besides, have a firmware without the built-in pages of
+			// the Cerbo: there a display with the address is the display without one in every byte outside of the
+			// source, and a twin can follow it step for step. The other runs have the firmware as it is built.
+			firmware_without_gx_pages = twin || number % 8 == 5;
+			result.gx_firmwares[firmware_without_gx_pages]++;
 
 			// Every run has a Cerbo in its world. Every third one is told a second time without one - the same
 			// numbers rolled, no address ever, no broker - and has to be the same run, step for step.
@@ -8896,12 +9082,20 @@ static void test_random_runs(void)
 	check(complete && result.gx_healed == RUNS && result.gx_wrong >= 5 && result.gx_wrong < RUNS,
 	      "behind every one of the 32 random runs the second source delivers again - where the display had lost the address or was in safe mode, once it was given the address and started anew");
 	check(complete && result.twins == RUNS / TWIN_RUNS && result.twin_steps >= 50000, "every third random run is told a second time in a world without a Cerbo");
+	printf("  random runs, the pages of the Cerbo: %ld runs on a firmware with them and %ld on one without; views that end with them looked at %ld times; %ld values of the Cerbo "
+	       "on the screen behind %ld turns to its pages; the long press leads to one of its pages in %ld worlds\n", result.gx_firmwares[0], result.gx_firmwares[1], result.gx_paged,
+	       result.gx_values, result.gx_looks, result.gx_homes);
+	check(complete && result.gx_firmwares[0] >= 16 && result.gx_firmwares[1] >= 10 && result.gx_paged >= 20 && result.gx_values >= 1000 && result.gx_homes >= 1000,
+	      "the random runs reach views that end with the pages of the Cerbo, values of the Cerbo on the screen, and worlds in which the long press leads to a page of the Cerbo");
 }
 
 static void test_fault_memory_with_cerbo(void)
 {
 	memset(&gx_seen, 0, sizeof(gx_seen));
 	gx_everywhere = true;
+	// The source alone, without its pages: every screen of these stories is then the hand-written one byte for
+	// byte. With the pages they are told a third time below.
+	firmware_without_gx_pages = true;
 	printf("  the stories of the fault memory once more, on a display with a Cerbo that sends bundles, rubbish and breaks off\n");
 	test_read_and_clear();
 	test_list_and_dialog();
@@ -8913,10 +9107,541 @@ static void test_fault_memory_with_cerbo(void)
 	test_dialog_under_question();
 	test_replaced();
 	gx_everywhere = false;
+	firmware_without_gx_pages = false;
 	printf("  the source of these stories: %ld bundles taken, %ld messages refused, %ld sessions, %ld orders to close; %ld bundles while a request was under way, %ld while the clear dialog showed\n",
 	       gx_seen.taken, gx_seen.refused, gx_seen.sessions, gx_seen.closed, gx_seen.during_request, gx_seen.during_dialog);
 	check(gx_seen.taken >= 1000 && gx_seen.refused >= 500 && gx_seen.sessions >= 300 && gx_seen.closed >= 100 && gx_seen.during_request >= 100 && gx_seen.during_dialog >= 10,
 	      "the stories of the fault memory ran a second time with a source that took bundles, refused messages and lost its connection - also while requests were under way and while the clear dialog showed");
+}
+
+/* The pages of the second source ----------------------------------------------------------------------- */
+
+// What the flow of the camper publishes: the members of `values` of fixtures/gx_values_parked.json, the 43
+// values of the contract
+static char camper_members[CERBO_BUNDLE_MAX + 1];
+// The members of `values` of fixtures/gx_values_driving.json: 41 of the 43, the two the flow left out when it was
+// heard in the camper (on 2026-10-10, and again on 2026-10-11 at 23:59) - the power at the output of the
+// MultiPlus, which was switched off, and a temperature sensor of the alternator charger
+static char road_members[CERBO_BUNDLE_MAX + 1];
+// fixtures/app_gx_layout_stored.json: views of the user with a page of both sources (Fahrt), one of the adapter
+// (Tank) and one of the Cerbo (Strom)
+static char camper_views[2048];
+
+static void load_camper(void)
+{
+	static char bundle[CERBO_BUNDLE_MAX + 1];
+	bool read = read_fixture("fixtures/gx_values_parked.json", bundle, sizeof(bundle)) && read_fixture("fixtures/app_gx_layout_stored.json", camper_views, sizeof(camper_views));
+	const char *members = read ? strstr(bundle, "\"values\":{") : NULL;
+
+	// What stands between the braces of `values`: the text ends with "}}"
+	if(members != NULL && strlen(members) > 12) snprintf(camper_members, sizeof(camper_members), "%.*s", (int)(strlen(members) - 12), members + 10);
+	check(read && strncmp(camper_members, "\"GX_BATT_SOC\":87.5,", 19) == 0 && strlen(camper_members) > 700, "the bundle of the parked camper and the views with pages of both sources are there");
+
+	read = read_fixture("fixtures/gx_values_driving.json", bundle, sizeof(bundle));
+	members = read ? strstr(bundle, "\"values\":{") : NULL;
+	if(members != NULL && strlen(members) > 12) snprintf(road_members, sizeof(road_members), "%.*s", (int)(strlen(members) - 12), members + 10);
+	check(read && strncmp(road_members, "\"GX_BATT_SOC\":71.3,", 19) == 0 && strstr(road_members, "\"GX_MULTI_MODE\":4,") != NULL && strstr(road_members, "GX_AC_OUT_P") == NULL,
+	      "the bundle of the camper on the road is there: the MultiPlus is off, and the power at its output is not among the values");
+}
+
+// The camper two seconds after the start: garage(), and in its world the Cerbo whose flow publishes the 43
+// values every second. The display has the address of it, or was never given one - the world is the same.
+static void scene_camper(bool with_address)
+{
+	garage();
+	gx.there = true;
+	gx.flow = true;
+	gx.values = camper_members;
+	if(with_address) strcpy(flash.settings, GX_SETTINGS);
+	start();
+	run(2100);
+}
+
+static bool page_at(int page)
+{
+	return on(NAV_PAGES) && app->nav.page == page;
+}
+
+// The page the long press on a value page leads to right now, as nav is told
+static int home_now(void)
+{
+	nav_world_t seen;
+
+	app_world(app, &seen, now);
+	return seen.home_set ? seen.home : -99;
+}
+
+// How the text of the built-in views with the pages of the Cerbo begins
+#define WHOLE_HEAD  "{\"format\":\"wican-display-layout\",\"v\":1,\"name\":\"W906 OM651 Standard + Cerbo\",\"profile_hint\":\"W906\",\"pages\":["
+
+static void test_gx_pages(void)
+{
+	load_camper();
+
+	scene_camper(true);
+	check(app->source == APP_LAYOUT_BUILTIN && app->has_builtin_gx && app->layout.page_count == 12 && strcmp(app->layout.name, "W906 OM651 Standard + Cerbo") == 0 &&
+	      strcmp(app->layout.profile_hint, "W906") == 0, "a display that has the address of the Cerbo: the built-in views of the vehicle with the five pages of the Cerbo behind them, twelve pages");
+	check(memcmp(app->layout.pages, app->builtin.pages, 7 * sizeof(layout_page_t)) == 0 && memcmp(&app->layout.pages[7], app->builtin_gx.pages, 5 * sizeof(layout_page_t)) == 0,
+	      "... the seven pages of the vehicle byte for byte, then the five of the Cerbo byte for byte");
+	check(text_follows() && app->layout_length == 4604 && strncmp(app->layout_text, WHOLE_HEAD, sizeof(WHOLE_HEAD) - 1) == 0,
+	      "... and the text of the views is the text of the whole, 4604 bytes, which is read back as the same views: what the editor in the browser gets");
+	check(info_is(8, "Ansichten: W906 OM651 Standard + Cerbo (eingebaut)"), "the info line of the views names them with the pages of the Cerbo, and as built-in");
+	check(gx_view() == CERBO_VIEW_LIVE && app->cerbo.values.count == 43 && view() == CONN_VIEW_LIVE && page_at(0) && now == 2100,
+	      "the scene of the camper on the road: the adapter live, the Cerbo delivering its 43 values, the first page");
+	shows("gx_motor", "the first page of a display with a Cerbo: the engine as on every display, the first of twelve pages");
+	turn(6);
+	shows("gx_sonstiges", "six detents on: the last page of the vehicle, the seventh of twelve");
+	turn(1);
+	shows("gx_batterie", "one detent on: Batterie, the first page of the Cerbo - six fresh values, no ring");
+	turn(1);
+	shows("gx_energie", "Energie: the mode of the MultiPlus in a word");
+	turn(1);
+	shows("gx_alternator", "Alternator: the switch B2B in a word, the temperatures without a decimal");
+	turn(1);
+	shows("gx_wasser", "Wasser: two bars and two switches");
+	turn(1);
+	shows("gx_klima", "Klima: the last of twelve pages");
+	turn(1);
+	check(page_at(11), "the knob ends hard at the last page of the Cerbo");
+	turn(-5);
+	check(page_at(6), "... and turns back over them to the pages of the vehicle");
+
+	// A flow that publishes six values of the 43
+	garage();
+	cerbo_there();
+	start();
+	run(2100);
+	turn(7);
+	shows("gx_batterie_few", "a bundle that names three of the six values of Batterie: the others are dashes, and the ring is off - the Cerbo does not have them");
+
+	// The flow as it was heard in the camper: 41 values, and none for the output of a MultiPlus that is off
+	garage();
+	cerbo_there();
+	gx.values = road_members;
+	start();
+	run(2100);
+	turn(8);
+	check(app->cerbo.values.count == 41 && page_at(8), "the scene of the 41 values: the page Energie");
+	shows("gx_energie_41", "Energie while the MultiPlus is off: its mode in a word, and a dash for the power at its output - without a ring: the Cerbo does not have that value, nothing went missing");
+	turn(3);
+	shows("gx_klima_41", "Klima on the road: a temperature below zero, an altitude of four digits, a signal of three");
+
+	// The flow stops: the values grow old with the last bundle, which arrived at 2040
+	scene_camper(true);
+	turn(7);
+	gx.flow = false;
+	run_to(7020);
+	shows("gx_batterie", "the last bundle 4980 ms ago: its values are fresh");
+	run_to(7040);
+	check(gx_view() == CERBO_VIEW_LIVE, "5 s after its last bundle the Cerbo still counts as delivering");
+	shows("gx_batterie_old", "5000 ms after the last bundle: the values stand dimmed under a yellow ring");
+	run_to(12020);
+	shows("gx_batterie_old", "9980 ms after it: the same");
+	run_to(12040);
+	check(gx_view() == CERBO_VIEW_QUIET, "10 s after its last bundle the session is quiet");
+	shows("gx_batterie_waiting", "10 s after the last bundle: the note that the display waits for the Cerbo");
+	run_to(30020);
+	shows("gx_batterie_waiting", "28 s after it, before the broker answered a ping that late: still waiting");
+	run_to(30060);
+	check(gx_view() == CERBO_VIEW_SILENT, "the broker answered the ping of 30040, 28 s after the last bundle: the session lives and the flow is silent");
+	shows("gx_batterie_silent", "... and the note asks for the flow, over values that still stand dimmed");
+	run_to(62020);
+	shows("gx_batterie_silent", "59980 ms after the last bundle: its values still stand");
+	run_to(62040);
+	shows("gx_silent", "a minute after the last bundle nothing is left to show: the notice asks for the flow, red");
+	check(light() == 80 && page_at(7), "all the while the screen is lit by the adapter that delivers, and the display stays on the page");
+	turn(-7);
+	shows("gx_motor", "... and the page of the engine is what it was");
+
+	// The broker goes: the session ends at 2100
+	scene_camper(true);
+	turn(7);
+	gx.there = false;
+	run_to(7020);
+	check(gx_view() == CERBO_VIEW_CONNECTING && has_line("ring: none") && has_line("note: Warte auf Cerbo …") && has_line("item: SOC | 87,5 | % | normal | arc | 875") && has_line("dots: 8/12"),
+	      "the broker is gone since 4.9 s: the values of the last bundle are still fresh, and the note says that the display waits");
+	run_to(7040);
+	shows("gx_batterie_waiting", "5 s after the last bundle: dimmed, yellow, waiting");
+	run_to(17080);
+	shows("gx_batterie_waiting", "15 s after the session ended, less 20 ms: still waiting");
+	run_to(17100);
+	check(gx_view() == CERBO_VIEW_UNREACHABLE, "15 s after the session ended the Cerbo counts as not reachable");
+	shows("gx_batterie_away", "... and the note says so, over the values that still stand");
+	run_to(62020);
+	shows("gx_batterie_away", "59980 ms after the last bundle: the same");
+	run_to(62040);
+	shows("gx_unreachable", "a minute after the last bundle: the notice of the Cerbo in place of the page, red");
+	turn(-7);
+	shows("gx_motor", "on the road with the Cerbo away the page of the engine is what it was");
+	check(home_now() == 0, "... and the long press leads to it: the first page that shows values");
+	gx.there = true;
+	run_to(125000);
+	turn(7);
+	check(gx_view() == CERBO_VIEW_LIVE && app->cerbo.sessions == 2, "the broker is back: a second session");
+	shows("gx_batterie", "... and the page shows its values again");
+}
+
+// A day of the camper, on a display that has the address of the Cerbo and on one that never got it. The second
+// is the display it was before there was a second source: every screen of it is one of the fixtures from before.
+static void camper_day(bool with_address)
+{
+	uint64_t last;
+	uint32_t bundles;
+
+	scene_camper(with_address);
+	shows(with_address ? "gx_motor" : "page_motor", with_address ? "on the road: the page of the engine, the first of twelve" : "on the road without the address: the page of the engine, the first of seven");
+	check(home_now() == 0, "on the road the long press leads to the first page: the engine shows values");
+	turn(11);
+	check(page_at(with_address ? 11 : 6), with_address ? "eleven detents lead to the last page of the Cerbo" : "without the address eleven detents end at the last page of the vehicle");
+	long_press();
+	check(page_at(0), "on the road the long press leads back to the first page of the adapter, from wherever");
+
+	// Parked: the adapter goes to sleep
+	wican.dead = true;
+	run_to(30000);
+	check(view() == CONN_VIEW_NO_ANSWER && page_at(0) && light() == 80, "the scene of the parked camper: the adapter does not answer any more, the display is still on the page of the engine");
+	shows(with_address ? "gx_no_answer" : "no_answer", "parked: the page of the engine says that the adapter does not answer, red - with a Cerbo and without one");
+	check(home_now() == (with_address ? 7 : 0), with_address ? "parked, the long press leads to Batterie: the first page that shows values is the first page of the Cerbo" :
+	                                                           "parked without the address no page shows values: the long press leads to the first page, as it always did");
+	run_to(50000);
+	check(page_at(0), "the display never goes to a page by itself: twenty seconds later it is still on the page of the engine, whatever shows values elsewhere");
+	long_press();
+	if(with_address)
+	{
+		check(page_at(7), "the long press leads to Batterie");
+		shows("gx_batterie", "... which shows its values as on the road: the page of the Cerbo does not ask for the adapter");
+		long_press();
+		check(page_at(7), "a long press on that page stays there");
+		turn(4);
+		check(page_at(11), "four detents on: Klima");
+		long_press();
+		check(page_at(7), "the long press leads back to Batterie, not to the page of the engine");
+	}
+	else
+	{
+		check(page_at(0), "the long press stays on the first page");
+		shows("no_answer", "... which is the notice of before");
+		turn(7);
+		check(page_at(6) && has_line("dots: 7/7") && has_line("line: WiCAN antwortet nicht"), "without the address the knob ends at the seventh page, the notice of the adapter on every page");
+		long_press();
+		check(page_at(0), "... and the long press leads back to the first");
+	}
+
+	// Standby: values of the Cerbo keep no light on
+	last = app->last_input_ms;
+	bundles = app->cerbo.bundles;
+	check(app_backlight(app, last + 59999) == 80 && app_backlight(app, last + 60000) == 0, "parked, the backlight goes off 60 s after the last input, not 1 ms before - with a Cerbo that delivers and without one");
+	run_to(last + 65000);
+	check(light() == 0 && on(NAV_PAGES), "65 s after the last input the screen is dark");
+	if(with_address)
+	{
+		check(gx_view() == CERBO_VIEW_LIVE && cerbo_showing(&app->cerbo, now) && app->cerbo.bundles >= bundles + 60 && page_at(7),
+		      "... although the Cerbo delivered sixty bundles meanwhile and its page has values to show: the session goes on in the dark");
+		tap(0);
+		check(light() == 80 && page_at(7), "a tap wakes the screen, on the page it was on");
+		shows("gx_batterie", "... and the values are there at once");
+	}
+	else
+	{
+		check(app->cerbo.bundles == 0 && app->cerbo.sessions == 0 && gx.opens == 0 && gx_view() == CERBO_VIEW_OFF, "... and the display without the address never spoke to the Cerbo of its world");
+		tap(0);
+		check(light() == 80 && page_at(0), "a tap wakes the screen");
+		shows("no_answer", "... on the notice of before");
+	}
+
+	// The adapter wakes: the display stays where it is
+	turn(with_address ? 2 : 3);
+	wican.dead = false;
+	run(20000);
+	check(view() == CONN_VIEW_LIVE && page_at(with_address ? 9 : 3), "the adapter is back, and the display stays on the page it was on");
+	check(home_now() == 0, "on the road again the long press leads to the page of the engine");
+	long_press();
+	shows(with_address ? "gx_motor" : "page_motor", "... which shows its values again");
+}
+
+static void test_gx_camper(void)
+{
+	camper_day(true);
+	camper_day(false);
+
+	// Neither source has anything to show
+	scene_camper(true);
+	turn(9);
+	wican.dead = true;
+	gx.there = false;
+	run_to(70000);
+	check(view() == CONN_VIEW_NO_ANSWER && gx_view() == CERBO_VIEW_UNREACHABLE && !cerbo_showing(&app->cerbo, now) && home_now() == 0,
+	      "the adapter asleep and the Cerbo away for more than a minute: no page shows values, and the long press leads to the first page");
+	tap(0);
+	long_press();
+	check(page_at(0), "... to which it goes");
+	shows("gx_no_answer", "... the notice of the adapter");
+
+	// The display starts on the first page, parked or not: it never chooses a page by itself
+	scene_camper(true);
+	wican.dead = true;
+	run_to(30000);
+	strcpy(flash.settings, GX_SETTINGS);
+	start();
+	run(10000);
+	check(gx_view() == CERBO_VIEW_LIVE && page_at(0) && home_now() == 7, "a display that starts in the parked camper starts on the first page, although Batterie is the page the long press leads to");
+}
+
+// Views of the user: nothing is appended to them, and a value of the Cerbo on them is one of the Cerbo
+static void test_gx_stored(void)
+{
+	garage();
+	gx.there = true;
+	gx.flow = true;
+	gx.values = camper_members;
+	strcpy(flash.settings, GX_SETTINGS);
+	strcpy(flash.layout, camper_views);
+	flash.has_layout = true;
+	start();
+	run(2100);
+	check(app->source == APP_LAYOUT_STORED && app->layout.page_count == 3 && strcmp(app->layout.name, "Camper") == 0 && strcmp(app->layout_text, camper_views) == 0,
+	      "stored views on a display with the address: they stay the three pages they are, under their name, as the text that was stored - no page of the Cerbo is appended");
+	shows("gx_stored_fahrt", "a stored page of both sources on the road: the engine speed and the battery voltage of the adapter, the state of charge and the switch of the Cerbo");
+	turn(2);
+	shows("gx_stored_strom", "a stored page of the Cerbo alone");
+	turn(-2);
+	wican.dead = true;
+	run_to(30000);
+	shows("gx_stored_fahrt_parked", "parked: the values of the Cerbo, dashes for those of the adapter, its text below, and no ring");
+	check(home_now() == 0, "parked, the long press leads to that page: it shows values, those of the Cerbo");
+	turn(1);
+	shows("gx_stored_no_answer", "the page of the adapter alone is its notice");
+	long_press();
+	check(page_at(0), "... and the long press leads from it to the page of both");
+	gx.there = false;
+	run_to(100000);
+	check(has_line("kind: notice") && has_line("ring: red") && has_line("line: WiCAN antwortet nicht") && has_line("dots: 1/3") && home_now() == 0,
+	      "the Cerbo away as well for more than a minute: the page of both is the notice of the adapter, whose value comes first");
+
+	// The same views on a display without the address
+	garage();
+	gx.there = true;
+	gx.flow = true;
+	gx.values = camper_members;
+	strcpy(flash.layout, camper_views);
+	flash.has_layout = true;
+	start();
+	run(2100);
+	check(app->source == APP_LAYOUT_STORED && app->layout.page_count == 3 && !cerbo_on(&app->cerbo), "the same views on a display without the address");
+	shows("gx_stored_fahrt_no_cerbo", "the page of both: the values of the adapter, n. v. for those of the Cerbo, and the note that the Cerbo is not set up");
+	turn(2);
+	shows("gx_stored_not_set_up", "the page of the Cerbo alone says that it is not set up, grey: nothing is wrong");
+	check(home_now() == 0, "the long press leads to the first page, which shows the values of the adapter");
+	long_press();
+	check(page_at(0), "... to which it goes");
+}
+
+// The choice of the views with a second source
+static void test_gx_views(void)
+{
+	static layout_t before;
+	static char text_before[LAYOUT_TEXT_MAX + 1];
+
+	// Without the address: the display it was
+	scene_camper(false);
+	check(app->has_builtin_gx && app->builtin_gx.page_count == 5 && strcmp(app->builtin_gx.name, "Cerbo") == 0, "every display reads the built-in pages of the Cerbo at its start");
+	check(app->source == APP_LAYOUT_BUILTIN && app->layout.page_count == 7 && memcmp(&app->layout, &app->builtin, sizeof(layout_t)) == 0 && strcmp(app->layout_text, builtin_text) == 0 &&
+	      app->layout_length == strlen(builtin_text) && info_is(6, "Ansichten: W906 OM651 Standard (eingebaut)"),
+	      "a display without the address has the built-in views of the vehicle and nothing else: the same memory, the same text byte for byte, the same info line");
+
+	// The browser gives the address: the pages come at once, the page shown stays
+	turn(2);
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	memset(&done, 0, sizeof(done));
+	check(browser_settings("{\"cerbo\":\"" GX_HOST "\"}") && app->layout.page_count == 12 && strcmp(app->layout.name, "W906 OM651 Standard + Cerbo") == 0 && app->source == APP_LAYOUT_BUILTIN &&
+	      text_follows() && page_at(2), "the browser gives the address: the five pages of the Cerbo are behind the views at once, and the page shown stays");
+	carry_out();
+	check(done.settings == 1 && stores() == 1, "... the settings are stored and nothing else: views the display chose itself are never stored");
+	run(3000);
+	turn(8);
+	shows("gx_wasser", "three seconds later, eight detents on from the third page: the page Wasser with its values");
+	memcpy(&before, &app->layout, sizeof(before));
+	strcpy(text_before, app->layout_text);
+	check(browser_settings("{\"cerbo\":\"" GX_ELSE "\"}") && memcmp(&before, &app->layout, sizeof(before)) == 0 && strcmp(text_before, app->layout_text) == 0 && page_at(10),
+	      "another address in place of the first: the views stay as they are, and so does the page");
+	check(browser_settings("{\"brightness\":70}") && memcmp(&before, &app->layout, sizeof(before)) == 0 && page_at(10), "settings that do not name the address change nothing about the views");
+
+	// The browser takes it away
+	check(browser_settings("{\"cerbo\":\"\"}") && app->layout.page_count == 7 && memcmp(&app->layout, &app->builtin, sizeof(layout_t)) == 0 && strcmp(app->layout_text, builtin_text) == 0 &&
+	      app->layout_length == strlen(builtin_text) && app->source == APP_LAYOUT_BUILTIN,
+	      "the browser takes the address away: the views are the built-in ones of the vehicle again, the same memory and the same text byte for byte");
+	check(page_at(0), "... and the display, which was on a page of the Cerbo, is on the first page: its page is gone");
+	shows("page_motor", "... which is the page of a display that never had the address");
+	check(browser_settings("{\"cerbo\":\"" GX_HOST "\"}") && app->layout.page_count == 12, "the address is given again");
+	turn(4);
+	check(browser_settings("{\"cerbo\":\"\"}") && app->layout.page_count == 7 && page_at(4), "taken away while a page of the vehicle shows: that page stays");
+
+	// The start with the address stored
+	strcpy(flash.settings, GX_SETTINGS);
+	start();
+	check(app->layout.page_count == 12 && app->source == APP_LAYOUT_BUILTIN && page_at(0) && text_follows(), "a display that starts with the address stored has the twelve pages from the start, and starts on the first");
+
+	// Safe mode: the source is off, and no page of it is appended
+	scene_camper(true);
+	machine.safe_mode = true;
+	start();
+	run(2100);
+	check(!cerbo_on(&app->cerbo) && app->layout.page_count == 7 && strcmp(app->layout_text, builtin_text) == 0 && info_is(8, "Ansichten: W906 OM651 Standard (eingebaut)"),
+	      "in safe mode with the address stored the views are the built-in ones of the vehicle alone");
+	shows("safe_mode", "... and the first page is the one of every display in safe mode");
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	check(browser_settings("{\"cerbo\":\"" GX_ELSE "\"}") && browser_settings("{\"cerbo\":\"\"}") && browser_settings("{\"cerbo\":\"" GX_HOST "\"}") && app->layout.page_count == 7 &&
+	      strcmp(app->layout_text, builtin_text) == 0, "... whatever the browser does with the address there: the source stays off, the views stay");
+
+	// A firmware whose pages of the Cerbo cannot be read
+	garage();
+	cerbo_there();
+	machine.no_builtin_gx = true;
+	start();
+	run(2100);
+	check(cerbo_on(&app->cerbo) && gx_view() == CERBO_VIEW_LIVE && !app->has_builtin_gx && app->layout.page_count == 7 && strcmp(app->layout_text, builtin_text) == 0,
+	      "a firmware without the built-in pages of the Cerbo: the source delivers, and the views are those of the vehicle alone");
+	shows("page_motor", "... the first of seven pages");
+
+	// Views of the user are never appended to
+	scene_camper(false);
+	strcpy(flash.layout, stored_layout);
+	flash.has_layout = true;
+	start();
+	run(2100);
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	check(browser_settings("{\"cerbo\":\"" GX_HOST "\"}") && app->source == APP_LAYOUT_STORED && app->layout.page_count == 2 && strcmp(app->layout_text, stored_layout) == 0,
+	      "stored views stay as they are when the browser gives the address");
+	check(browser_layout(builtin_text, false) && app->source == APP_LAYOUT_PREVIEW && app->layout.page_count == 7 && strcmp(app->layout_text, builtin_text) == 0,
+	      "views the browser sends to look at are shown as they were sent, with the source on: seven pages");
+	check(browser_settings("{\"cerbo\":\"\"}") && browser_settings("{\"cerbo\":\"" GX_HOST "\"}") && app->source == APP_LAYOUT_PREVIEW && app->layout.page_count == 7,
+	      "... and stay so when the address goes and comes while they are looked at");
+	check(browser_layout_reset() && app->source == APP_LAYOUT_BUILTIN && app->layout.page_count == 12 && strcmp(app->layout.name, "W906 OM651 Standard + Cerbo") == 0 && text_follows(),
+	      "the reset of the views with the source on: the built-in views of the vehicle with the pages of the Cerbo");
+
+	// A hidden page is no page the long press leads to, whatever it has to show
+	scene_camper(true);
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	check(browser_layout("{\"format\":\"wican-display-layout\",\"v\":1,\"pages\":[{\"title\":\"A\",\"hidden\":true,\"items\":[{\"key\":\"GX_BATT_SOC\"}]},"
+	                     "{\"title\":\"B\",\"items\":[{\"key\":\"ENGINE_RPM\"}]},{\"title\":\"C\",\"items\":[{\"key\":\"GX_BATT_V\"}]}]}", false),
+	      "views to look at: a hidden page of the Cerbo, a page of the adapter, a page of the Cerbo");
+	run(1000);
+	check(page_at(1) && home_now() == 1, "on the road the long press leads to the page of the adapter: the hidden page before it shows values and is no page of the knob");
+	wican.dead = true;
+	run_to(30000);
+	check(view() == CONN_VIEW_NO_ANSWER && home_now() == 2, "parked it leads to the third page: the first page of the knob that shows values");
+	long_press();
+	check(page_at(2) && has_line("title: C") && has_line("dots: 2/2"), "... to which it goes");
+
+	// Another vehicle: views made from its catalogue, and the pages of the Cerbo behind them
+	garage();
+	cerbo_there();
+	wican.config = other_config;
+	wican.values = other_values;
+	start();
+	run(2100);
+	check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 7 && strcmp(app->layout.pages[0].title, "Werte 1") == 0 && strcmp(app->layout.pages[1].title, "Werte 2") == 0 &&
+	      strcmp(app->layout.pages[2].title, "Batterie") == 0 && strcmp(app->layout.pages[6].title, "Klima") == 0 && app->layout.name[0] == '\0' && text_follows(),
+	      "another vehicle with the address: two pages made from its catalogue, the five of the Cerbo behind them, no name - and layout_text is the text of the seven");
+	check(info_is(8, "Ansichten: – (erzeugt)"), "the info line calls them generated: the part of the vehicle is what the word names");
+	turn(1);
+	check(has_line("dots: 2/7"), "the pages of the other vehicle count seven dots");
+	wican.values = "{\"SPEED\":0,\"RPM\":790,\"COOLANT\":81.5,\"FUEL\":62,\"INTAKE_TEMP\":19,\"EXTRA\":1}";
+	run_to(4100);
+	check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 7 && strstr(app->layout_text, "\"EXTRA\"") != NULL && strcmp(app->layout.pages[2].title, "Batterie") == 0 && page_at(1) && text_follows(),
+	      "the catalogue grows: the views are made anew with the pages of the Cerbo behind them, and the page shown stays");
+
+	// The built-in views damaged, the catalogue not loaded: one page of the battery voltage, and the five
+	garage();
+	cerbo_there();
+	machine.no_builtin = true;
+	wifi.in_range_count = 0;
+	start();
+	check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 6 && strcmp(app->layout.pages[0].title, "Werte 1") == 0 && strcmp(app->layout.pages[1].title, "Batterie") == 0 && text_follows(),
+	      "a display without built-in views of the vehicle and with the address: the page made from the catalogue it has, and the five of the Cerbo");
+}
+
+// A day with the pages of the Cerbo, for the telling over two stacks: every page, the park, the long press, the
+// address taken away and given again by the browser, a restart
+static void story_camper(void)
+{
+	scene_camper(true);
+	for(int i = 0; i < 11; i++)
+	{
+		turn(1);
+		run(200);
+	}
+	long_press();
+	wican.dead = true;
+	run_to(30000);
+	long_press();
+	run(1000);
+	turn(3);
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	browser_settings("{\"cerbo\":\"\"}");
+	run(2000);
+	browser_settings("{\"cerbo\":\"" GX_HOST "\"}");
+	run(5000);
+	turn(8);
+	wican.dead = false;
+	run(20000);
+	start();
+	run(5000);
+	turn(9);
+	run(1000);
+}
+
+static void test_gx_over_stacks(void)
+{
+	bool same;
+
+	// The same story in the same world, each telling over another byte on the stack: a byte the display keeps
+	// without having written it is then not the same in the two
+	trace_plain.count = 0;
+	trace_cerbo.count = 0;
+	watch_trace = trace_step;
+	trace_whole = true;
+	tracing = &trace_plain;
+	stack_dirt = 0x5a;
+	story_camper();
+	tracing = &trace_cerbo;
+	stack_dirt = 0xa5;
+	story_camper();
+	stack_dirt = 0;
+	trace_whole = false;
+	tracing = NULL;
+	watch_trace = NULL;
+	same = trace_plain.count > 2000 && same_story(&trace_plain, &trace_cerbo);
+	check(same && page_at(9) && app->layout.page_count == 12 && gx_view() == CERBO_VIEW_LIVE,
+	      "a day with the pages of the Cerbo - every page, parked, the long press, the address taken away and given again, a restart - told twice over two different bytes on the stack: "
+	      "the same screen at every step, and once a second every byte of the app");
+}
+
+// ... and a third time, on the firmware as it is built: the display with the Cerbo has the five pages of it
+// behind the seven of the vehicle. Every screen of these stories has to be the hand-written one all the same -
+// but for the one line that counts the pages, where the harness reads twelve for seven (dots_of_twelve).
+static void test_fault_memory_with_pages(void)
+{
+	memset(&gx_seen, 0, sizeof(gx_seen));
+	gx_everywhere = true;
+	dots_of_twelve = true;
+	printf("  the stories of the fault memory a third time, on a display whose views end with the pages of the Cerbo\n");
+	test_read_and_clear();
+	test_list_and_dialog();
+	test_refusals();
+	test_blocks();
+	test_more_failures();
+	test_read_through_pause();
+	test_request_ends();
+	test_dialog_under_question();
+	test_replaced();
+	gx_everywhere = false;
+	dots_of_twelve = false;
+	printf("  the source of these stories: %ld bundles taken, %ld messages refused, %ld sessions; %ld screens compared with twelve dots for seven\n", gx_seen.taken, gx_seen.refused,
+	       gx_seen.sessions, dots_rewritten);
+	check(gx_seen.taken >= 1000 && gx_seen.refused >= 500 && gx_seen.sessions >= 300 && gx_seen.during_request >= 100 && gx_seen.during_dialog >= 10,
+	      "the stories of the fault memory ran a third time, on a display with the pages of the Cerbo behind its views and a source that took bundles, refused messages and lost its connection");
+	check(dots_rewritten == 8, "... and among their screens were eight value pages and notices, whose dots count twelve pages there");
 }
 
 int main(void)
@@ -8972,6 +9697,12 @@ int main(void)
 	test_cerbo_apart();
 	test_cerbo_twice();
 	test_fault_memory_with_cerbo();
+	test_fault_memory_with_pages();
+	test_gx_pages();
+	test_gx_camper();
+	test_gx_stored();
+	test_gx_views();
+	test_gx_over_stacks();
 	test_random_runs();
 
 	return test_end();

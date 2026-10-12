@@ -1,0 +1,9 @@
+kind: values
+ring: none
+title: Laden
+note:
+item: Alternator | 0,0 | A | normal | number | -1
+item: Bordnetz | 14,1 | V | normal | number | -1
+item: B2B | aus |  | normal | state | -1
+item: Starterbatterie | 12,71 | V | normal | number | -1
+dots: 5/5

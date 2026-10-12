@@ -3568,7 +3568,9 @@ static void test_cerbo(void)
 	get("/api/info");
 	check(answered(200, "info_cerbo"), "app_web_info_cerbo.json: GET /api/info of a display with a Cerbo two seconds after the start: the object cerbo behind wican, the address in the settings");
 	check(untouched(), "GET /api/info of a display with a Cerbo changes nothing of the app, the second source included");
-	check(strlen(fixture("info_cerbo")) == strlen(fixture("info")) + 133, "but for that object and that member the answer is the one of a display without a Cerbo: app_web_info.json and 133 bytes");
+	// 133 bytes of the object and the member, and the 8 of " + Cerbo" in the name of the views
+	check(strlen(fixture("info_cerbo")) == strlen(fixture("info")) + 141 && strstr(fixture("info_cerbo"), "\"layout\":{\"name\":\"W906 OM651 Standard + Cerbo\",\"source\":\"builtin\"}") != NULL,
+	      "but for that object, that member and the name of the views - which end with the pages of the Cerbo - the answer is the one of a display without a Cerbo: app_web_info.json and 141 bytes");
 	get_at("/api/info", 12039);
 	check(answered_with(200, "\"cerbo\":{\"host\":\"192.168.88.2\",\"view\":\"live\",\"values\":6,"), "the info 9999 ms after the last bundle: the view of the Cerbo is the one at the time of the request, live");
 	get_at("/api/info", 12040);
@@ -3802,7 +3804,9 @@ static void test_cerbo(void)
 	check(answered(200, "settings_cerbo") && done.settings == 1 && strcmp(flash.settings, fixture("settings_cerbo")) == 0,
 	      "app_web_settings_cerbo.json: the address of the Cerbo is taken: the answer names it behind the five members, and the settings are stored that way");
 	check(strcmp(app->settings.cerbo, GX_HOST) == 0 && strcmp(cerbo_host(&app->cerbo), GX_HOST) == 0 && cerbo_on(&app->cerbo), "the second source has the address at once, and is on");
-	check(nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, 10000), "the address changes the settings, the second source, the time and the release, and nothing else");
+	check(nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE | MAY_LAYOUT, &release, 10000), "the address changes the settings, the second source, the views, the time and the release, and nothing else");
+	check(in_use(fixture("layout_cerbo")) && app->source == APP_LAYOUT_BUILTIN && app->layout.page_count == 12 && app->nav.page == 0 && done.layout == 0 && done.erase == 0 && carried() == 1,
+	      "app_web_layout_cerbo.json: with the address the built-in views end with the five pages of the Cerbo at once, their text is the text of the twelve - and nothing but the settings is stored");
 	check(gx.opens == 0, "the task of the source has not had its turn yet");
 	run(60);
 	check(gx.opens == 1 && strcmp(gx.opened, GX_HOST) == 0 && cerbo_view(&app->cerbo, now) == CERBO_VIEW_LIVE && app->cerbo.bundles == 1,
@@ -3866,9 +3870,11 @@ static void test_cerbo(void)
 	access_write(&release, now);
 	remember();
 	post("/api/settings", "{\"cerbo\":\"\",\"night\":25}");
-	check(answered(200, "settings_defaults") && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, 20040) && !cerbo_on(&app->cerbo) && cerbo_host(&app->cerbo)[0] == '\0' &&
+	check(answered(200, "settings_defaults") && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE | MAY_LAYOUT, &release, 20040) && !cerbo_on(&app->cerbo) && cerbo_host(&app->cerbo)[0] == '\0' &&
 	      strcmp(flash.settings, fixture("settings_defaults")) == 0,
 	      "an empty address takes the Cerbo away: the answer and the stored settings are app_web_settings_defaults.json, byte for byte, and the source is off");
+	check(in_use(builtin_text) && app->source == APP_LAYOUT_BUILTIN && app->layout.page_count == 7 && done.layout == 0 && done.erase == 0,
+	      "... and the views are the built-in ones of the vehicle again, as their own text, byte for byte: the pages of the Cerbo went with the address");
 	get("/api/info");
 	check(strstr(reply, "cerbo") == NULL && answered_with(200, "\"wican\":{\"host\":\"192.168.1.50\",\"id\":\"a1b2c3d4e5f6\",\"fw\":\"4.21\",\"view\":\"live\"},\"layout\":{"),
 	      "the info has no object cerbo and no member cerbo any more");
@@ -3908,6 +3914,123 @@ static void test_cerbo(void)
 	remember();
 	post("/api/settings", "{\"brightness\":40}");
 	check(by_route && answered(403, "locked") && untouched(), "... and closed ten minutes after it was given: nothing the source took, refused or lost renewed it");
+}
+
+// The views of a display with a Cerbo, through the web interface
+static void test_cerbo_views(void)
+{
+	static const char mixed[] = "{\"format\":\"wican-display-layout\",\"v\":1,\"name\":\"M\",\"pages\":[{\"items\":[{\"key\":\"GX_BATT_SOC\"},{\"key\":\"NOBODY\"},{\"key\":\"GX\"},"
+	                            "{\"key\":\"ENGINE_RPM\"},{\"key\":\"GX_NEVER_SENT\"}]}]}";
+	access_t release;
+
+	// GET /api/layout: the text of the twelve pages, which the editor can send back
+	released_with_cerbo();
+	get("/api/layout");
+	check(answered(200, "layout_cerbo") && reply_length == 4604, "app_web_layout_cerbo.json: GET /api/layout of a display with a Cerbo: the built-in views of the vehicle and the five pages of the Cerbo "
+	                                                             "as one text of 4604 bytes, without whitespace, under the name of the two");
+	get("/api/info");
+	check(answered_with(200, "\"layout\":{\"name\":\"W906 OM651 Standard + Cerbo\",\"source\":\"builtin\"}"), "the info names the views with the pages of the Cerbo, and as built-in");
+	remember();
+	put("/api/layout?mode=check", fixture("layout_cerbo"));
+	check(answered(200, "report_cerbo"), "app_web_report_cerbo.json: the check of that text: twelve pages, 65 values, no warning - and with the catalogue of the W906 loaded no key of the Cerbo is unknown");
+	put("/api/layout?mode=check", builtin_gx_text);
+	check(answered_text(200, "{\"ok\":true,\"name\":\"Cerbo\",\"pages\":5,\"items\":30,\"warnings\":0,\"warning_path\":\"\",\"warning\":\"\",\"unknown\":[]}"),
+	      "the built-in pages of the Cerbo checked by themselves: five pages, 30 values, nothing unknown");
+	put("/api/layout?mode=check", mixed);
+	check(answered_text(200, "{\"ok\":true,\"name\":\"M\",\"pages\":1,\"items\":5,\"warnings\":0,\"warning_path\":\"\",\"warning\":\"\",\"unknown\":[\"NOBODY\",\"GX\"]}"),
+	      "a page of keys of both sources, one nobody has and one that only looks like a key of the Cerbo: those two are unknown - and a key of the Cerbo its flow never sent is not");
+
+	// The page shown when the address goes: it stays where the views still have one, else the first
+	turn(9);
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	check(code == 200 && before.nav.page == 9 && app->nav.page == 0 && in_use(builtin_text) && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE | MAY_LAYOUT, &release, now),
+	      "the address is taken away while a page of the Cerbo shows: the views are those of the vehicle, and the display is on their first page");
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(code == 200 && in_use(fixture("layout_cerbo")) && app->nav.page == 0, "given again: the twelve pages, the page stays");
+	turn(3);
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	check(code == 200 && app->nav.page == 3 && in_use(builtin_text), "taken away while the fourth page of the vehicle shows: that page stays");
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(code == 200 && app->nav.page == 3 && in_use(fixture("layout_cerbo")), "given while it shows: it stays as well");
+
+	// The reset of the views with the source on
+	turn(2);
+	memset(&done, 0, sizeof(done));
+	post("/api/layout/reset", "");
+	check(answered(200, "report_cerbo") && in_use(fixture("layout_cerbo")) && app->source == APP_LAYOUT_BUILTIN && app->nav.page == 0 && done.erase == 1,
+	      "the reset of the views on a display with a Cerbo answers the report of the twelve pages and puts them in use, from the first page");
+
+	// Views of the user are never appended to, and keep what they have
+	put("/api/layout?mode=save", fixture("layout_cerbo"));
+	check(answered(200, "report_cerbo") && app->source == APP_LAYOUT_STORED && in_use(fixture("layout_cerbo")) && flash.has_layout && strcmp(flash.layout, fixture("layout_cerbo")) == 0,
+	      "the twelve pages saved from the editor are stored views like any other: the text that was sent");
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	check(code == 200 && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, now) && app->source == APP_LAYOUT_STORED && app->layout.page_count == 12,
+	      "the address is taken away under stored views: the settings and the source change, the views do not - their pages of the Cerbo stay");
+	turn(7);
+	run(200);
+	check(app->nav.page == 7 && has_line("kind: notice") && has_line("ring: grey") && has_line("line: Cerbo nicht eingerichtet") && has_line("dots: 8/12"),
+	      "... and the page Batterie of them says that the Cerbo is not set up");
+	put("/api/layout?mode=apply", stored_layout);
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(code == 200 && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, now) && app->source == APP_LAYOUT_PREVIEW && in_use(stored_layout),
+	      "the address is given while views are looked at: they stay the two pages that were sent");
+	post("/api/layout/reset", "");
+	check(answered(200, "report_cerbo") && in_use(fixture("layout_cerbo")) && !flash.has_layout, "the reset behind them: the twelve pages, and the stored views are gone");
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	post("/api/layout/reset", "");
+	check(answered(200, "report_builtin") && in_use(builtin_text), "without the address the reset answers the report of the seven pages, as on every display without a Cerbo");
+
+	// Safe mode: the address is taken, the source stays off, and the views stay
+	garage();
+	cerbo_there();
+	machine.safe_mode = true;
+	start();
+	run(2100);
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	get("/api/layout");
+	check(answered_text(200, builtin_text), "in safe mode with the address stored GET /api/layout is the text of the built-in views of the vehicle, byte for byte");
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	check(code == 200 && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, now) && in_use(builtin_text), "the address taken away in safe mode changes the settings and the source, not the views");
+	release = app->access;
+	access_write(&release, now);
+	remember();
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(code == 200 && nothing_but(MAY_CLOCK | MAY_SETTINGS | MAY_SOURCE, &release, now) && in_use(builtin_text) && !cerbo_on(&app->cerbo), "given in safe mode: the source stays off, and no page is appended");
+
+	// A firmware whose pages of the Cerbo cannot be read: the address switches the source and no views
+	garage();
+	machine.no_builtin_gx = true;
+	start();
+	run(2100);
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(code == 200 && cerbo_on(&app->cerbo) && in_use(builtin_text), "a firmware without the built-in pages of the Cerbo: the address switches the source on, and the views stay the text of the vehicle");
+
+	// The other vehicle: its generated views get the pages, and lose them again
+	other_vehicle();
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	turn(1);
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	check(code == 200 && app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 7 && strcmp(app->layout.pages[2].title, "Batterie") == 0 && app->nav.page == 1 &&
+	      app->layout_length == strlen(app->layout_text) && in_use(app->layout_text),
+	      "another vehicle: the address puts the five pages behind the two made from its catalogue, the page shown stays, and the text is one that is read as these views");
+	put("/api/layout?mode=check", app->layout_text);
+	check(code == 200 && strstr(reply, "\"pages\":7,\"items\":36,") != NULL && strstr(reply, "\"unknown\":[]") != NULL, "... a text the check takes: seven pages, 36 values, nothing unknown");
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	check(code == 200 && app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 2 && app->nav.page == 1, "taken away: the two pages of the vehicle, and the page stays");
 }
 
 /* ---------------------------------------------------------------------------------------------------
@@ -4014,6 +4137,8 @@ typedef struct
 	                            // display without the address, which names it, and on one with it, which leaves it out
 	long gx_given, gx_moved, gx_taken_away, gx_same;    // settings that were accepted and gave the address, another one, none, or the same again
 	long gx_bad;                // settings refused that named an address that is none
+	long gx_switched;           // settings accepted that switched the source on or off under views the display chose itself
+	long gx_paged;              // requests behind which such views ended with the pages of the Cerbo
 	long gx_rounds;             // rounds of the task of the source that were watched
 	long gx_bundles, gx_refused, gx_sessions, gx_closed;    // what the source did (gx_seen)
 	long gx_restarts;           // restarts and factory resets the browser asked for while a session with the Cerbo stood
@@ -5097,8 +5222,16 @@ static void request_deed(void)
 		case K_RESET:
 		case K_END:          may |= MAY_ASKED; break;
 		case K_FORGET:       may |= MAY_NETWORKS; break;
-		// With another address, or none, the second source changes with the settings
-		case K_SETTINGS:     may |= address != NULL && strcmp(address, told.settings.cerbo) != 0 ? MAY_SETTINGS | MAY_SOURCE : MAY_SETTINGS; break;
+		// With another address, or none, the second source changes with the settings; and where that switches the
+		// source on or off - never in safe mode -, the views the display chose itself change with it
+		case K_SETTINGS:
+			may |= address != NULL && strcmp(address, told.settings.cerbo) != 0 ? MAY_SETTINGS | MAY_SOURCE : MAY_SETTINGS;
+			if(address != NULL && (address[0] == '\0') != (told.settings.cerbo[0] == '\0') && !machine.safe_mode && (before.source == APP_LAYOUT_BUILTIN || before.source == APP_LAYOUT_GENERATED))
+			{
+				may |= MAY_LAYOUT;
+				tally->gx_switched++;
+			}
+			break;
 		case K_BEGIN:        may |= MAY_UPLOAD; break;
 		default:             break;
 	}
@@ -5107,6 +5240,17 @@ static void request_deed(void)
 		if(reads || kind == K_CHECK) broke(PROMISE_READING, "a reading request or the check of a layout changed something");
 		else if(code >= 400) broke(PROMISE_REFUSED, "a request that was refused changed something else than the time, or the release in another way than one change does");
 		else broke(PROMISE_FRAME, "a request that was accepted changed something app_web.h does not name for it, or the release in another way than one change does");
+	}
+	// The views the display chose itself end with the five pages of the Cerbo exactly while the second source is on,
+	// behind whatever request; those of the user are as the user left them
+	if(app->source == APP_LAYOUT_BUILTIN || app->source == APP_LAYOUT_GENERATED)
+	{
+		int count = app->layout.page_count;
+		bool paged = count >= 5 && strcmp(app->layout.pages[count - 5].title, "Batterie") == 0 && strcmp(app->layout.pages[count - 1].title, "Klima") == 0 &&
+		             strncmp(app->layout.pages[count - 1].items[5].key, "GX_", 3) == 0;
+
+		if(paged != cerbo_on(&app->cerbo)) broke(PROMISE_FRAME, "the views the display chose itself do not end with the pages of the Cerbo exactly while the second source is on");
+		if(paged) tally->gx_paged++;
 	}
 	if((reads || kind == K_CHECK || code >= 400) && gathered != 0) broke(PROMISE_REFUSED, "a request that changes nothing raised an event");
 	if(!reads && kind != K_CHECK && !seen.open)
@@ -5684,6 +5828,10 @@ static void test_random_walk(void)
 	check(complete && result.gx_given >= 10 && result.gx_moved >= 5 && result.gx_taken_away >= 10 && result.gx_same >= 5 && result.gx_bad >= 5 && result.gx_rounds >= 100000 &&
 	      result.gx_bundles >= 2000 && result.gx_refused >= 100 && result.gx_sessions >= 100 && result.gx_closed >= 20 && result.gx_restarts >= 5,
 	      "the random runs give the address of the Cerbo, change it, take it away and send one that is none, while the Cerbo delivers, refuses, goes and comes back - and restart the display during its sessions");
+	printf("  random runs, the pages of the Cerbo: the address switched the source on or off under views the display chose itself %ld times; such views ended with the pages of the Cerbo "
+	       "behind %ld requests\n", result.gx_switched, result.gx_paged);
+	check(complete && result.gx_switched >= 10 && result.gx_paged >= 1000,
+	      "the random runs switch the second source on and off under views the display chose itself, and make requests of displays whose views end with the pages of the Cerbo");
 	printf("  random runs, the release for good: %ld starts with the switch on and %ld with it off; switched on %ld times and off %ld times at the display; %ld changes asked for "
 	       "while it was on, %ld of them later than 1800 s after it was given, and %ld while it was off; GET /api/info said lasting true %ld times and false %ld times; settings "
 	       "that named web_open as it is accepted %ld times, refused for one that would switch it on %ld times and off %ld times; %ld uploads begun and %ld questions asked while it was on\n",
@@ -5742,6 +5890,7 @@ int main(void)
 	test_stories();
 	test_for_good();
 	test_cerbo();
+	test_cerbo_views();
 	test_random_walk();
 
 	return test_end();

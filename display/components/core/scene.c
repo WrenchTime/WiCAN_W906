@@ -184,6 +184,168 @@ static void build_item(const scene_input_t *input, conn_view_t view, const layou
 	if(out->widget == LAYOUT_WIDGET_ARC || out->widget == LAYOUT_WIDGET_BAR) out->permille = range_permille(item, value);
 }
 
+// The views in which the adapter has values for a page
+static bool wican_shows(conn_view_t view)
+{
+	return view == CONN_VIEW_LIVE || view == CONN_VIEW_SCAN || view == CONN_VIEW_NO_API;
+}
+
+// What the display says about the second source. Without one it is a source that is switched off.
+static cerbo_view_t view_of_cerbo(const scene_input_t *input)
+{
+	return input->cerbo != NULL ? cerbo_view(input->cerbo, input->now_ms) : CERBO_VIEW_OFF;
+}
+
+// Whether the page shown names a value of the second source: such a page has rules of its own (scene.h)
+static bool page_of_cerbo(const scene_input_t *input)
+{
+	bool wican, gx;
+
+	layout_page_sources(input->world->layout, input->nav->page, &wican, &gx);
+	return gx;
+}
+
+bool scene_page_shows(const layout_t *layout, int page, conn_view_t view, const cerbo_t *cerbo, uint64_t now_ms)
+{
+	bool wican, gx;
+
+	if(page < 0 || page >= layout->page_count) return false;
+
+	layout_page_sources(layout, page, &wican, &gx);
+	if(!gx) return wican_shows(view);
+	if(cerbo != NULL && cerbo_showing(cerbo, now_ms)) return true;
+	return wican && wican_shows(view);
+}
+
+// What every value of a page of the second source begins as: its label, its widget, and the dash it is
+// until a value says otherwise - dimmed, without a unit and without a place in a range.
+static void begin_item(const layout_item_t *item, scene_item_t *made)
+{
+	bool labelled = item->label[0] != '\0';
+
+	// A label made from the key that does not fit stays empty, also behind its first byte (fmt.h)
+	if(labelled) append(made->label, sizeof(made->label), item->label);
+	if(!labelled && !fmt_label(item->key, made->label, sizeof(made->label))) memset(made->label, 0, sizeof(made->label));
+
+	switch(item->widget)
+	{
+		case LAYOUT_WIDGET_ARC:
+		case LAYOUT_WIDGET_BAR:
+		case LAYOUT_WIDGET_STATE:
+			made->widget = item->widget;
+			break;
+		// A number, and what is no widget: shown as a number, the way layout.h makes its text
+		default:
+			made->widget = LAYOUT_WIDGET_NUMBER;
+			break;
+	}
+	made->tone = SCENE_TONE_DIM;
+	made->permille = -1;
+	append(made->text, sizeof(made->text), SCENE_DASH);
+}
+
+// One value of the second source: from its store alone, by its age there. worst, old: what the page says to
+// the ring, as `level` and `old` of build_item().
+static void build_cerbo_item(const scene_input_t *input, const layout_item_t *item, scene_item_t *made, int *worst, bool *old)
+{
+	// A source that is switched off has no value to look up, whatever its store holds
+	bool on = input->cerbo != NULL && cerbo_on(input->cerbo);
+	const value_t *value = on ? values_find(&input->cerbo->values, item->key) : NULL;
+	value_age_t age = cerbo_age(value, input->now_ms);
+	char text[SCENE_VALUE_SIZE];
+	int reached;
+
+	begin_item(item, made);
+	if(!on)
+	{
+		memset(made->text, 0, sizeof(made->text));
+		append(made->text, sizeof(made->text), SCENE_UNAVAILABLE);
+		return;
+	}
+	// Gone by its age, or without a text (not finite, too large): the dash. It is missed where the store
+	// still holds the value; a key the last bundle did not name is not there, and nothing went missing.
+	if(age == VALUE_AGE_GONE || !layout_item_text(item, value, text, sizeof(text)))
+	{
+		if(value != NULL) *old = true;
+		return;
+	}
+
+	memset(made->text, 0, sizeof(made->text));
+	append(made->text, sizeof(made->text), text);
+	reached = layout_item_level(item, value);
+	if(reached > *worst) *worst = reached;
+	if(age == VALUE_AGE_OLD) *old = true;
+	else made->tone = reached >= 2 ? SCENE_TONE_ALARM : reached == 1 ? SCENE_TONE_WARN : SCENE_TONE_NORMAL;
+
+	// The unit the page gives it. No catalogue is asked: the one there is belongs to the adapter.
+	if(made->widget != LAYOUT_WIDGET_STATE && item->has_unit) append(made->unit, sizeof(made->unit), item->unit);
+	if(made->widget == LAYOUT_WIDGET_ARC || made->widget == LAYOUT_WIDGET_BAR) made->permille = range_permille(item, value);
+}
+
+// The page shown names a value of the second source: made by the rules scene.h gives such a page. Returns
+// false if it is left to the caller: the page has nothing to show and its first value is one of the adapter,
+// whose notice is the one of every page.
+static bool build_cerbo_page(const scene_input_t *input, conn_view_t view, scene_t *scene, int *level, bool *old)
+{
+	const layout_t *layout = input->world->layout;
+	const layout_page_t *shown = &layout->pages[input->nav->page];
+	cerbo_view_t gx_view = view_of_cerbo(input);
+	bool calm = !input->safe_mode && input->heat == GUARD_HEAT_NORMAL;
+	bool wican, gx;
+
+	layout_page_sources(layout, input->nav->page, &wican, &gx);
+	// What the caller noted of a scan and of a firmware without the API is said anew below, where it belongs
+	// on this page; what it noted of the safe mode and of the heat stays
+	if(calm) memset(scene->note, 0, sizeof(scene->note));
+
+	if(!scene_page_shows(layout, input->nav->page, view, input->cerbo, input->now_ms))
+	{
+		if(!cerbo_key(shown->items[0].key)) return false;
+
+		scene->kind = SCENE_NOTICE;
+		add_text(scene, text_cerbo(gx_view, input->safe_mode));
+		return true;
+	}
+
+	if(calm && wican && view != CONN_VIEW_LIVE) set_note(scene, text_view(view));
+	else if(calm) set_note(scene, text_cerbo(gx_view, input->safe_mode));
+
+	scene->kind = SCENE_VALUES;
+	set_title(scene, shown->title);
+	scene->item_count = shown->item_count;
+	for(int i = 0; i < shown->item_count; i++)
+	{
+		const layout_item_t *item = &shown->items[i];
+
+		if(cerbo_key(item->key)) build_cerbo_item(input, item, &scene->items[i], level, old);
+		// The adapter is away: its values are dashes that say nothing more - the note tells of it
+		else if(!wican_shows(view)) begin_item(item, &scene->items[i]);
+		else build_item(input, view, item, &scene->items[i], level, old);
+	}
+	return true;
+}
+
+// The ring of a value page that names a value of the second source, in place of the one ring_state() gave
+// (scene.h). Every other screen keeps its ring.
+static void ring_of_cerbo_page(const scene_input_t *input, conn_view_t view, const wican_state_t *state, int level, bool old, scene_t *scene)
+{
+	if(input->nav->screen != NAV_PAGES || !page_of_cerbo(input)) return;
+	// A scan of the fault memory shows its progress on every page
+	if(view == CONN_VIEW_SCAN) return;
+
+	// Values: what they say alone, as on a page of live values - whatever the adapter does meanwhile
+	if(scene->kind == SCENE_VALUES)
+	{
+		scene->ring = ring_state(CONN_VIEW_LIVE, state, level, old);
+		return;
+	}
+	// A notice: the colour of the source that speaks. The adapter has its own already.
+	if(!cerbo_key(input->world->layout->pages[input->nav->page].items[0].key)) return;
+
+	// No progress stands here: a scan was left above
+	scene->ring.kind = ring_cerbo(view_of_cerbo(input));
+}
+
 static void build_pages(const scene_input_t *input, conn_view_t view, const wican_state_t *state, scene_t *scene, int *level, bool *old)
 {
 	const nav_world_t *world = input->world;
@@ -202,6 +364,10 @@ static void build_pages(const scene_input_t *input, conn_view_t view, const wica
 	if(input->safe_mode) set_note(scene, "Sicherer Modus – eingebaute Ansichten");
 	else if(input->heat != GUARD_HEAT_NORMAL) set_note(scene, "Zu heiß – Anzeige gedimmt");
 	else if(view == CONN_VIEW_SCAN || view == CONN_VIEW_NO_API) set_note(scene, text_view(view));
+
+	// A page that names a value of the second source goes by rules of its own - unless it has nothing to show
+	// and the adapter is the one to say why
+	if(page_of_cerbo(input) && build_cerbo_page(input, view, scene, level, old)) return;
 
 	if(view != CONN_VIEW_LIVE && view != CONN_VIEW_SCAN && view != CONN_VIEW_NO_API)
 	{
@@ -692,6 +858,7 @@ void scene_build(const scene_input_t *input, scene_t *scene)
 	}
 
 	scene->ring = ring_state(view, state, level, old);
+	ring_of_cerbo_page(input, view, state, level, old, scene);
 	// These two screens have an arc of their own, and two arcs on one screen would be read as one
 	if((input->nav->screen == NAV_DTC_BUSY || input->nav->screen == NAV_DTC_CONFIRM) && scene->ring.kind == RING_PROGRESS)
 	{

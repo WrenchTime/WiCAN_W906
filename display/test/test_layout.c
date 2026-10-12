@@ -14,6 +14,7 @@
 #include "test.h"
 #include "layout.h"
 #include "fmt.h"
+#include "cerbo.h"
 
 #define GUARD   0xA5
 // What a layout holds before layout_parse is called. Not the guard byte: a bool can only be read if it is
@@ -5133,6 +5134,571 @@ static void test_every_byte(void)
 	check(bytes_differing(&box.layout, &second) == 0, "every byte: the same catalogue gives the same memory a second time, over other bytes on the stack");
 }
 
+/*
+ * The second source: pages that name values of the Cerbo (keys that begin with GX_), and the built-in pages
+ * of it that are appended to the views of the vehicle
+ */
+
+// Keys as the pages of a layout may name them, and what each is - written down here by hand, not asked of
+// cerbo.h: in the catalogue of load_catalog("{'A':{},'B':{}}"), a value of the Cerbo, or neither
+static const struct
+{
+	const char *key;
+	bool in_catalogue;
+	bool of_cerbo;
+} page_keys[] = {
+	{"A", true, false}, {"B", true, false}, {"@BATT_V", true, false},
+	{"X", false, false}, {"Y", false, false}, {"AA", false, false},
+	{"GX_BATT_SOC", false, true}, {"GX_SW_B2B", false, true}, {"GX_1", false, true}, {"GX_", false, true}, {"GX_a", false, true}, {"GX_A", false, true},
+	{"GX", false, false}, {"gx_A", false, false}, {"Gx_A", false, false}, {"gX_A", false, false}, {"XGX_A", false, false}, {" GX_A", false, false},
+	{"G_X_A", false, false}, {"GX-A", false, false}, {"GXA", false, false}, {"_GX_A", false, false}, {"G", false, false},
+};
+
+#define PAGE_KEYS   ((int)(sizeof(page_keys) / sizeof(page_keys[0])))
+
+static bool sources_are(int page, bool wican, bool gx)
+{
+	// Each call finds the opposite of what it has to say in both
+	bool told_wican = !wican, told_gx = !gx;
+
+	layout_page_sources(&made, page, &told_wican, &told_gx);
+	return told_wican == wican && told_gx == gx;
+}
+
+// In a child process: a function that takes page -1 for a page reads before the layout
+static bool page_before_the_first_has_no_source(void)
+{
+	make_layout(2);
+	add_item(0, "GX_A");
+	add_item(0, "A");
+	add_item(1, "GX_A");
+	return sources_are(-1, false, false) && sources_are(INT_MIN, false, false);
+}
+
+static void test_page_shown_cerbo(void)
+{
+	layout_item_t *item;
+
+	check(strcmp(CERBO_PREFIX, "GX_") == 0, "cerbo: the keys of the second source begin with GX_");
+	check(load_catalog("{'A':{},'B':{}}") && catalog.count == 3, "cerbo: a catalogue of the adapter with two values, none of them of the Cerbo");
+	make_layout(7);
+	add_item(0, "GX_BATT_SOC");
+	add_item(1, "X");
+	add_item(1, "Y");
+	add_item(1, "GX_T_BOILER");
+	add_item(2, "GX_BATT_SOC");
+	made.pages[2].hidden = true;
+	add_item(3, "X");
+	add_item(4, "A");
+	add_item(4, "GX_SW_B2B");
+	add_item(5, "GX");
+	add_item(5, "gx_A");
+	add_item(5, "XGX_A");
+	add_item(5, " GX_A");
+	add_item(5, "Gx_A");
+	add_item(5, "GX-A");
+	add_item(6, "X");
+	// An item behind the last one of page 6 that is of the Cerbo
+	item = add_item(6, "GX_BATT_SOC");
+	made.pages[6].item_count = 1;
+	// An eighth page that would be shown if it belonged to the layout
+	add_item(7, "GX_BATT_SOC");
+	check(layout_page_shown(&made, 0, &catalog), "cerbo: a page whose only value is one of the Cerbo is shown, although no catalogue holds that key");
+	check(layout_page_shown(&made, 1, &catalog), "cerbo: a page of which only the last value is one of the Cerbo is shown, behind two the catalogue does not hold");
+	check(!layout_page_shown(&made, 2, &catalog), "cerbo: not a hidden page, although its value is one of the Cerbo");
+	check(!layout_page_shown(&made, 3, &catalog), "cerbo: a page whose only value neither source has is still not shown");
+	check(layout_page_shown(&made, 4, &catalog), "cerbo: a page with a value of each source is shown");
+	check(!layout_page_shown(&made, 5, &catalog), "cerbo: the prefix is GX_ at the very beginning and in capitals - six keys that only look like it make no page shown");
+	check(!layout_page_shown(&made, 6, &catalog) && strcmp(item->key, "GX_BATT_SOC") == 0, "cerbo: what stands behind the last item of a page does not count, a key of the Cerbo neither");
+	check(!layout_page_shown(&made, 7, &catalog) && !layout_page_shown(&made, -1, &catalog), "cerbo: no page outside of the layout, whatever it names");
+	check(layout_first_page(&made, &catalog) == 0 && layout_step_page(&made, &catalog, 0, 1) == 1 && layout_step_page(&made, &catalog, 1, 1) == 4 &&
+	      layout_step_page(&made, &catalog, 4, 1) == 4 && layout_step_page(&made, &catalog, 4, -1) == 1 && layout_step_page(&made, &catalog, 3, -1) == 1,
+	      "cerbo: the knob turns over the pages of the Cerbo as over every page: 0, 1 and 4 of these seven");
+
+	make_layout(2);
+	add_item(0, "GX_");
+	add_item(1, "GX_lower case and blanks");
+	check(layout_page_shown(&made, 0, &catalog) && layout_page_shown(&made, 1, &catalog),
+	      "cerbo: the prefix alone decides - GX_ with nothing behind it and GX_ with anything behind it are keys of the Cerbo");
+
+	// Not loaded yet: as for every page
+	make_layout(3);
+	add_item(0, "GX_BATT_SOC");
+	add_item(1, "GX_BATT_SOC");
+	made.pages[1].hidden = true;
+	add_item(2, "X");
+	catalog_init(&catalog);
+	check(layout_page_shown(&made, 0, &catalog) && !layout_page_shown(&made, 1, &catalog) && layout_page_shown(&made, 2, &catalog),
+	      "cerbo: before the catalogue is loaded a page of the Cerbo counts like every page: shown unless hidden");
+}
+
+static void test_page_sources(void)
+{
+	layout_item_t *item;
+	int wrong_sources = 0, wrong_shown = 0, pages = 0, of_both = 0, of_none = 0;
+	int round, p, i;
+
+	make_layout(6);
+	add_item(0, "ENGINE_RPM");
+	add_item(0, "COOLANT_TMP");
+	add_item(1, "GX_BATT_SOC");
+	add_item(1, "GX_BATT_V");
+	add_item(2, "ENGINE_RPM");
+	add_item(2, "GX_BATT_SOC");
+	add_item(3, "GX_BATT_SOC");
+	add_item(3, "ENGINE_RPM");
+	add_item(4, "GX_BATT_SOC");
+	made.pages[4].hidden = true;
+	add_item(5, "A");
+	add_item(5, "B");
+	add_item(5, "C");
+	add_item(5, "D");
+	add_item(5, "E");
+	add_item(5, "GX_F");
+	// A seventh page that would name both if it belonged to the layout
+	add_item(6, "A");
+	add_item(6, "GX_A");
+	check(sources_are(0, true, false), "sources: a page of values of the adapter alone");
+	check(sources_are(1, false, true), "sources: a page of values of the Cerbo alone");
+	check(sources_are(2, true, true) && sources_are(3, true, true), "sources: a page that names both, in either order");
+	check(sources_are(4, false, true), "sources: a hidden page is told like every page");
+	check(sources_are(5, true, true), "sources: the sixth value of a page counts as the first does");
+	check(sources_are(6, false, false) && sources_are(7, false, false) && sources_are(LAYOUT_PAGES_MAX, false, false) && sources_are(INT_MAX, false, false),
+	      "sources: a page behind the last one names nothing, whatever stands there - and both answers are written all the same");
+	check(in_child(page_before_the_first_has_no_source), "sources: nor does a page before the first one");
+
+	make_layout(3);
+	add_item(0, "A");
+	item = add_item(0, "GX_A");
+	made.pages[0].item_count = 1;
+	add_item(1, "GX_A");
+	add_item(1, "A");
+	made.pages[1].item_count = 1;
+	check(sources_are(0, true, false) && strcmp(item->key, "GX_A") == 0 && sources_are(1, false, true), "sources: what stands behind the last item of a page does not count");
+	check(sources_are(2, false, false), "sources: a page without items names no source");
+
+	make_layout(1);
+	for(i = 12; i < 18; i++) add_item(0, page_keys[i].key);
+	check(sources_are(0, true, false), "sources: GX, gx_A, Gx_A, gX_A, XGX_A and a blank before GX_A are values of the adapter - the prefix is GX_, at the beginning, in capitals");
+	make_layout(1);
+	for(i = 18; i < PAGE_KEYS; i++) add_item(0, page_keys[i].key);
+	check(sources_are(0, true, false), "sources: so are G_X_A, GX-A, GXA, _GX_A and G");
+	make_layout(1);
+	for(i = 6; i < 12; i++) add_item(0, page_keys[i].key);
+	check(sources_are(0, false, true), "sources: GX_ with nothing behind it and GX_a are values of the Cerbo like GX_BATT_SOC: the prefix alone decides");
+
+	// Layouts made at random from these keys, against the table above
+	check(load_catalog("{'A':{},'B':{}}"), "sources: model: the catalogue of the table");
+	random_seed(20261012);
+	for(round = 0; round < 3000; round++)
+	{
+		bool loaded = random_below(5) > 0;
+		int count = random_below(LAYOUT_PAGES_MAX + 1);
+
+		if(loaded) load_catalog("{'A':{},'B':{}}");
+		else catalog_init(&catalog);
+		make_layout(count);
+		// Every page of the memory is filled, also those behind the last one of the layout
+		for(p = 0; p < LAYOUT_PAGES_MAX; p++)
+		{
+			int items = 1 + random_below(LAYOUT_ITEMS_MAX);
+
+			for(i = 0; i < LAYOUT_ITEMS_MAX; i++) add_item(p, page_keys[random_below(PAGE_KEYS)].key);
+			made.pages[p].item_count = (uint8_t)items;
+			made.pages[p].hidden = random_below(6) == 0;
+		}
+		for(p = -1; p <= LAYOUT_PAGES_MAX; p++)
+		{
+			bool wican = false, gx = false, known = false, shown;
+
+			if(p >= 0 && p < count)
+			{
+				for(i = 0; i < made.pages[p].item_count; i++)
+				{
+					const char *key = made.pages[p].items[i].key;
+					int k = 0;
+
+					while(strcmp(page_keys[k].key, key) != 0) k++;
+					if(page_keys[k].of_cerbo) gx = true;
+					else wican = true;
+					if(page_keys[k].of_cerbo || page_keys[k].in_catalogue) known = true;
+				}
+			}
+			shown = p >= 0 && p < count && !made.pages[p].hidden && (known || !loaded);
+			// Page -1 is asked in a child above: here it would read before the layout if the rule were gone
+			if(p >= 0 && !sources_are(p, wican, gx)) wrong_sources++;
+			if(p >= 0 && layout_page_shown(&made, p, &catalog) != shown) wrong_shown++;
+			pages++;
+			if(wican && gx) of_both++;
+			if(!wican && !gx) of_none++;
+		}
+	}
+	printf("  sources: model: %d pages, %d of both sources, %d outside of their layout\n", pages, of_both, of_none);
+	check(wrong_sources == 0 && pages == 3000 * (LAYOUT_PAGES_MAX + 2) && of_both > 5000 && of_none > 10000,
+	      "sources: model: the sources of every page of 3000 layouts made at random are those of the table of keys");
+	check(wrong_shown == 0, "sources: model: and each of these pages is shown exactly if it is not hidden and names a value of the catalogue or of the Cerbo - or the catalogue is not loaded");
+}
+
+static layout_t appended, joined, cerbo_pages;
+static char joined_text[3 * LAYOUT_TEXT_MAX];
+
+// layout_append() with guard bytes around `to` and a `from` that must stay as it was. `to` is box.layout.
+static bool append_watched(const layout_t *from)
+{
+	static layout_t before;
+
+	memmove(&before, from, sizeof(before));
+	memset(box.before, GUARD, sizeof(box.before));
+	memset(box.after, GUARD, sizeof(box.after));
+	layout_append(&box.layout, from);
+	if(!bytes_are(box.before, sizeof(box.before), GUARD) || !bytes_are(box.after, sizeof(box.after), GUARD))
+	{
+		printf("  a byte outside of the layout was written\n");
+		return false;
+	}
+	if(memcmp(&before, from, sizeof(before)) != 0)
+	{
+		printf("  the layout that was appended changed\n");
+		return false;
+	}
+	return true;
+}
+
+// A layout of `pages` pages as layout_parse() reads it, in box.layout: page p has the title "<letter><p>" and
+// p % 6 + 1 items with the keys "<LETTER><p>_<i>"
+static bool read_pages(char letter, int pages, const char *name, const char *hint)
+{
+	int p, i;
+
+	text_length = 0;
+	emit("{\"format\":\"wican-display-layout\",\"v\":1");
+	if(name != NULL) emit(",\"name\":\"%s\"", name);
+	if(hint != NULL) emit(",\"profile_hint\":\"%s\"", hint);
+	emit(",\"pages\":[");
+	for(p = 0; p < pages; p++)
+	{
+		emit("%s{\"title\":\"%c%d\",\"items\":[", p > 0 ? "," : "", letter, p);
+		for(i = 0; i <= p % 6; i++) emit("%s{\"key\":\"%c%d_%d\",\"unit\":\"u\",\"dec\":%d}", i > 0 ? "," : "", letter - 32, p, i, i % 4);
+		emit("]}");
+	}
+	emit("]}");
+	return accepted(text);
+}
+
+// The title of a page says where it came from
+static bool page_is(const layout_t *layout, int page, char letter, int number)
+{
+	char title[LAYOUT_TITLE_SIZE];
+
+	snprintf(title, sizeof(title), "%c%d", letter, number);
+	return page < layout->page_count && strcmp(layout->pages[page].title, title) == 0 && layout->pages[page].item_count == number % 6 + 1;
+}
+
+static void test_append(void)
+{
+	static const char thirty_two[] = "abcdefghijklmnopqrstuvwxyz012345";
+	int p, wrong;
+
+	check(read_pages('g', 5, "Cerbo", "GX"), "append: five pages to append, named Cerbo");
+	memmove(&cerbo_pages, &box.layout, sizeof(cerbo_pages));
+
+	check(read_pages('v', 7, "W906 OM651 Standard", "W906") && append_watched(&cerbo_pages), "append: seven pages get five appended");
+	wrong = 0;
+	for(p = 0; p < 7; p++) wrong += !page_is(&box.layout, p, 'v', p);
+	for(p = 0; p < 5; p++) wrong += !page_is(&box.layout, 7 + p, 'g', p);
+	check(box.layout.page_count == 12 && wrong == 0, "append: twelve pages - the seven as they were, then the five in their order");
+	check(TEXT_IS(box.layout.name, "W906 OM651 Standard + Cerbo") && TEXT_IS(box.layout.profile_hint, "W906"),
+	      "append: the name gets \" + \" and the name of what was appended, the profile hint stays");
+	check(stray_bytes(&box.layout) == 0 && comes_back(&box.layout),
+	      "append: the whole is a layout as layout_parse() fills one - zeros between its fields, and its text is read back as the same memory");
+
+	check(read_pages('v', 3, "Kurz", NULL) && append_watched(&cerbo_pages) && box.layout.page_count == 8 && page_is(&box.layout, 2, 'v', 2) && page_is(&box.layout, 3, 'g', 0) &&
+	      page_is(&box.layout, 7, 'g', 4), "append: three pages and five are eight, the appended ones right behind the last");
+	check(bytes_are(&box.layout.pages[8], 4 * sizeof(layout_page_t), 0), "append: the pages behind them stay zero");
+
+	// More than twelve together: the last pages of the first give way
+	check(read_pages('v', 8, "Acht", "H") && append_watched(&cerbo_pages) && box.layout.page_count == 12 && page_is(&box.layout, 6, 'v', 6) && page_is(&box.layout, 7, 'g', 0) &&
+	      page_is(&box.layout, 11, 'g', 4), "append: eight pages and five - the eighth gives way, the five find room");
+	check(read_pages('v', 12, "Zwoelf", "H") && append_watched(&cerbo_pages), "append: twelve pages and five");
+	wrong = 0;
+	for(p = 0; p < 7; p++) wrong += !page_is(&box.layout, p, 'v', p);
+	for(p = 0; p < 5; p++) wrong += !page_is(&box.layout, 7 + p, 'g', p);
+	check(box.layout.page_count == 12 && wrong == 0, "append: ... the first seven stay, the last five give way to the five");
+	check(stray_bytes(&box.layout) == 0 && comes_back(&box.layout), "append: ... and nothing of the pages that gave way is left: the text of the whole is read back as the same memory");
+	check(read_pages('v', 12, "Zwoelf", "H"), "append: twelve pages once more");
+	memmove(&joined, &box.layout, sizeof(joined));
+	check(read_pages('w', 12, "Alle", "H") && append_watched(&joined), "append: twelve pages and twelve");
+	wrong = 0;
+	for(p = 0; p < 12; p++) wrong += !page_is(&box.layout, p, 'v', p);
+	check(box.layout.page_count == 12 && wrong == 0 && TEXT_IS(box.layout.name, "Alle + Zwoelf") && comes_back(&box.layout),
+	      "append: ... every page gives way, and the name still says where the views began");
+
+	// Nothing to append
+	check(read_pages('n', 1, "Leer", "GX"), "append: a layout of one page");
+	memmove(&joined, &box.layout, sizeof(joined));
+	joined.page_count = 0;
+	check(read_pages('v', 7, "W906", "W906"), "append: seven pages");
+	memmove(&appended, &box.layout, sizeof(appended));
+	check(append_watched(&joined) && memcmp(&appended, &box.layout, sizeof(appended)) == 0,
+	      "append: a layout without pages changes nothing - no page, no count, and not the name although it has one");
+
+	// The name
+	check(read_pages('v', 2, NULL, "W906") && append_watched(&cerbo_pages) && TEXT_IS(box.layout.name, "") && box.layout.page_count == 7 && TEXT_IS(box.layout.profile_hint, "W906"),
+	      "append: views without a name stay without one - the pages are appended all the same");
+	check(read_pages('g', 5, NULL, "GX"), "append: five pages without a name");
+	memmove(&joined, &box.layout, sizeof(joined));
+	check(read_pages('v', 2, "Name", NULL) && append_watched(&joined) && TEXT_IS(box.layout.name, "Name") && TEXT_IS(box.layout.profile_hint, "") && box.layout.page_count == 7,
+	      "append: pages without a name leave the name as it is, and no profile hint comes with them");
+	// "abcdefghijklmnopqrstuvwx" has 24 bytes: with " + Cerbo" 32, the most a name holds
+	check(read_pages('v', 2, "abcdefghijklmnopqrstuvwx", NULL) && append_watched(&cerbo_pages) && TEXT_IS(box.layout.name, "abcdefghijklmnopqrstuvwx + Cerbo") &&
+	      strlen(box.layout.name) == LAYOUT_NAME_SIZE - 1, "append: a name of 24 bytes takes \" + Cerbo\": 32 bytes, the most a name holds");
+	check(read_pages('v', 2, "abcdefghijklmnopqrstuvwxy", NULL) && append_watched(&cerbo_pages) && TEXT_IS(box.layout.name, "abcdefghijklmnopqrstuvwxy") && box.layout.page_count == 7,
+	      "append: a name of 25 bytes stays as it is - nothing is cut to make room, the pages are appended");
+	check(read_pages('v', 2, thirty_two, NULL) && append_watched(&cerbo_pages) && TEXT_IS(box.layout.name, thirty_two) && comes_back(&box.layout),
+	      "append: so does the longest name there is, and the layout is still one whose text is read back");
+	check(read_pages('g', 1, thirty_two, NULL), "append: one page under the longest name");
+	memmove(&joined, &box.layout, sizeof(joined));
+	check(read_pages('v', 2, "N", NULL) && append_watched(&joined) && TEXT_IS(box.layout.name, "N") && box.layout.page_count == 3, "append: a name that is too long to be appended is not appended in part");
+
+	// Views made from a catalogue, which have no text they were read from
+	fill_catalog(47);
+	from_catalog();
+	check(box.layout.page_count == 12 && append_watched(&cerbo_pages) && box.layout.page_count == 12 && TEXT_IS(box.layout.pages[6].title, "Werte 7") && page_is(&box.layout, 7, 'g', 0) &&
+	      TEXT_IS(box.layout.name, "") && stray_bytes(&box.layout) == 0 && comes_back(&box.layout),
+	      "append: views made from a catalogue of 48 values lose their last five pages to the five, keep no name, and are a layout whose text is read back");
+}
+
+// The model of layout_append(), in another shape: the two layouts as their texts, the text of the whole put
+// together from them, and that text read. `kept` pages of the first are named by the caller.
+static bool model_append(const layout_t *to, const layout_t *from, layout_t *whole)
+{
+	static layout_t cut;
+	static char first[LAYOUT_TEXT_MAX + 1], second[LAYOUT_TEXT_MAX + 1];
+	static const char pages[] = ",\"pages\":[";
+	static const char name[] = ",\"name\":\"";
+	char named[4 * LAYOUT_NAME_SIZE];
+	const char *from_pages, *name_at, *comma;
+	int kept = to->page_count + from->page_count > LAYOUT_PAGES_MAX ? LAYOUT_PAGES_MAX - from->page_count : to->page_count;
+	int p, length;
+
+	if(from->page_count == 0)
+	{
+		memmove(whole, to, sizeof(*whole));
+		return true;
+	}
+	// The first without the pages that give way
+	memset(&cut, 0, sizeof(cut));
+	memcpy(cut.name, to->name, sizeof(cut.name));
+	memcpy(cut.profile_hint, to->profile_hint, sizeof(cut.profile_hint));
+	for(p = 0; p < kept; p++) memcpy(&cut.pages[p], &to->pages[p], sizeof(cut.pages[p]));
+	cut.page_count = (uint8_t)kept;
+	if(layout_to_json(&cut, first, sizeof(first)) < 0 || layout_to_json(from, second, sizeof(second)) < 0) return false;
+
+	// The texts of the model have no quote and no backslash in a name: what the writer wrote is the name
+	snprintf(named, sizeof(named), "%s + %s", to->name, from->name);
+	from_pages = strstr(second, pages);
+	name_at = strstr(first, name);
+	if(from_pages == NULL || strlen(first) < 2) return false;
+	// The closing "]}" of the first goes: the pages of the second follow, behind a comma if it has pages left
+	first[strlen(first) - 2] = '\0';
+	comma = kept > 0 ? "," : "";
+	text_length = 0;
+	if(to->name[0] != '\0' && from->name[0] != '\0' && strlen(named) <= 32)
+	{
+		// Up to the name, the new name, and on behind the old one
+		if(name_at == NULL) return false;
+		name_at += strlen(name);
+		length = snprintf(joined_text, sizeof(joined_text), "%.*s%s%s%s%s", (int)(name_at - first), first, named, name_at + strlen(to->name), comma, from_pages + strlen(pages));
+	}
+	else length = snprintf(joined_text, sizeof(joined_text), "%s%s%s", first, comma, from_pages + strlen(pages));
+	if(length < 0 || (size_t)length >= sizeof(joined_text)) return false;
+	return layout_parse(joined_text, (size_t)length, whole, NULL, work, LAYOUT_TOKENS);
+}
+
+static void test_append_model(void)
+{
+	static const char *const names[] = {NULL, "A", "Standard", "W906 OM651 Standard", "abcdefghijklmnopqrstuvwx", "abcdefghijklmnopqrstuvwxy", "abcdefghijklmnopqrstuvwxyz012345", "Zw\303\266lf Seiten"};
+	static layout_t first, second;
+	int round, wrong = 0, gave_way = 0, renamed = 0, empty = 0, kept_name = 0;
+
+	random_seed(20261013);
+	for(round = 0; round < 1500; round++)
+	{
+		const char *to_name = names[random_below(8)];
+		const char *from_name = random_below(4) == 0 ? names[random_below(8)] : "Cerbo";
+		int to_pages = random_below(4) == 0 ? 12 : 1 + random_below(12);
+		int from_pages = random_below(5) == 0 ? 1 + random_below(12) : 5;
+
+		if(!read_pages('v', to_pages, to_name, random_below(2) ? "W906" : NULL)) wrong++;
+		memmove(&first, &box.layout, sizeof(first));
+		if(!read_pages('g', from_pages, from_name, random_below(2) ? "GX" : NULL)) wrong++;
+		memmove(&second, &box.layout, sizeof(second));
+		// One appended layout in twelve has no pages: built by hand, no text gives one
+		if(random_below(12) == 0)
+		{
+			memset(second.pages, 0, sizeof(second.pages));
+			second.page_count = 0;
+			empty++;
+		}
+		memmove(&box.layout, &first, sizeof(first));
+		if(!append_watched(&second) || !model_append(&first, &second, &joined) || memcmp(&joined, &box.layout, sizeof(joined)) != 0)
+		{
+			if(wrong++ == 0) printf("  append: model: %d pages \"%s\" and %d pages \"%s\" part: %s\n", to_pages, to_name != NULL ? to_name : "", second.page_count, from_name != NULL ? from_name : "", joined_text);
+		}
+		if(to_pages + second.page_count > LAYOUT_PAGES_MAX) gave_way++;
+		if(strcmp(box.layout.name, first.name) != 0) renamed++;
+		else if(first.name[0] != '\0' && second.name[0] != '\0' && second.page_count > 0) kept_name++;
+	}
+	printf("  append: model: %d times a page gave way, %d names got longer, %d names had no room for it, %d times nothing was appended\n", gave_way, renamed, kept_name, empty);
+	check(wrong == 0 && gave_way > 300 && renamed > 300 && kept_name > 100 && empty > 50,
+	      "append: model: 1500 pairs of layouts made at random are appended to the memory layout_parse() reads from the text of the two put together");
+}
+
+// The built-in pages of the Cerbo, as the design names them (the owner's dashboard in his words)
+static const struct
+{
+	const char *title;
+	const char *keys[LAYOUT_ITEMS_MAX + 1];
+} gx_pages[] = {
+	{"Batterie", {"GX_BATT_SOC", "GX_BATT_V", "GX_BATT_I", "GX_BATT_P", "GX_CELL_MIN", "GX_CELL_MAX", NULL}},
+	{"Energie", {"GX_PV_P", "GX_DC_P", "GX_AC_OUT_P", "GX_MULTI_MODE", "GX_STARTER_V", "GX_ALT_I", NULL}},
+	{"Alternator", {"GX_SW_B2B", "GX_ALT_I", "GX_ALT_V", "GX_ALT_T_BOARD", "GX_ALT_T_FET1", "GX_ALT_T_FET2", NULL}},
+	{"Wasser", {"GX_TANK_FRESH", "GX_TANK_GRAY", "GX_T_BOILER", "GX_T_WATER", "GX_SW_BOILER", "GX_SW_VALVE", NULL}},
+	{"Klima", {"GX_T_DINETTE", "GX_T_GARAGE", "GX_T_OUTDOOR", "GX_T_HEATER_IN", "GX_ALTITUDE", "GX_LTE_RSRP", NULL}},
+};
+
+// The keys of the bundle the flow of the owner publishes, version 1 of the contract
+static const char *const contract_keys[] = {
+	"GX_BATT_SOC", "GX_BATT_V", "GX_BATT_I", "GX_BATT_P", "GX_CELL_MIN", "GX_CELL_MAX", "GX_SHUNT_SOC", "GX_STARTER_V", "GX_PV_P", "GX_DC_P", "GX_AC_OUT_P", "GX_MULTI_MODE",
+	"GX_ALT_I", "GX_ALT_V", "GX_ALT_V1", "GX_ALT_VIN", "GX_ALT_T_BOARD", "GX_ALT_T_FET1", "GX_ALT_T_FET2", "GX_ALT_T_CAN", "GX_TANK_FRESH", "GX_TANK_GRAY", "GX_T_BOILER",
+	"GX_T_GARAGE", "GX_T_WATER", "GX_T_DINETTE", "GX_T_OUTDOOR", "GX_T_HEATER_IN", "GX_SPEED", "GX_ALTITUDE", "GX_GPS_SATS", "GX_SW_B2B", "GX_SW_BOILER", "GX_SW_VALVE",
+	"GX_SW_PUMP", "GX_LTE_RSSI", "GX_LTE_RSRP", "GX_LTE_SINR", "GX_LTE_RSRQ", "GX_LTE_TEMP", "GX_LTE_TX_MB", "GX_LTE_RX_MB", "GX_LTE_CONN",
+};
+
+static bool key_of_contract(const char *key)
+{
+	size_t i;
+
+	for(i = 0; i < sizeof(contract_keys) / sizeof(contract_keys[0]); i++)
+	{
+		if(strcmp(contract_keys[i], key) == 0) return true;
+	}
+	return false;
+}
+
+// GX_, then 1 to 29 of A-Z, 0-9 and _: what the display takes from a bundle (cerbo.h)
+static bool key_of_bundle(const char *key)
+{
+	size_t length = strlen(key);
+	size_t i;
+
+	if(length < 4 || length > 32 || strncmp(key, "GX_", 3) != 0) return false;
+	for(i = 3; i < length; i++)
+	{
+		if(!((key[i] >= 'A' && key[i] <= 'Z') || (key[i] >= '0' && key[i] <= '9') || key[i] == '_')) return false;
+	}
+	return true;
+}
+
+static void test_cerbo_pages(void)
+{
+	static char file[LAYOUT_TEXT_MAX + 1];
+	static char vehicle[LAYOUT_TEXT_MAX + 1];
+	static layout_t w906;
+	const layout_t *layout = &box.layout;
+	const layout_item_t *item;
+	value_t value;
+	int wrong_pages = 0, items = 0, labelled = 0, units = 0, limits = 0, strange = 0, foreign = 0, states = 0, ranges = 0, not_shown = 0, not_gx = 0;
+	int p, i, length;
+
+	check(sizeof(contract_keys) / sizeof(contract_keys[0]) == 43, "cerbo pages: the contract names 43 values");
+	check(read_fixture("../layouts/gx_default.json", file, sizeof(file)), "cerbo pages: display/layouts/gx_default.json is there and not longer than 16384 bytes");
+	check(accepted(file), "cerbo pages: it is accepted without a problem and without a warning");
+	check(TEXT_IS(layout->name, "Cerbo") && TEXT_IS(layout->profile_hint, "GX"), "cerbo pages: name and profile hint");
+	check(layout->page_count == 5, "cerbo pages: five pages");
+	check(load_catalog("{'ENGINE_RPM':{},'COOLANT_TMP':{}}"), "cerbo pages: a catalogue of the adapter that is loaded");
+	for(p = 0; p < 5; p++)
+	{
+		const layout_page_t *page = &layout->pages[p];
+		bool wican = true, gx = false;
+
+		if(!TEXT_IS(page->title, gx_pages[p].title) || page->hidden) wrong_pages++;
+		for(i = 0; gx_pages[p].keys[i] != NULL; i++)
+		{
+			if(i >= page->item_count || !TEXT_IS(page->items[i].key, gx_pages[p].keys[i])) wrong_pages++;
+		}
+		if(page->item_count != i) wrong_pages++;
+		for(i = 0; i < page->item_count && i < LAYOUT_ITEMS_MAX; i++)
+		{
+			item = &page->items[i];
+			items++;
+			if(item->label[0] != '\0') labelled++;
+			if(item->has_unit) units++;
+			if(item->warn_lo.set || item->warn_hi.set || item->crit_lo.set || item->crit_hi.set || item->scale != 1) limits++;
+			if(!key_of_bundle(item->key)) strange++;
+			if(!key_of_contract(item->key)) foreign++;
+			if(item->widget == LAYOUT_WIDGET_STATE) states++;
+			if(item->widget == LAYOUT_WIDGET_ARC || item->widget == LAYOUT_WIDGET_BAR) ranges++;
+			// A state has its words and no unit, everything else a unit
+			if((item->widget == LAYOUT_WIDGET_STATE) == item->has_unit) strange++;
+		}
+		if(!layout_page_shown(layout, p, &catalog)) not_shown++;
+		layout_page_sources(layout, p, &wican, &gx);
+		if(wican || !gx) not_gx++;
+	}
+	check(wrong_pages == 0, "cerbo pages: Batterie, Energie, Alternator, Wasser and Klima with the values of the design, in its order, none hidden");
+	check(items == 30 && labelled == 30 && units == 26 && states == 4 && ranges == 3, "cerbo pages: 30 values, each with a label; 26 with a unit, the four states without; one arc and two bars");
+	check(strange == 0 && foreign == 0, "cerbo pages: every key is one the display takes from a bundle - GX_, then capitals, digits and _ - and one of the 43 of the contract");
+	check(limits == 0, "cerbo pages: no warn limit, no crit limit and no scale: the limits of this battery and these tanks are the owner's to set");
+	check(not_shown == 0 && not_gx == 0, "cerbo pages: every page is shown with a catalogue of the adapter that names none of its values, and names values of the Cerbo alone");
+	check(times_named("GX_ALT_I") == 2 && times_named("GX_BATT_SOC") == 1, "cerbo pages: the current of the alternator stands on two pages, as Alternator under Energie and as Strom on its own page");
+
+	item = item_named("GX_BATT_SOC");
+	check(item_is(item, "GX_BATT_SOC", "SOC", "%", 1, LAYOUT_WIDGET_ARC, 1) && limits_are(item, 0, 100, NONE, NONE, NONE, NONE), "cerbo pages: the state of charge is an arc from 0 to 100 with one decimal");
+	item = item_named("GX_TANK_GRAY");
+	check(item_is(item, "GX_TANK_GRAY", "Grauwasser", "%", 0, LAYOUT_WIDGET_BAR, 1) && limits_are(item, 0, 100, NONE, NONE, NONE, NONE), "cerbo pages: the grey water is a bar from 0 to 100");
+	item = item_named("GX_CELL_MIN");
+	check(item_is(item, "GX_CELL_MIN", "Zelle min", "V", 3, LAYOUT_WIDGET_NUMBER, 1), "cerbo pages: the lowest cell voltage has three decimals");
+	item = item_named("GX_T_OUTDOOR");
+	check(item_is(item, "GX_T_OUTDOOR", "Au\303\237en", "\302\260C", 1, LAYOUT_WIDGET_NUMBER, 1), "cerbo pages: the temperature outside is Außen in °C with one decimal");
+	item = item_named("GX_MULTI_MODE");
+	memset(&value, 0, sizeof(value));
+	value.kind = VALUE_NUMBER;
+	value.number = 3;
+	check(item->map_count == 5 && shows_text(item, &value, "an"), "cerbo pages: mode 3 of the MultiPlus is \"an\"");
+	value.number = 1;
+	check(shows_text(item, &value, "nur Laden"), "cerbo pages: mode 1 is \"nur Laden\"");
+	value.number = 2;
+	check(shows_text(item, &value, "nur Inverter"), "cerbo pages: mode 2 is \"nur Inverter\"");
+	value.number = 4;
+	check(shows_text(item, &value, "aus"), "cerbo pages: mode 4 is \"aus\"");
+	value.number = 9;
+	check(shows_text(item, &value, "?"), "cerbo pages: every other mode is a question mark");
+	item = item_named("GX_SW_VALVE");
+	value.number = 0;
+	value.kind = VALUE_ON;
+	check(item->map_count == 2 && TEXT_IS(item->label, "Boiler-Ventil") && shows_text(item, &value, "an"), "cerbo pages: a switch that is on is \"an\"");
+	value.kind = VALUE_OFF;
+	check(shows_text(item, &value, "aus"), "cerbo pages: one that is off is \"aus\"");
+
+	// The two built-in files together
+	memmove(&cerbo_pages, &box.layout, sizeof(cerbo_pages));
+	check(read_fixture("../layouts/w906_default.json", vehicle, sizeof(vehicle)) && accepted(vehicle), "cerbo pages: the built-in views of the vehicle");
+	memmove(&w906, &box.layout, sizeof(w906));
+	check(w906.page_count + cerbo_pages.page_count == LAYOUT_PAGES_MAX, "cerbo pages: seven pages of the W906 and five of the Cerbo are the twelve a layout holds - no page gives way");
+	check(append_watched(&cerbo_pages) && box.layout.page_count == 12 && TEXT_IS(box.layout.name, "W906 OM651 Standard + Cerbo") && TEXT_IS(box.layout.profile_hint, "W906"),
+	      "cerbo pages: appended, the views are \"W906 OM651 Standard + Cerbo\" with the profile hint of the vehicle");
+	check(memcmp(box.layout.pages, w906.pages, 7 * sizeof(layout_page_t)) == 0 && memcmp(&box.layout.pages[7], cerbo_pages.pages, 5 * sizeof(layout_page_t)) == 0,
+	      "cerbo pages: the seven pages of the vehicle byte for byte, then the five of the Cerbo byte for byte");
+	memmove(&appended, &box.layout, sizeof(appended));
+	length = write_watched(&appended, LAYOUT_TEXT_MAX + 1, LAYOUT_TEXT_MAX + 1);
+	printf("  cerbo pages: the text of the twelve pages has %d bytes\n", length);
+	check(length == 4604, "cerbo pages: the text of the whole has 4604 bytes: it fits into LAYOUT_TEXT_MAX with room to spare");
+	check(length > 0 && accepted_with(written, (size_t)length, 0, "", "") && same_layout(&box.layout, &appended),
+	      "cerbo pages: layout_parse() reads that text back as the same layout, byte for byte, without a warning - the editor in the browser gets views it can send back");
+	check(model_append(&w906, &cerbo_pages, &joined) && same_layout(&joined, &appended), "cerbo pages: and it is the layout of the two texts put together by hand");
+}
+
 int main(void)
 {
 	memset(work_between_guards, 0x5A, sizeof(work_between_guards));
@@ -5159,6 +5725,8 @@ int main(void)
 	test_problem_order();
 	test_warnings();
 	test_page_shown();
+	test_page_shown_cerbo();
+	test_page_sources();
 	test_default_layout();
 	test_page_steps();
 	test_suits();
@@ -5182,8 +5750,11 @@ int main(void)
 	test_to_json_default_layout();
 
 	test_every_byte();
+	test_append();
+	test_cerbo_pages();
 
 	// After the examples, so that a rule that is broken is named by its example first
+	test_append_model();
 	test_parse_model();
 	test_cut_texts();
 

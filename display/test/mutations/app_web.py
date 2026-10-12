@@ -931,3 +931,20 @@ MUTATIONS += [
 
 ]
 
+# POST /api/settings switches the second source on or off: the views the display chose itself follow
+GX_SWITCHED = "\tif(cerbo_on(&app->cerbo) != had_cerbo && app->source != APP_LAYOUT_STORED && app->source != APP_LAYOUT_PREVIEW)\n"
+GX_CHOSEN = "\t\tapp_choose_layout(app);\n\t\tif(!layout_page_shown(&app->layout, app->nav.page, &app->poll.catalog)) app->nav.page = layout_first_page(&app->layout, &app->poll.catalog);\n"
+
+MUTATIONS += [
+    ("app_web_settings_views_do_not_follow_the_source", T, F, GX_SWITCHED, "\t(void)had_cerbo;\n\tif(app->safe_mode && cerbo_on(&app->cerbo))\n"),
+    ("app_web_settings_views_follow_only_when_switched_on", T, F, GX_SWITCHED, GX_SWITCHED.replace("cerbo_on(&app->cerbo) != had_cerbo", "cerbo_on(&app->cerbo) && !had_cerbo")),
+    ("app_web_settings_views_follow_only_when_switched_off", T, F, GX_SWITCHED, GX_SWITCHED.replace("cerbo_on(&app->cerbo) != had_cerbo", "!cerbo_on(&app->cerbo) && had_cerbo")),
+    ("app_web_settings_stored_views_chosen_anew", T, F, GX_SWITCHED, GX_SWITCHED.replace(" && app->source != APP_LAYOUT_STORED", "")),
+    ("app_web_settings_preview_chosen_anew", T, F, GX_SWITCHED, GX_SWITCHED.replace(" && app->source != APP_LAYOUT_PREVIEW", "")),
+    ("app_web_settings_page_of_the_cerbo_kept_without_its_views", T, F, GX_CHOSEN, "\t\tapp_choose_layout(app);\n"),
+    ("app_web_settings_views_start_at_first_page", T, F, GX_CHOSEN, "\t\tapp_choose_layout(app);\n\t\tapp->nav.page = layout_first_page(&app->layout, &app->poll.catalog);\n"),
+    ("app_web_settings_page_fixed_but_views_not_chosen", T, F, GX_CHOSEN,
+     "\t\tif(!layout_page_shown(&app->layout, app->nav.page, &app->poll.catalog)) app->nav.page = layout_first_page(&app->layout, &app->poll.catalog);\n"),
+    ("app_web_settings_chosen_views_stored", T, F, GX_CHOSEN, GX_CHOSEN + "\t\tapp->events |= APP_EVENT_STORE_LAYOUT;\n"),
+    ("app_web_settings_chosen_views_erase_the_stored", T, F, GX_CHOSEN, GX_CHOSEN + "\t\tapp->events |= APP_EVENT_ERASE_LAYOUT;\n"),
+]

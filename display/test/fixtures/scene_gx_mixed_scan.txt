@@ -1,0 +1,9 @@
+kind: values
+ring: progress 277
+title: Fahrt
+note: Live-Werte angehalten (Fehlerspeicher-Scan)
+item: Drehzahl | 812 | 1/min | dim | arc | 162
+item: SOC | 87,5 | % | normal | number | -1
+item: Kühlwasser | 88 | °C | dim | number | -1
+item: Alternator | 0,0 | A | normal | number | -1
+dots: 4/5

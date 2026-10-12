@@ -36,6 +36,8 @@ KNOB_HELD = "\treturn true;\n}\n\n/*\n * The password"
 RANDOM_ON = "\tbootloader_random_enable();\n"
 RANDOM_OFF = "\tbootloader_random_disable();\n"
 PASSWORD_STORED = "\tstore_write(STORE_CFG, STORE_KEY_AP_PASSWORD, ap_password, AP_PASSWORD_LENGTH);\n"
+BOOT_GX = "\tboot.builtin_gx = builtin_gx_start;\n"
+BOOT_GX_LENGTH = "\tboot.builtin_gx_length = (size_t)(builtin_gx_end - builtin_gx_start);\n"
 READ_SETTINGS = "\t\tboot->settings_json = kept->settings;\n"
 READ_WIFI = "\t\tboot->profiles = kept->profiles;\n"
 READ_BOUND = "\t\tboot->bound_id = kept->bound;\n"
@@ -232,4 +234,10 @@ MUTATIONS = [
     ("main_turns_not_looked_at", S, F, NET_TURNED, "\t\tif(false)\n"),
     ("main_stall_not_noticed", S, F, NET_STALLED, "\t\telse if(false)\n"),
     ("main_stall_after_six_seconds", S, F, "#define NET_STALL_MS        60000u\n", "#define NET_STALL_MS        6000u\n"),
+
+    # the second built-in file: the pages of the Cerbo reach the app, whole and as themselves
+    ("main_gx_pages_not_handed_over", S, F, BOOT_GX, ""),
+    ("main_gx_pages_without_their_length", S, F, BOOT_GX_LENGTH, ""),
+    ("main_gx_pages_are_those_of_the_vehicle", S, F, BOOT_GX + BOOT_GX_LENGTH,
+     "\tboot.builtin_gx = builtin_start;\n\tboot.builtin_gx_length = (size_t)(builtin_end - builtin_start);\n"),
 ]

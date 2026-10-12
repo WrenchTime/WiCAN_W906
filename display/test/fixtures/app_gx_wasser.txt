@@ -1,0 +1,11 @@
+kind: values
+ring: none
+title: Wasser
+note:
+item: Frischwasser | 62 | % | normal | bar | 620
+item: Grauwasser | 35 | % | normal | bar | 350
+item: Boiler | 45 | °C | normal | number | -1
+item: Wassertank | 15 | °C | normal | number | -1
+item: E-Boiler | aus |  | normal | state | -1
+item: Boiler-Ventil | an |  | normal | state | -1
+dots: 11/12

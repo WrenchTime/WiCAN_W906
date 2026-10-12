@@ -1,0 +1,6 @@
+kind: notice
+ring: grey
+title:
+note:
+dots: 3/3
+line: Cerbo nicht eingerichtet

@@ -512,6 +512,8 @@ int web_layout_report_json(bool ok, const layout_report_t *report, const layout_
 			{
 				const char *key = layout->pages[p].items[i].key;
 
+				// A value of the second source is in no catalogue, and none of them is unknown for that
+				if(cerbo_key(key)) continue;
 				if(catalog_find(catalog, key) >= 0 || used_before(layout, p, i)) continue;
 
 				if(!first) put_char(&writer, ',');

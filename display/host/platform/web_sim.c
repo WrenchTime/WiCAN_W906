@@ -549,6 +549,9 @@ static void image(uint8_t *data, size_t size, const char *project)
 // The built-in layout as the build embeds it (the Makefile links it for main.c): a layout to send
 extern const char layout_start[] __asm__("_binary_w906_default_json_start");
 extern const char layout_end[] __asm__("_binary_w906_default_json_end");
+// ... and the pages of the second source, which the app appends once it has the address of a Cerbo
+extern const char layout_gx_start[] __asm__("_binary_gx_default_json_start");
+extern const char layout_gx_end[] __asm__("_binary_gx_default_json_end");
 
 static uint8_t file[10000];
 static char large[200000];
@@ -583,6 +586,8 @@ static void test_start(void)
 	boot.git = "sim";
 	boot.builtin_layout = layout_start;
 	boot.builtin_length = (size_t)(layout_end - layout_start);
+	boot.builtin_gx = layout_gx_start;
+	boot.builtin_gx_length = (size_t)(layout_gx_end - layout_gx_start);
 	boot.work = work;
 	boot.work_count = LAYOUT_TOKENS;
 	// The display of this simulation is one whose owner switched "Dauerhaft frei" off: a change needs the

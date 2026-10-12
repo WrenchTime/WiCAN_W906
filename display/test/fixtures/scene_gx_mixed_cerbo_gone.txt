@@ -1,0 +1,9 @@
+kind: values
+ring: yellow
+title: Fahrt
+note: Cerbo nicht erreichbar
+item: Drehzahl | 812 | 1/min | normal | arc | 162
+item: SOC | – |  | dim | number | -1
+item: Kühlwasser | 88 | °C | normal | number | -1
+item: Alternator | – |  | dim | number | -1
+dots: 4/5

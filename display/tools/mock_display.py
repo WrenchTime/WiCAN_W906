@@ -59,7 +59,10 @@ Taken from the sources, read and written a second time here:
     while an address is set, the values fresh under 5 s and left out from 60 s on. With an address
     the prefix GX_ is the Cerbo's: a value of the adapter that bears it is left out of /api/values,
     so that no key stands twice; and "values" of /api/info counts what /api/values names of the
-    Cerbo - not a number without end, which has no text there. A mock nobody gave an address
+    Cerbo - not a number without end, which has no text there. While it has an address the views the
+    display chose itself end with the five built-in pages of the Cerbo (display/layouts/gx_default.json),
+    as one text under the name "W906 OM651 Standard + Cerbo"; views that are stored or looked at stay
+    as they are; and no key that begins with GX_ is ever "unknown". A mock nobody gave an address
     answers byte for byte what it answered before there was a second source
 
 What the check of a layout does not check as the display does:
@@ -131,6 +134,7 @@ import page_gz
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "..", "main", "web", "index.html")
 BUILTIN_LAYOUT = os.path.join(HERE, "..", "layouts", "w906_default.json")
+BUILTIN_GX_LAYOUT = os.path.join(HERE, "..", "layouts", "gx_default.json")
 ADAPTER_FIXTURES = os.path.join(HERE, "..", "..", "tools", "w906", "fixtures")
 
 # web_route.h
@@ -480,6 +484,54 @@ def check_layout(data):
     return {"name": name, "pages": keys, "warnings": warnings}
 
 
+# layout.h, layout_to_json(): the members of an item in the order they are written
+LAYOUT_ITEM_MEMBERS = ("key", "label", "unit", "scale", "dec", "widget", "min", "max", "warn_lo", "warn_hi", "crit_lo", "crit_hi", "map")
+
+
+def appended_views(first, second):
+    """The views of the vehicle with the pages of the Cerbo behind them, as the text the display holds for
+    them (app_choose_layout(): layout_append(), then layout_to_json()): `first` and `second` are the texts of
+    the two built-in files. No whitespace; of an item the members in the order of layout.h, each only if it
+    says something - "dec" 0, "scale" 1 and the widget "number" are left out; where the two have more than
+    twelve pages the last pages of the first give way; the name of the first with " + " and the name of the
+    second, where both have one and the whole fits into 32 bytes. Written for the built-in files: texts
+    without control characters, numbers that printf writes with 15 digits as they are."""
+    def text(value):
+        return json.dumps(value, ensure_ascii=False)
+
+    def number(value):
+        short = "%.15g" % value
+        return short if float(short) == float(value) else "%.17g" % value
+
+    def item(members):
+        parts = []
+        for name in LAYOUT_ITEM_MEMBERS:
+            value = members.get(name)
+            if value is None or (name, value) in (("dec", 0), ("scale", 1), ("widget", "number")):
+                continue
+            if name == "map":
+                parts.append("\"map\":{%s}" % ",".join("%s:%s" % (text(raw), text(shown)) for raw, shown in value.items()))
+            else:
+                parts.append("\"%s\":%s" % (name, text(value) if isinstance(value, str) else number(value)))
+        return "{%s}" % ",".join(parts)
+
+    def page(members):
+        head = ("\"title\":%s," % text(members["title"]) if members.get("title") else "") + ("\"hidden\":true," if members.get("hidden") else "")
+        return "{%s\"items\":[%s]}" % (head, ",".join(item(entry) for entry in members["items"]))
+
+    vehicle = json.loads(first.decode("utf-8"))
+    cerbo = json.loads(second.decode("utf-8"))
+    name = vehicle.get("name", "")
+    whole = name + " + " + cerbo.get("name", "")
+    if name != "" and cerbo.get("name", "") != "" and len(whole.encode("utf-8")) <= 32:
+        name = whole
+    pages = vehicle["pages"][:12 - len(cerbo["pages"])] + cerbo["pages"]
+    return ("{\"format\":\"wican-display-layout\",\"v\":1%s%s,\"pages\":[%s]}"
+            % (",\"name\":%s" % text(name) if name != "" else "",
+               ",\"profile_hint\":%s" % text(vehicle["profile_hint"]) if vehicle.get("profile_hint") else "",
+               ",".join(page(entry) for entry in pages))).encode("utf-8")
+
+
 def quote(text, delete_too=True):
     """A text as the writers of the display put it into JSON: " and \\ with a backslash, what lies below
     0x20 as \\u00xx, everything else as it is. web_json.c writes 0x7F as \\u007f as well, catalog.c not."""
@@ -762,6 +814,8 @@ class Display:
 
         with open(BUILTIN_LAYOUT, "rb") as file:
             self.builtin = file.read()
+        with open(BUILTIN_GX_LAYOUT, "rb") as file:
+            self.builtin_gx = file.read()   # the pages of the Cerbo, behind the views while it has an address
         self.stored = None              # the layout the user stored, bytes
         self.layout = self.builtin      # the text of the views in use
         self.layout_name = check_layout(self.builtin)["name"]
@@ -924,7 +978,7 @@ class Display:
         if self.stored is not None:
             self._use(self.stored, "stored")
         else:
-            self._use(self.builtin, "builtin")
+            self._use(self.chosen(), "builtin")
 
     def set_adapter(self, on):
         if self.adapter and not on:
@@ -1001,6 +1055,17 @@ class Display:
     def busy(self):
         """app_busy()"""
         return self.reading or self.uploading
+
+    def chosen(self):
+        """The views the display chooses itself (app_choose_layout()): the built-in ones of the vehicle, and
+        behind them the pages of the Cerbo while the second source has an address."""
+        return appended_views(self.builtin, self.builtin_gx) if self.settings["cerbo"] != "" else self.builtin
+
+    def follow_source(self):
+        """app_web_settings(): the second source was switched on or off, and the views the display chose
+        itself get its pages or lose them. Views the user stored or looks at stay as they are."""
+        if self.source == "builtin":
+            self._use(self.chosen(), "builtin")
 
     def _use(self, data, source):
         """These views are the ones in use from now on. `data` is a text check_layout() takes."""
@@ -1142,9 +1207,10 @@ class Display:
         names = [entry[0] for entry in self.catalog]
         keys = [key for page in layout["pages"] for key in page]
         unknown = []
-        # Before the catalogue is there every key would be unknown
+        # Before the catalogue is there every key would be unknown. A key of the Cerbo never is: it is in no
+        # catalogue, and the editor would mark the built-in pages of the Cerbo
         if any(name != CATALOG_BATTERY for name in names):
-            unknown = [key for key in dict.fromkeys(keys) if key not in names]
+            unknown = [key for key in dict.fromkeys(keys) if key not in names and not key.startswith(CERBO_PREFIX)]
         first = layout["warnings"][0] if layout["warnings"] else ("", "")
         return ("{\"ok\":true,\"name\":%s,\"pages\":%d,\"items\":%d,\"warnings\":%d,\"warning_path\":%s,\"warning\":%s,"
                 "\"unknown\":[%s]}" % (quote(layout["name"]), len(layout["pages"]), len(keys), len(layout["warnings"]),
@@ -1357,8 +1423,8 @@ class Display:
         if route == "layout_reset":
             # The views the display chooses by itself were read without anything to put right
             self.stored = None
-            self._use(self.builtin, "builtin")
-            return 200, self.report_json(dict(check_layout(self.builtin), warnings=[]))
+            self._use(self.chosen(), "builtin")
+            return 200, self.report_json(dict(check_layout(self.layout), warnings=[]))
         try:
             layout = check_layout(data)
         except Refused as refused:
@@ -1401,7 +1467,10 @@ class Display:
             self._cerbo_settle(now if now is not None else self.now())
             self.cerbo_seen_ms = None
             self.cerbo_since_ms = now if now is not None else self.now()
+        switched = (changed["cerbo"] == "") != (self.settings["cerbo"] == "")
         self.settings = changed
+        if switched:
+            self.follow_source()
         return 200, self.settings_json()
 
     def _upload_begin(self, first, file_size, now):

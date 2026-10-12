@@ -1,0 +1,6 @@
+kind: values
+ring: none
+title: Versteckt
+note:
+item: SOC | 88 | % | normal | number | -1
+dots: 0/5

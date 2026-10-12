@@ -312,7 +312,9 @@ At most 12 pages with 1 to 6 values each, 16384 bytes. The answer to a `PUT`:
 ```
 
 Status 200 if the layout is taken, 400 if not. `unknown` lists the keys that are not in the catalogue
-(they are shown as "n. v."); it is empty while no catalogue is loaded. `mode=check` needs no release.
+(they are shown as "n. v."); it is empty while no catalogue is loaded. A key that begins with `GX_` is never
+listed: it names a value of the Cerbo GX, which is in no catalogue - whether the display has the address of
+a Cerbo or not, and whether its flow sends that key or not. `mode=check` needs no release.
 
 `mode=apply` shows the layout at once without storing it (`layout.source` is
 `preview`): a restart, a reset or a save ends the preview, and the page in the browser keeps the text it
@@ -323,6 +325,25 @@ that page holds now; without one there it starts at the first page the new layou
 answers the report of the views the display then uses by itself (the built-in ones, or views made from the
 catalogue of another vehicle), shown from their first page; its body is not looked at. `GET /api/layout`
 answers the text of the views in use: for views the browser sent, the text that was sent, byte for byte.
+
+**With a second source** — `app_web_layout_cerbo.json`, `app_web_report_cerbo.json`. While the display has the
+address of a Cerbo GX (`cerbo` of the settings; not in safe mode), the views it uses by itself end with the
+five built-in pages of the Cerbo, `layouts/gx_default.json`: Batterie, Energie, Alternator, Wasser, Klima.
+`GET /api/layout` then answers one text for all of them, written by the display without whitespace, under the
+name of the two - `"name":"W906 OM651 Standard + Cerbo"`, 12 pages, 4604 bytes for the W906 -, and
+`layout.name` of `GET /api/info` is that name; `layout.source` goes on naming the part of the vehicle
+(`builtin` or `generated`). Where the views of the vehicle and the five pages are more than 12 pages together,
+the last pages of the vehicle give way. The text can be sent back as it is: `mode=check` answers 12 pages, 65
+values, nothing unknown. The pages come and go with the address (`POST /api/settings`), and
+`POST /api/layout/reset` answers the report of the views with them. **Views the browser sent are never
+appended to** - a stored layout and a preview stay what was sent, with the address and without it, and keep
+pages of the Cerbo they hold: such a page says "Cerbo nicht eingerichtet" on a display without the address.
+A display without the address answers the text of before, byte for byte.
+
+A page shows a value whose key begins with `GX_` from what the Cerbo sent - under 5 s as it is, under 60 s
+dimmed, then a dash - with the label and the unit the layout gives it (no catalogue is asked for it). A page of
+such values alone shows them whatever the adapter does, also while the vehicle is parked and the adapter
+sleeps; a page that names values of both shows dashes for the source that is away.
 
 ### `GET /api/dtc/last` — `web_dtc_last.json`
 
@@ -387,6 +408,11 @@ switches the source off. No name (it would have to be looked up), no port (it is
 `400 {"error":"body","member":"cerbo"}`. The source follows at once: with another address the values of
 the old one are gone with the answer. It needs the release and no press of the knob: a wrong address locks
 nobody out.
+Where a request switches the source on or off - the first address, or `""` - and the views in use are the
+ones the display chose itself, they get the built-in pages of the Cerbo or lose them with the same answer
+(see Layout above); the display stays on the page it shows if the views still have one there, else it goes to
+their first page. Nothing of that is stored but the setting. Another address in place of one changes no view,
+and in safe mode no request does.
 
 The answer, and the settings in `GET /api/info`, name `cerbo` **only while an address is set**, behind
 `standby_s` and before `web_open`. Without one they are the text above, byte for byte - a display nobody

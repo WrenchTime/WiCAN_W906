@@ -1633,3 +1633,165 @@ MUTATIONS = [
     ("scene_dump_returns_length_with_zero", T, F, END, "\tout[writer.length] = '\\0';\n\treturn (int)writer.length + 1;"),
     ("scene_dump_returns_zero", T, F, END, "\tout[writer.length] = '\\0';\n\treturn 0;"),
 ]
+
+# A value page that names a value of the second source (the Cerbo): rules of its own, next to those above
+GX_SHOWS = "\treturn view == CONN_VIEW_LIVE || view == CONN_VIEW_SCAN || view == CONN_VIEW_NO_API;\n"
+GX_VIEW = "\treturn input->cerbo != NULL ? cerbo_view(input->cerbo, input->now_ms) : CERBO_VIEW_OFF;\n"
+GX_PAGE = "\tlayout_page_sources(input->world->layout, input->nav->page, &wican, &gx);\n\treturn gx;\n"
+GX_SHOWS_RANGE = "\tif(page < 0 || page >= layout->page_count) return false;\n\n\tlayout_page_sources(layout, page, &wican, &gx);\n"
+GX_SHOWS_PLAIN = "\tif(!gx) return wican_shows(view);\n"
+GX_SHOWS_CERBO = "\tif(cerbo != NULL && cerbo_showing(cerbo, now_ms)) return true;\n"
+GX_SHOWS_BOTH = "\treturn wican && wican_shows(view);\n"
+GX_LABEL = "\tif(labelled) append(made->label, sizeof(made->label), item->label);\n"
+GX_LABEL_MADE = "\tif(!labelled && !fmt_label(item->key, made->label, sizeof(made->label))) memset(made->label, 0, sizeof(made->label));\n"
+GX_WIDGETS = "\t\tcase LAYOUT_WIDGET_ARC:\n\t\tcase LAYOUT_WIDGET_BAR:\n\t\tcase LAYOUT_WIDGET_STATE:\n\t\t\tmade->widget = item->widget;\n\t\t\tbreak;\n"
+GX_NO_WIDGET = "\t\t\tmade->widget = LAYOUT_WIDGET_NUMBER;\n"
+GX_BEGIN = "\tmade->tone = SCENE_TONE_DIM;\n\tmade->permille = -1;\n\tappend(made->text, sizeof(made->text), SCENE_DASH);\n"
+GX_ON = "\tbool on = input->cerbo != NULL && cerbo_on(input->cerbo);\n"
+GX_VALUE = "\tconst value_t *value = on ? values_find(&input->cerbo->values, item->key) : NULL;\n"
+GX_AGE = "\tvalue_age_t age = cerbo_age(value, input->now_ms);\n"
+GX_OFF = "\tif(!on)\n\t{\n\t\tmemset(made->text, 0, sizeof(made->text));\n\t\tappend(made->text, sizeof(made->text), SCENE_UNAVAILABLE);\n\t\treturn;\n\t}\n"
+GX_GONE = "\tif(age == VALUE_AGE_GONE || !layout_item_text(item, value, text, sizeof(text)))\n\t{\n\t\tif(value != NULL) *old = true;\n\t\treturn;\n\t}\n"
+GX_TEXT = "\tmemset(made->text, 0, sizeof(made->text));\n\tappend(made->text, sizeof(made->text), text);\n"
+GX_LEVEL = "\treached = layout_item_level(item, value);\n"
+GX_WORST = "\tif(reached > *worst) *worst = reached;\n"
+GX_TONE = ("\tif(age == VALUE_AGE_OLD) *old = true;\n"
+           "\telse made->tone = reached >= 2 ? SCENE_TONE_ALARM : reached == 1 ? SCENE_TONE_WARN : SCENE_TONE_NORMAL;\n")
+GX_UNIT = "\tif(made->widget != LAYOUT_WIDGET_STATE && item->has_unit) append(made->unit, sizeof(made->unit), item->unit);\n"
+GX_PERMILLE = "\tif(made->widget == LAYOUT_WIDGET_ARC || made->widget == LAYOUT_WIDGET_BAR) made->permille = range_permille(item, value);\n"
+GX_CALM = "\tbool calm = !input->safe_mode && input->heat == GUARD_HEAT_NORMAL;\n"
+GX_NOTE_CLEARED = "\tif(calm) memset(scene->note, 0, sizeof(scene->note));\n"
+GX_FIRST = "\t\tif(!cerbo_key(shown->items[0].key)) return false;\n"
+GX_NOTICE = "\t\tscene->kind = SCENE_NOTICE;\n\t\tadd_text(scene, text_cerbo(gx_view, input->safe_mode));\n\t\treturn true;\n"
+GX_NOTES = ("\tif(calm && wican && view != CONN_VIEW_LIVE) set_note(scene, text_view(view));\n"
+            "\telse if(calm) set_note(scene, text_cerbo(gx_view, input->safe_mode));\n")
+GX_TITLE = "\tset_title(scene, shown->title);\n"
+GX_COUNT = "\tscene->item_count = shown->item_count;\n"
+GX_ITEMS = ("\t\tif(cerbo_key(item->key)) build_cerbo_item(input, item, &scene->items[i], level, old);\n"
+            "\t\t// The adapter is away: its values are dashes that say nothing more - the note tells of it\n"
+            "\t\telse if(!wican_shows(view)) begin_item(item, &scene->items[i]);\n"
+            "\t\telse build_item(input, view, item, &scene->items[i], level, old);\n")
+GX_RING_WHERE = "\tif(input->nav->screen != NAV_PAGES || !page_of_cerbo(input)) return;\n"
+GX_RING_SCAN = "\tif(view == CONN_VIEW_SCAN) return;\n\n\t// Values: what they say alone"
+GX_RING_VALUES = "\t\tscene->ring = ring_state(CONN_VIEW_LIVE, state, level, old);\n"
+GX_RING_FIRST = "\tif(!cerbo_key(input->world->layout->pages[input->nav->page].items[0].key)) return;\n"
+GX_RING_CERBO = "\tscene->ring.kind = ring_cerbo(view_of_cerbo(input));\n"
+GX_HOOK = "\tif(page_of_cerbo(input) && build_cerbo_page(input, view, scene, level, old)) return;\n"
+GX_RING_HOOK = "\tring_of_cerbo_page(input, view, state, level, old, scene);\n"
+
+MUTATIONS += [
+    # which pages go by these rules, and when one of them shows values
+    ("scene_cerbo_pages_go_the_old_way", T, F, GX_HOOK, "\t(void)build_cerbo_page;\n"),
+    ("scene_cerbo_pages_of_both_go_the_old_way", T, F, GX_PAGE, GX_PAGE.replace("return gx;", "return gx && !wican;")),
+    ("scene_cerbo_every_page_goes_the_new_way", T, F, GX_PAGE, GX_PAGE.replace("return gx;", "return gx || wican;")),
+    ("scene_cerbo_adapter_shows_nothing_during_a_scan", T, F, GX_SHOWS, "\treturn view == CONN_VIEW_LIVE || view == CONN_VIEW_NO_API;\n"),
+    ("scene_cerbo_adapter_shows_nothing_without_api", T, F, GX_SHOWS, "\treturn view == CONN_VIEW_LIVE || view == CONN_VIEW_SCAN;\n"),
+    ("scene_cerbo_adapter_shows_with_ignition_off", T, F, GX_SHOWS, GX_SHOWS.replace(";\n", " || view == CONN_VIEW_ECU_OFFLINE;\n")),
+    ("scene_cerbo_adapter_shows_always", T, F, GX_SHOWS, "\t(void)view;\n\treturn true;\n"),
+    ("scene_cerbo_no_source_is_not_reachable", T, F, GX_VIEW, GX_VIEW.replace("CERBO_VIEW_OFF", "CERBO_VIEW_UNREACHABLE")),
+    ("scene_cerbo_view_at_no_time", T, F, GX_VIEW, GX_VIEW.replace("input->now_ms", "0")),
+    ("scene_shows_a_page_outside_of_the_layout", T, F, GX_SHOWS_RANGE, "\tlayout_page_sources(layout, page, &wican, &gx);\n"),
+    ("scene_shows_every_page_of_the_adapter", T, F, GX_SHOWS_PLAIN, "\tif(!gx) return true;\n"),
+    ("scene_shows_no_page_of_the_adapter", T, F, GX_SHOWS_PLAIN, "\tif(!gx) return false;\n"),
+    ("scene_shows_cerbo_pages_only_while_it_delivers", T, F, GX_SHOWS_CERBO, "\tif(cerbo != NULL && cerbo_view(cerbo, now_ms) == CERBO_VIEW_LIVE) return true;\n"),
+    ("scene_shows_cerbo_pages_with_every_source", T, F, GX_SHOWS_CERBO, "\t(void)now_ms;\n\tif(cerbo != NULL) return true;\n"),
+    ("scene_shows_cerbo_pages_at_no_time", T, F, GX_SHOWS_CERBO, "\t(void)now_ms;\n\tif(cerbo != NULL && cerbo_showing(cerbo, 0)) return true;\n"),
+    ("scene_shows_cerbo_pages_never", T, F, GX_SHOWS_CERBO, "\t(void)now_ms;\n\t(void)cerbo;\n"),
+    ("scene_shows_a_cerbo_page_by_the_adapter", T, F, GX_SHOWS_BOTH, "\treturn wican_shows(view);\n"),
+    ("scene_shows_a_page_of_both_without_the_adapter", T, F, GX_SHOWS_BOTH, "\treturn wican;\n"),
+    ("scene_shows_a_page_of_both_by_the_cerbo_alone", T, F, GX_SHOWS_BOTH, "\treturn false;\n"),
+
+    # what every value of such a page begins as
+    ("scene_cerbo_item_without_label", T, F, GX_LABEL, ""),
+    ("scene_cerbo_item_label_never_made", T, F, GX_LABEL_MADE, ""),
+    ("scene_cerbo_item_label_made_over_the_one_given", T, F, GX_LABEL_MADE, "\tif(!fmt_label(item->key, made->label, sizeof(made->label))) memset(made->label, 0, sizeof(made->label));\n"),
+    ("scene_cerbo_item_label_left_half_made", T, F, GX_LABEL_MADE, "\tif(!labelled) fmt_label(item->key, made->label, sizeof(made->label));\n"),
+    ("scene_cerbo_item_arc_is_a_number", T, F, GX_WIDGETS, GX_WIDGETS.replace("\t\tcase LAYOUT_WIDGET_ARC:\n", "")),
+    ("scene_cerbo_item_bar_is_a_number", T, F, GX_WIDGETS, GX_WIDGETS.replace("\t\tcase LAYOUT_WIDGET_BAR:\n", "")),
+    ("scene_cerbo_item_state_is_a_number", T, F, GX_WIDGETS, GX_WIDGETS.replace("\t\tcase LAYOUT_WIDGET_STATE:\n", "")),
+    ("scene_cerbo_item_every_widget_passed_on", T, F, GX_NO_WIDGET, "\t\t\tmade->widget = item->widget;\n"),
+    ("scene_cerbo_item_dash_not_dimmed", T, F, GX_BEGIN, GX_BEGIN.replace("\tmade->tone = SCENE_TONE_DIM;\n", "")),
+    ("scene_cerbo_item_dash_at_permille_zero", T, F, GX_BEGIN, GX_BEGIN.replace("\tmade->permille = -1;\n", "")),
+    ("scene_cerbo_item_no_dash", T, F, GX_BEGIN, GX_BEGIN.replace("\tappend(made->text, sizeof(made->text), SCENE_DASH);\n", "")),
+    ("scene_cerbo_item_dash_is_nv", T, F, GX_BEGIN, GX_BEGIN.replace("SCENE_DASH", "SCENE_UNAVAILABLE")),
+
+    # one value of the Cerbo: from its store, by its age there
+    ("scene_cerbo_item_source_on_without_address", T, F, GX_ON, "\tbool on = input->cerbo != NULL;\n"),
+    ("scene_cerbo_item_from_the_store_of_the_adapter", T, F, GX_VALUE, "\tconst value_t *value = on ? values_find(input->values, item->key) : NULL;\n"),
+    ("scene_cerbo_item_adapter_fills_in", T, F, GX_VALUE,
+     "\tconst value_t *value = on && values_find(&input->cerbo->values, item->key) != NULL ? values_find(&input->cerbo->values, item->key) : on ? values_find(input->values, item->key) : NULL;\n"),
+    ("scene_cerbo_item_by_the_age_of_the_adapter", T, F, GX_AGE, "\tvalue_age_t age = values_age(value, input->now_ms);\n"),
+    ("scene_cerbo_item_age_at_no_time", T, F, GX_AGE, "\tvalue_age_t age = cerbo_age(value, 0);\n"),
+    ("scene_cerbo_item_off_is_a_dash", T, F, GX_OFF, "\tif(!on) return;\n"),
+    ("scene_cerbo_item_off_keeps_the_dash_before_nv", T, F, GX_OFF, GX_OFF.replace("\t\tmemset(made->text, 0, sizeof(made->text));\n", "")),
+    ("scene_cerbo_item_off_looks_into_the_store", T, F, GX_OFF, "\tif(!on && input->cerbo == NULL)\n\t{\n\t\tmemset(made->text, 0, sizeof(made->text));\n\t\tappend(made->text, sizeof(made->text), SCENE_UNAVAILABLE);\n\t\treturn;\n\t}\n\tif(!on) value = values_find(&input->cerbo->values, item->key);\n\tif(!on) age = cerbo_age(value, input->now_ms);\n"),
+    ("scene_cerbo_item_gone_value_shown", T, F, GX_GONE, GX_GONE.replace("age == VALUE_AGE_GONE || ", "")),
+    ("scene_cerbo_item_missed_value_not_told", T, F, GX_GONE, GX_GONE.replace("\t\tif(value != NULL) *old = true;\n", "")),
+    ("scene_cerbo_item_every_dash_is_missed", T, F, GX_GONE, GX_GONE.replace("if(value != NULL) *old = true;", "*old = true;")),
+    ("scene_cerbo_item_only_a_gone_value_is_missed", T, F, GX_GONE, GX_GONE.replace("if(value != NULL) *old = true;", "if(value != NULL && age == VALUE_AGE_GONE) *old = true;")),
+    ("scene_cerbo_item_text_behind_the_dash", T, F, GX_TEXT, "\tappend(made->text, sizeof(made->text), text);\n"),
+    ("scene_cerbo_item_no_text", T, F, GX_TEXT, "\t(void)text;\n"),
+    ("scene_cerbo_item_level_zero", T, F, GX_LEVEL, "\treached = 0;\n"),
+    ("scene_cerbo_item_level_not_told", T, F, GX_WORST, "\t(void)worst;\n"),
+    ("scene_cerbo_item_level_of_last_value", T, F, GX_WORST, "\t*worst = reached;\n"),
+    ("scene_cerbo_item_old_not_told", T, F, GX_TONE, GX_TONE.replace("if(age == VALUE_AGE_OLD) *old = true;\n\telse made->tone", "if(age != VALUE_AGE_OLD) made->tone")),
+    ("scene_cerbo_item_old_not_dimmed", T, F, GX_TONE, GX_TONE.replace("\telse made->tone", "\tmade->tone")),
+    ("scene_cerbo_item_fresh_counts_as_old", T, F, GX_TONE, GX_TONE.replace("if(age == VALUE_AGE_OLD) *old = true;\n\telse made->tone", "*old = true;\n\tif(age != VALUE_AGE_OLD) made->tone")),
+    ("scene_cerbo_item_alarm_from_level_3", T, F, GX_TONE, GX_TONE.replace("reached >= 2", "reached >= 3")),
+    ("scene_cerbo_item_warn_is_alarm", T, F, GX_TONE, GX_TONE.replace("reached >= 2", "reached >= 1")),
+    ("scene_cerbo_item_warn_is_normal", T, F, GX_TONE, GX_TONE.replace("reached == 1 ? SCENE_TONE_WARN : SCENE_TONE_NORMAL", "SCENE_TONE_NORMAL")),
+    ("scene_cerbo_item_always_warn", T, F, GX_TONE, GX_TONE.replace("reached == 1 ? SCENE_TONE_WARN : SCENE_TONE_NORMAL", "SCENE_TONE_WARN")),
+    ("scene_cerbo_item_unit_of_the_catalogue", T, F, GX_UNIT,
+     "\tif(made->widget != LAYOUT_WIDGET_STATE) append(made->unit, sizeof(made->unit), layout_item_unit(item, input->world->catalog));\n"),
+    ("scene_cerbo_item_state_with_unit", T, F, GX_UNIT, GX_UNIT.replace("made->widget != LAYOUT_WIDGET_STATE && ", "")),
+    ("scene_cerbo_item_without_unit", T, F, GX_UNIT, ""),
+    ("scene_cerbo_item_arc_without_permille", T, F, GX_PERMILLE, GX_PERMILLE.replace("made->widget == LAYOUT_WIDGET_ARC || ", "")),
+    ("scene_cerbo_item_bar_without_permille", T, F, GX_PERMILLE, GX_PERMILLE.replace(" || made->widget == LAYOUT_WIDGET_BAR", "")),
+    ("scene_cerbo_item_number_with_permille", T, F, GX_PERMILLE, GX_PERMILLE.replace("made->widget == LAYOUT_WIDGET_ARC || made->widget == LAYOUT_WIDGET_BAR", "made->widget != LAYOUT_WIDGET_STATE")),
+
+    # the page: notice or values, the note, title and items
+    ("scene_cerbo_page_heat_does_not_keep_its_note", T, F, GX_CALM, "\tbool calm = !input->safe_mode;\n"),
+    ("scene_cerbo_page_safe_mode_does_not_keep_its_note", T, F, GX_CALM, "\tbool calm = input->heat == GUARD_HEAT_NORMAL;\n"),
+    ("scene_cerbo_page_note_of_the_caller_stays", T, F, GX_NOTE_CLEARED, ""),
+    ("scene_cerbo_page_note_cleared_in_part", T, F, GX_NOTE_CLEARED, "\tif(calm) scene->note[0] = '\\0';\n"),
+    ("scene_cerbo_page_notice_of_the_cerbo_for_every_first_value", T, F, GX_FIRST, ""),
+    ("scene_cerbo_page_notice_by_the_last_value", T, F, GX_FIRST, "\t\tif(!cerbo_key(shown->items[shown->item_count - 1].key)) return false;\n"),
+    ("scene_cerbo_page_notice_always_of_the_adapter", T, F, GX_FIRST, "\t\tif(cerbo_key(shown->items[0].key) || !cerbo_key(shown->items[0].key)) return false;\n"),
+    ("scene_cerbo_page_notice_is_a_page_of_values", T, F, GX_NOTICE, GX_NOTICE.replace("\t\tscene->kind = SCENE_NOTICE;\n", "")),
+    ("scene_cerbo_page_notice_without_text", T, F, GX_NOTICE, GX_NOTICE.replace("\t\tadd_text(scene, text_cerbo(gx_view, input->safe_mode));\n", "")),
+    ("scene_cerbo_page_notice_does_not_tell_the_safe_mode", T, F, GX_NOTICE, GX_NOTICE.replace("input->safe_mode", "false")),
+    ("scene_cerbo_page_notice_says_what_the_adapter_says", T, F, GX_NOTICE, GX_NOTICE.replace("text_cerbo(gx_view, input->safe_mode)", "text_view(view)")),
+    ("scene_cerbo_page_notice_left_to_the_caller", T, F, GX_NOTICE, GX_NOTICE.replace("return true;", "return false;")),
+    ("scene_cerbo_page_note_of_the_adapter_on_a_page_of_the_cerbo", T, F, GX_NOTES, GX_NOTES.replace("calm && wican && view", "calm && view")),
+    ("scene_cerbo_page_note_of_the_adapter_only_while_it_is_away", T, F, GX_NOTES, GX_NOTES.replace("view != CONN_VIEW_LIVE", "!wican_shows(view)")),
+    ("scene_cerbo_page_note_of_the_adapter_never", T, F, GX_NOTES, "\tif(calm) set_note(scene, text_cerbo(gx_view, input->safe_mode));\n"),
+    ("scene_cerbo_page_note_of_the_cerbo_first", T, F, GX_NOTES,
+     "\tif(calm && gx_view != CERBO_VIEW_LIVE) set_note(scene, text_cerbo(gx_view, input->safe_mode));\n\telse if(calm && wican && view != CONN_VIEW_LIVE) set_note(scene, text_view(view));\n"),
+    ("scene_cerbo_page_note_of_the_cerbo_never", T, F, GX_NOTES, "\tif(calm && wican && view != CONN_VIEW_LIVE) set_note(scene, text_view(view));\n"),
+    ("scene_cerbo_page_note_over_safe_mode_and_heat", T, F, GX_NOTES, GX_NOTES.replace("else if(calm) set_note", "else set_note")),
+    ("scene_cerbo_page_without_title", T, F, GX_TITLE, ""),
+    ("scene_cerbo_page_title_of_first_page", T, F, GX_TITLE, "\tset_title(scene, layout->pages[0].title);\n"),
+    ("scene_cerbo_page_items_not_counted", T, F, GX_COUNT, ""),
+    ("scene_cerbo_page_one_item_less", T, F, GX_COUNT, "\tscene->item_count = shown->item_count - 1;\n"),
+    ("scene_cerbo_page_every_value_from_the_cerbo", T, F, GX_ITEMS, "\t\tbuild_cerbo_item(input, item, &scene->items[i], level, old);\n\t\t(void)build_item;\n"),
+    ("scene_cerbo_page_every_value_from_the_adapter", T, F, GX_ITEMS,
+     "\t\tif(!wican_shows(view)) begin_item(item, &scene->items[i]);\n\t\telse build_item(input, view, item, &scene->items[i], level, old);\n\t\t(void)build_cerbo_item;\n"),
+    ("scene_cerbo_page_adapter_values_shown_while_it_is_away", T, F, GX_ITEMS, GX_ITEMS.replace("\t\telse if(!wican_shows(view)) begin_item(item, &scene->items[i]);\n", "")),
+    ("scene_cerbo_page_adapter_values_never_shown", T, F, GX_ITEMS, GX_ITEMS.replace("else if(!wican_shows(view)) begin_item", "else if(wican_shows(view) || !wican_shows(view)) begin_item")),
+
+    # the ring of such a page
+    ("scene_cerbo_ring_is_the_one_of_the_adapter", T, F, GX_RING_HOOK, "\t(void)ring_of_cerbo_page;\n"),
+    ("scene_cerbo_ring_on_every_screen", T, F, GX_RING_WHERE, "\tif(!page_of_cerbo(input)) return;\n"),
+    ("scene_cerbo_ring_on_every_page", T, F, GX_RING_WHERE, "\tif(input->nav->screen != NAV_PAGES || input->nav->page < 0 || input->nav->page >= input->world->layout->page_count) return;\n\t(void)page_of_cerbo;\n"),
+    ("scene_cerbo_ring_no_progress_during_a_scan", T, F, GX_RING_SCAN, "\t(void)view;\n\n\t// Values: what they say alone"),
+    ("scene_cerbo_ring_of_values_by_the_view_of_the_adapter", T, F, GX_RING_VALUES, "\t\tscene->ring = ring_state(view, state, level, old);\n"),
+    ("scene_cerbo_ring_of_values_ignores_level", T, F, GX_RING_VALUES, "\t\t(void)level;\n\t\tscene->ring = ring_state(CONN_VIEW_LIVE, state, 0, old);\n"),
+    ("scene_cerbo_ring_of_values_ignores_old", T, F, GX_RING_VALUES, "\t\t(void)old;\n\t\tscene->ring = ring_state(CONN_VIEW_LIVE, state, level, false);\n"),
+    ("scene_cerbo_ring_of_values_left_as_it_was", T, F, GX_RING_VALUES, "\t\t(void)state;\n\t\t(void)level;\n\t\t(void)old;\n"),
+    ("scene_cerbo_ring_of_a_notice_always_of_the_cerbo", T, F, GX_RING_FIRST, ""),
+    ("scene_cerbo_ring_of_a_notice_by_the_last_value", T, F, GX_RING_FIRST,
+     GX_RING_FIRST.replace("items[0]", "items[input->world->layout->pages[input->nav->page].item_count - 1]")),
+    ("scene_cerbo_ring_of_a_notice_always_of_the_adapter", T, F, GX_RING_CERBO, ""),
+    ("scene_cerbo_ring_of_a_notice_always_red", T, F, GX_RING_CERBO, "\tscene->ring.kind = RING_RED;\n"),
+    ("scene_cerbo_ring_of_a_notice_for_no_source_not_reachable", T, F, GX_RING_CERBO, "\tscene->ring.kind = ring_cerbo(input->cerbo != NULL ? cerbo_view(input->cerbo, input->now_ms) : CERBO_VIEW_UNREACHABLE);\n"),
+]

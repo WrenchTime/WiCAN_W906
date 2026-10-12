@@ -932,9 +932,10 @@ function drawItems()
 		const path = "pages[" + S.page + "].items[" + i + "]";
 		const key = el("strong", {}, [text(item.key)]);
 		const label = el("span", {}, [text(item.label)]);
+		// A key of the Cerbo (GX_) is in no catalogue, and the display shows its value all the same
 		const more = el("details", {open: item === S.item}, [
 			el("summary", {}, [key, " ", label, " · ", el("span", {className: "live", key: text(item.key)}),
-				catalogLoaded() && !has(S.catalog, item.key) ? el("span", "note", [" · nicht im Katalog: das Display zeigt „n. v.“"]) : ""]),
+				catalogLoaded() && !has(S.catalog, item.key) && !text(item.key).startsWith("GX_") ? el("span", "note", [" · nicht im Katalog: das Display zeigt „n. v.“"]) : ""]),
 			fields(item, path, () => { label.textContent = text(item.label); })
 		]);
 		const up = button("▲", "Wert nach oben", () => moved(item, i - 1), "sq");

@@ -190,6 +190,12 @@ static nav_do_t back(nav_t *nav, const nav_world_t *world)
 	switch(nav->screen)
 	{
 		case NAV_PAGES:
+			// The page the caller names: the first one that shows values. One the layout does not show is none.
+			if(world->home_set && layout_page_shown(world->layout, world->home, world->catalog))
+			{
+				nav->page = world->home;
+				break;
+			}
 			nav->page = layout_first_page(world->layout, world->catalog);
 			break;
 		case NAV_MENU:

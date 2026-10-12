@@ -196,6 +196,26 @@ def external_problems(page):
     return found
 
 
+def editor_marks(page):
+    """What makes the editor of the page call a value of the Cerbo unknown, as a list like the *_problems
+    above and below; its counter-check is EDITOR_MUTATIONS, not PAGE_MUTATIONS. The editor marks a value whose
+    key the catalogue of the adapter does not hold - "nicht im Katalog", and that the display shows "n. v."
+    for it - by itself, without asking the display. A key that begins with GX_ is in no catalogue and never
+    will be (API.md: PUT /api/layout never lists one as unknown), and the display shows its value from what
+    the Cerbo sent: the mark must not stand at one - else it stood at every value of the five built-in pages
+    of the Cerbo as soon as the catalogue is loaded."""
+    found = []
+    script = script_of(page)
+    note = " · nicht im Katalog: das Display zeigt „n. v.“"
+    if code_of(script)[1].count(note) != 1:
+        found.append("the note of a key the catalogue does not hold stands in %d places, not in one" % code_of(script)[1].count(note))
+    elif ("catalogLoaded() && !has(S.catalog, item.key) && !text(item.key).startsWith(\"%s\") ? el(\"span\", \"note\", [\"%s\"]) : \"\""
+          % (mock_display.CERBO_PREFIX, note)) not in script:
+        found.append("the note of a key the catalogue does not hold is not: the catalogue is loaded, it does not hold the key, "
+                     "and the key does not begin with %s" % mock_display.CERBO_PREFIX)
+    return found
+
+
 def release_problems(page):
     """What keeps the page from following a release for good (API.md: "lasting" of /api/info). Such a
     release has no end, and its left_s is 0: a page that makes an end of that locks its own buttons. The bar
@@ -318,6 +338,9 @@ class Page(unittest.TestCase):
 
     def test_nothing_is_loaded_from_anywhere(self):
         self.assertEqual(external_problems(self.page), [])
+
+    def test_the_editor_calls_no_value_of_the_cerbo_unknown(self):
+        self.assertEqual(editor_marks(self.page), [])
 
     def test_a_release_for_good_has_no_end_on_the_page(self):
         self.assertEqual(release_problems(self.page), [])
@@ -694,6 +717,8 @@ class Api(unittest.TestCase):
         display = self.display
         display.access.switch_on(2100)
         display.settings["cerbo"] = "192.168.88.2"
+        # ... whose views end with the pages of the Cerbo, as those of every display with the address
+        display.follow_source()
         display.cerbo = "silent"
         display.cerbo_base = (("GX_BATT_SOC", 87.5), ("GX_BATT_V", 26.41), ("GX_BATT_I", -6.2), ("GX_SW_B2B", "on"), ("GX_SW_VALVE", "off"),
                               ("GX_TANK_FRESH", 77))
@@ -718,6 +743,60 @@ class Api(unittest.TestCase):
         # And what a request gets: the same writers
         self.clock.advance(2.1)
         self.assertEqual(self.call("GET", "/api/values"), (200, fixture("app_web_values_cerbo.json")))
+
+    def test_cerbo_views(self):
+        # The story of the firmware (test_app_web.c, test_cerbo_views()): the views of a display with a Cerbo
+        display = self.display
+        with open(mock_display.BUILTIN_LAYOUT, "rb") as file:
+            builtin = file.read()
+        with open(mock_display.BUILTIN_GX_LAYOUT, "rb") as file:
+            pages = file.read()
+        whole = fixture("app_web_layout_cerbo.json")
+        self.assertEqual(len(whole.encode("utf-8")), 4604)
+        self.release()
+        self.assertEqual(self.call("GET", "/api/layout"), (200, builtin.decode("utf-8")))
+        # The address is given: the five pages of the Cerbo behind the views, as the one text the display writes
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/layout"), (200, whole))
+        self.assertIn("\"layout\":{\"name\":\"W906 OM651 Standard + Cerbo\",\"source\":\"builtin\"}", self.call("GET", "/api/info")[1])
+        # ... which the editor can send back: twelve pages, no key of the Cerbo unknown with the catalogue loaded
+        self.assertEqual(self.call("PUT", "/api/layout?mode=check", whole.encode("utf-8")), (200, fixture("app_web_report_cerbo.json")))
+        self.assertEqual(self.call("PUT", "/api/layout?mode=check", pages),
+                         (200, "{\"ok\":true,\"name\":\"Cerbo\",\"pages\":5,\"items\":30,\"warnings\":0,\"warning_path\":\"\",\"warning\":\"\",\"unknown\":[]}"))
+        mixed = (b"{\"format\":\"wican-display-layout\",\"v\":1,\"name\":\"M\",\"pages\":[{\"items\":[{\"key\":\"GX_BATT_SOC\"},{\"key\":\"NOBODY\"},"
+                 b"{\"key\":\"GX\"},{\"key\":\"ENGINE_RPM\"},{\"key\":\"GX_NEVER_SENT\"}]}]}")
+        self.assertEqual(self.call("PUT", "/api/layout?mode=check", mixed),
+                         (200, "{\"ok\":true,\"name\":\"M\",\"pages\":1,\"items\":5,\"warnings\":0,\"warning_path\":\"\",\"warning\":\"\",\"unknown\":[\"NOBODY\",\"GX\"]}"))
+        # Another address in its place changes nothing about the views; none takes the pages away
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.9\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/layout"), (200, whole))
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/layout"), (200, builtin.decode("utf-8")))
+        self.assertIn("\"layout\":{\"name\":\"W906 OM651 Standard\",\"source\":\"builtin\"}", self.call("GET", "/api/info")[1])
+        # The reset answers the report of what is chosen: seven pages without the address, twelve with it
+        self.assertEqual(self.call("POST", "/api/layout/reset", b""), (200, fixture("app_web_report_builtin.json")))
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        self.assertEqual(self.call("POST", "/api/layout/reset", b""), (200, fixture("app_web_report_cerbo.json")))
+        self.assertEqual(self.call("GET", "/api/layout"), (200, whole))
+        # Views of the user are never appended to, and keep the pages of the Cerbo they have
+        stored = (fixture("app_layout_stored.json") + "\n").encode("utf-8")
+        self.assertEqual(self.call("PUT", "/api/layout?mode=save", stored)[0], 200)
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"\"}")[0], 200)
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/layout"), (200, stored.decode("utf-8")))
+        self.assertEqual(self.call("PUT", "/api/layout?mode=save", whole.encode("utf-8")), (200, fixture("app_web_report_cerbo.json")))
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/layout"), (200, whole))
+        self.assertIn("\"layout\":{\"name\":\"W906 OM651 Standard + Cerbo\",\"source\":\"stored\"}", self.call("GET", "/api/info")[1])
+        # A preview stays what was sent while the address comes
+        self.assertEqual(self.call("PUT", "/api/layout?mode=apply", stored)[0], 200)
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/layout"), (200, stored.decode("utf-8")))
+        # A restart with the address stored and no views of the user: the twelve pages from the start
+        self.assertEqual(self.call("POST", "/api/layout/reset", b"")[0], 200)
+        display.restart()
+        self.clock.advance(mock_display.RESTART_MS / 1000 + 1)
+        self.assertEqual(self.call("GET", "/api/layout"), (200, whole))
 
     def test_cerbo_owns_its_prefix(self):
         # The story of the firmware (test_app_web.c): the other vehicle with a value named GX_BATT_SOC, a key
@@ -1657,6 +1736,16 @@ PAGE_MUTATIONS = {
     },
 }
 
+# For editor_marks(): what is broken in a copy of the page, as above
+EDITOR_MUTATIONS = {
+    "the note at every key the catalogue does not hold": (" && !text(item.key).startsWith(\"GX_\")", ""),
+    "the note at the keys of the Cerbo alone": (" && !text(item.key).startsWith(\"GX_\")", " && text(item.key).startsWith(\"GX_\")"),
+    "a prefix of two letters": (".startsWith(\"GX_\")", ".startsWith(\"GX\")"),
+    "the prefix anywhere in the key": (".startsWith(\"GX_\")", ".includes(\"GX_\")"),
+    "the note before the catalogue is loaded": ("catalogLoaded() && !has(S.catalog, item.key) && ", "!has(S.catalog, item.key) && "),
+    "the note a second time, at every value": ("const up = button(", "label.appendChild(el(\"span\", \"note\", [\" · nicht im Katalog: das Display zeigt „n. v.“\"]));\n\t\tconst up = button("),
+}
+
 
 def noise(count):
     """Letters and digits without any order in them, the same with every call"""
@@ -1744,6 +1833,32 @@ class NamesTheViewOfTheCerboAlways(mock_display.Display):
 class WrongCerbo(mock_display.Display):
     def cerbo_json(self, now):
         return super().cerbo_json(now).replace("\"connects\":", "\"sessions\":")
+
+
+class AppendsToViewsOfTheUser(mock_display.Display):
+    """Chooses the views anew when the second source is switched, whatever views are in use"""
+
+    def follow_source(self):
+        self._use(self.chosen(), "builtin")
+
+
+class KeepsThePagesOfTheCerbo(mock_display.Display):
+    """Does not take the pages of the Cerbo away with its address"""
+
+    def follow_source(self):
+        if self.settings["cerbo"] != "":
+            super().follow_source()
+
+
+class ResetsToTheVehicleAlone(mock_display.Display):
+    """The reset of the views forgets the pages of the Cerbo"""
+
+    def _layout(self, route, data):
+        if route != "layout_reset":
+            return super()._layout(route, data)
+        self.stored = None
+        self._use(self.builtin, "builtin")
+        return 200, self.report_json(dict(mock_display.check_layout(self.builtin), warnings=[]))
 
 
 class CerboBehindTheLayout(mock_display.Display):
@@ -2092,6 +2207,7 @@ API_MUTATIONS = {
     "test_cerbo_answers": WrongCerbo,
     "test_cerbo_comes_and_goes": ("CERBO_KEPT_MS", 59999),
     "test_cerbo_owns_its_prefix": ("CERBO_PREFIX", "NO_SUCH_PREFIX_"),
+    "test_cerbo_views": ("appended_views", lambda first, second: first),
     "test_cerbo_counts_what_it_names": CountsTheWholeStore,
     "test_no_cerbo_without_an_address": NamesTheCerboAlways,
     "test_release": ("OPEN_MAX_MS", 1801 * 1000),
@@ -2118,6 +2234,9 @@ API_MUTATIONS_MORE = {
     "test_cerbo_comes_and_goes": [("CERBO_FRESH_MS", 5001), ("CERBO_LIVE_MS", 10001), ("CERBO_SILENT_MS", 20001), ("CERBO_GRACE_MS", 15001),
                                   ("CERBO_ADDRESS", "192.168.88.9"), KeepsTheValuesOfTheOldAddress, NamesTheCerboAlways],
     "test_cerbo_owns_its_prefix": [OwnsThePrefixOnlyWhereTheCerboHasTheKey, OwnsThePrefixWithoutAnAddress],
+    "test_cerbo_views": [AppendsToViewsOfTheUser, KeepsThePagesOfTheCerbo, ResetsToTheVehicleAlone, ("CERBO_PREFIX", "NO_SUCH_PREFIX_"),
+                         ("LAYOUT_ITEM_MEMBERS", ("key", "label", "unit", "scale", "widget", "dec", "min", "max", "warn_lo", "warn_hi", "crit_lo", "crit_hi", "map")),
+                         ("appended_views", lambda first, second: first + b"\n" + second)],
     "test_cerbo_counts_what_it_names": [("has_text", lambda value: True), ("has_text", lambda value: isinstance(value, str) or value > float("-inf"))],
     "test_no_cerbo_without_an_address": [NamesTheViewOfTheCerboAlways, WritesAnEmptyAddress],
     "test_busy_keeps_the_adapter": [AsksForANetworkWhileItReads],
@@ -2178,6 +2297,13 @@ class CounterCheck(unittest.TestCase):
         api_text = file_text(API)
         self.assertNotEqual(request_problems(page, swapped(api_text, "| `POST /api/reboot` |", "| `POST /api/restart` |")), [])
         self.assertNotEqual(request_problems(page, swapped(api_text, "| `GET /api/ticket?id=N` |", "| `GET /api/ticket?n=N` |")), [])
+
+    def test_an_editor_that_calls_values_of_the_cerbo_unknown_is_found(self):
+        page = file_text(PAGE)
+        self.assertGreaterEqual(len(EDITOR_MUTATIONS), 6)
+        for what, mutation in EDITOR_MUTATIONS.items():
+            with self.subTest(broken=what):
+                self.assertNotEqual(editor_marks(swapped(page, *mutation)), [])
 
     def test_every_test_of_the_mock_is_broken_once(self):
         tests = {name for name in dir(Api) if name.startswith("test_")}

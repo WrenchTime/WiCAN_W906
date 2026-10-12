@@ -1,0 +1,11 @@
+kind: values
+ring: none
+title: Alternator
+note:
+item: B2B | aus |  | normal | state | -1
+item: Strom | 0,0 | A | normal | number | -1
+item: Spannung | 26,30 | V | normal | number | -1
+item: Platine | 20 | °C | normal | number | -1
+item: MOSFET 1 | 19 | °C | normal | number | -1
+item: MOSFET 2 | 19 | °C | normal | number | -1
+dots: 10/12

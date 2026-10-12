@@ -1,0 +1,11 @@
+{"format":"wican-display-layout","v":1,"name":"Camper","pages":[
+ {"title":"Fahrt","items":[
+  {"key":"ENGINE_RPM","label":"Drehzahl","unit":"1/min"},
+  {"key":"GX_BATT_SOC","label":"SOC","unit":"%","dec":1},
+  {"key":"@BATT_V","label":"Bordnetz","dec":1},
+  {"key":"GX_SW_B2B","label":"B2B","widget":"state","map":{"on":"an","off":"aus"}}]},
+ {"title":"Tank","items":[
+  {"key":"FUEL_L","label":"Tank","widget":"bar","min":0,"max":75}]},
+ {"title":"Strom","items":[
+  {"key":"GX_BATT_V","label":"Spannung","unit":"V","dec":2},
+  {"key":"GX_BATT_I","label":"Strom","unit":"A","dec":1}]}]}

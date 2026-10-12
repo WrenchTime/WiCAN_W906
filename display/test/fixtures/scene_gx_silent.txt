@@ -1,0 +1,6 @@
+kind: notice
+ring: red
+title:
+note:
+dots: 2/5
+line: Cerbo sendet keine Werte – Flow Display aktiv?
