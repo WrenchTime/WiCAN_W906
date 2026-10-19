@@ -360,9 +360,10 @@ class Broker:
                 self.selector.unregister(client.connection)
             except (KeyError, ValueError):
                 pass
-            client.connection.close()
+            # Said before the connection ends: whoever waits for the end reads it at once
             if why:
                 self.say("%s: %s after %.0f s, %d bundles" % (client.peer, why, self.clock() - client.since, client.sent))
+            client.connection.close()
 
     # -------------------------------------------------------------------------------- the flow
 

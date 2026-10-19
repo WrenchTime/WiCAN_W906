@@ -2204,7 +2204,7 @@ static void check_rows(const scene_t *scene, bool may_cut)
 
 // Whether a pixel shows `color` (0xRRGGBB): each of its channels the same share of that of the colour - within
 // what RGB565 and the edge of a shape make of it - and that share at least `least` of 255
-static bool shows(uint16_t pixel, uint32_t color, int least)
+static bool in_color(uint16_t pixel, uint32_t color, int least)
 {
 	int wanted[3] = {(int)(color >> 16 & 0xFF), (int)(color >> 8 & 0xFF), (int)(color & 0xFF)};
 	uint8_t got[3];
@@ -2256,7 +2256,7 @@ static void check_dots(const scene_t *scene)
 		// of 8 may cover none of its pixels whole, and is only asked to show the colour at half its strength
 		if(own != NULL && own->set)
 		{
-			if(!shows(thing->ink, own->rgb, filled ? 240 : 128))
+			if(!in_color(thing->ink, own->rgb, filled ? 240 : 128))
 			{
 				uint8_t got[3];
 
