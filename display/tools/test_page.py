@@ -390,6 +390,31 @@ def cerbo_problems(page, api_text):
     return found
 
 
+def typing_problems(page):
+    """What lets the poll of GET /api/info write over a field of the settings somebody is typing into. Seen on
+    2026-10-12: an address of the Cerbo half typed was emptied three seconds later, because another setting
+    had changed at the display and the form was filled in anew - all of it. The field that has the focus
+    when the poll calls is left as it is if it is one that is typed into (the address, the seconds: not a
+    switch and not a slider, which keep the focus long after they were used). The page remembers that a field
+    was left out (S.held), and the next poll fills the form again, whether the settings changed or not - so
+    the field follows the display once it was left. The answer to a setting made here fills in every field,
+    as before: that is what the display took."""
+    found = []
+    script = script_of(page)
+    code = code_of(script)[0]
+    if ("\n\tif(isObject(info.settings) && (S.held || JSON.stringify(info.settings) !== S.settings)) fillSettings(info.settings, document.activeElement);\n"
+            not in script):
+        found.append("the poll does not tell the form which field has the focus, or does not come back for a field that was left out")
+    if ("\nfunction fillSettings(settings, held)\n{\n\tS.held = !!held && SETTINGS.includes(held.id) && /text|number/.test(held.type);\n" not in script
+            or code.count("S.held = ") != 1):
+        found.append("the field in focus does not count as typed into exactly when it is a text or a number of the settings")
+    if "\n\tSETTINGS.forEach(name =>\n\t{\n\t\tif(S.held && $(name) === held) return;\n" not in script:
+        found.append("the field somebody types into is filled in all the same")
+    if "\n\tfillSettings(r && r.status === 200 ? r.body : JSON.parse(S.settings || \"{}\"));\n" not in script or code.count("fillSettings(") != 3:
+        found.append("the answer to a setting does not fill in every field, or the form is filled in from a third place")
+    return found
+
+
 def size_problems(data):
     return ["%d bytes, at most %d" % (len(data), SIZE_MAX - 1)] if len(data) >= SIZE_MAX else []
 
@@ -444,6 +469,9 @@ class Page(unittest.TestCase):
 
     def test_a_page_is_given_a_colour_and_loses_it(self):
         self.assertEqual(color_problems(self.page), [])
+
+    def test_a_field_somebody_types_into_is_not_written_over(self):
+        self.assertEqual(typing_problems(self.page), [])
 
     def test_size(self):
         # Of the page as it is: that is what lies in the flash, next to the compressed one, and what a
@@ -828,12 +856,17 @@ class Api(unittest.TestCase):
                                       ("FUEL", 62, 2000), ("INTAKE_TEMP", 19, 2000)]
         self.assertEqual(display.values_json(2100), fixture("app_web_values_cerbo.json"))
         self.assertEqual(display.values_json(4999), fixture("app_web_values_cerbo.json"))
-        # Each source with its own limits: those of the adapter are old after 3 s, those of the Cerbo after 5
+        # Each source with its own limits: those of the adapter are old after 3 s, those of the Cerbo after 10 -
+        # not after the 5300 ms the flow was heard to pause (2026-10-11); until 2026-10-12 they were old after 5 s
         self.assertEqual(display.values_json(5000), fixture("app_web_values_cerbo_fresh.json"))
-        self.assertEqual(display.values_json(7039), fixture("app_web_values_cerbo_fresh.json"))
-        self.assertIn("\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"old\"}", display.values_json(7040))
-        # ... gone after 10 s, and after 60. The Cerbo counts as delivering for 10 s behind its last bundle.
-        self.assertIn("{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"old\"},", display.values_json(12039))
+        self.assertEqual(display.values_json(7340), fixture("app_web_values_cerbo_fresh.json"))
+        self.assertEqual(display.values_json(11999), fixture("app_web_values_cerbo_fresh.json"))
+        # ... gone after 10 s, and after 60. The Cerbo counts as delivering for 10 s behind its last bundle, and
+        # for as long its values are fresh.
+        alone = "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"fresh\"},"
+        self.assertIn(alone, display.values_json(12000))
+        self.assertIn(alone, display.values_json(12039))
+        self.assertEqual(display.values_json(12039).count("\"age\":\"fresh\""), 6)
         self.assertEqual(display.values_json(12040), fixture("app_web_values_cerbo_alone.json"))
         self.assertEqual(display.values_json(19999), fixture("app_web_values_cerbo_alone.json"))
         self.assertEqual(display.values_json(62039).count("\"age\":\"old\""), 6)
@@ -1074,14 +1107,20 @@ class Api(unittest.TestCase):
 
         # Its flow falls silent: the values grow old, and the display says what it knows
         display.set_cerbo("silent")
-        self.clock.advance(4.999)
-        self.assertEqual(self.call("GET", "/api/values")[1].count("\"age\":\"fresh\""), 38 + 8)
+        # A pause as long as the flow of the owner was heard to make (5.3 s, 2026-10-11) makes no value old
+        self.clock.advance(5.3)
+        values = self.call("GET", "/api/values")[1]
+        self.assertEqual((values.count("\"age\":\"fresh\""), values.count("\"age\":\"old\"")), (38 + 8, 0))
+        self.assertIn("\"cerbo\":\"live\"", values)
+        self.clock.advance(4.699)
+        values = self.call("GET", "/api/values")[1]
+        self.assertEqual(values.count("\"age\":\"fresh\""), 38 + 8)
+        self.assertIn("\"cerbo\":\"live\"", values)
+        # The values are fresh for as long as the Cerbo counts as delivering, and not a millisecond longer
         self.clock.advance(0.001)
         values = self.call("GET", "/api/values")[1]
         self.assertEqual((values.count("\"age\":\"fresh\""), values.count("\"age\":\"old\"")), (38, 8))
-        self.assertIn("\"cerbo\":\"live\"", values)
-        self.clock.advance(5)
-        self.assertIn("\"cerbo\":\"quiet\"", self.call("GET", "/api/values")[1])
+        self.assertIn("\"cerbo\":\"quiet\"", values)
         self.clock.advance(9.999)
         self.assertIn("\"view\":\"quiet\",\"values\":8,\"ok\":6,", self.call("GET", "/api/info")[1])
         self.clock.advance(0.001)
@@ -1944,6 +1983,16 @@ PAGE_MUTATIONS = {
         "a colour that cannot be taken away": ("paint(own.checked && color.value)", "paint(color.value)"),
         "a picked colour that leaves the box empty": ("\t\town.checked = true;\n\t\tpaint(color.value);", "\t\tpaint(color.value);"),
     },
+    "typing_problems": {
+        "a poll that fills in every field": ("fillSettings(info.settings, document.activeElement);", "fillSettings(info.settings);"),
+        "the field in focus filled in all the same": ("\t\tif(S.held && $(name) === held) return;\n", ""),
+        "every field of the settings left out, the other ones too": ("if(S.held && $(name) === held) return;", "if(S.held) return;"),
+        "a switch that has the focus is left as it is": (" && /text|number/.test(held.type);", ";"),
+        "any field in focus counts, also one of another form": ("!!held && SETTINGS.includes(held.id) && /text", "!!held && /text"),
+        "a field that was left out is never filled in": ("(S.held || JSON.stringify(info.settings) !== S.settings)", "(JSON.stringify(info.settings) !== S.settings)"),
+        "a field counts as left out for ever": ("\tS.held = !!held && ", "\tS.held = S.held || !!held && "),
+        "the answer to a setting leaves the field as it was typed": ("JSON.parse(S.settings || \"{}\"));", "JSON.parse(S.settings || \"{}\"), document.activeElement);"),
+    },
     "size_problems": {
         "one byte too many": lambda page: page + " " * (SIZE_MAX - len(page.encode("utf-8"))),
     },
@@ -2556,8 +2605,9 @@ API_MUTATIONS = {
 API_MUTATIONS_MORE = {
     "test_refusals_in_the_documented_order": [WrongStage, HeatBeforeTheQuestion, HeatBeforeTheBusyDisplay],
     "test_cerbo_settings": [WritesAnEmptyAddress, ("ADDRESS", re.compile(r"[0-9.]*")), ("ADDRESS", re.compile(r"(?:[0-9]{1,3}\.){3}[0-9]{1,3}"))],
-    "test_cerbo_answers": [("CERBO_FRESH_MS", 4999), ("CERBO_FRESH_MS", 3000), ("CERBO_KEPT_MS", 10000), ("CERBO_LIVE_MS", 9940), CerboBehindTheLayout],
-    "test_cerbo_comes_and_goes": [("CERBO_FRESH_MS", 5001), ("CERBO_LIVE_MS", 10001), ("CERBO_SILENT_MS", 20001), ("CERBO_GRACE_MS", 15001),
+    "test_cerbo_answers": [("CERBO_FRESH_MS", 9999), ("CERBO_FRESH_MS", 5000), ("CERBO_FRESH_MS", 3000), ("CERBO_KEPT_MS", 10000), ("CERBO_LIVE_MS", 9940), CerboBehindTheLayout],
+    "test_cerbo_comes_and_goes": [("CERBO_FRESH_MS", 10001), ("CERBO_FRESH_MS", 5000), ("CERBO_LIVE_MS", 10001), ("CERBO_LIVE_MS", 9999), ("CERBO_SILENT_MS", 20001),
+                                  ("CERBO_GRACE_MS", 15001),
                                   ("CERBO_ADDRESS", "192.168.88.9"), KeepsTheValuesOfTheOldAddress, NamesTheCerboAlways],
     "test_cerbo_owns_its_prefix": [OwnsThePrefixOnlyWhereTheCerboHasTheKey, OwnsThePrefixWithoutAnAddress],
     "test_cerbo_catalog": [NamesTheKeysWithoutAnAddress, KeepsTheKeysOfTheOldAddress, KeepsTheKeysOverARestart, NamesTheKeysBeforeTheAdapter, KeysOfTheCerboNotDelivered,
@@ -2602,7 +2652,7 @@ def failures(name, mutation):
 class CounterCheck(unittest.TestCase):
     def test_every_check_of_the_page_is_broken_once(self):
         checks = {"request_problems", "construct_problems", "external_problems", "release_problems", "cerbo_problems", "color_problems",
-                  "size_problems", "compressed_problems"}
+                  "size_problems", "compressed_problems", "typing_problems"}
         self.assertEqual(set(PAGE_MUTATIONS), checks)
         self.assertEqual({name for name in globals() if name.endswith("_problems")}, checks)
 
@@ -2619,6 +2669,7 @@ class CounterCheck(unittest.TestCase):
                              "release_problems": lambda: release_problems(broken),
                              "cerbo_problems": lambda: cerbo_problems(broken, api_text),
                              "color_problems": lambda: color_problems(broken),
+                             "typing_problems": lambda: typing_problems(broken),
                              "size_problems": lambda: size_problems(broken.encode("utf-8")),
                              "compressed_problems": lambda: compressed_problems(broken.encode("utf-8"))}[check]()
                     self.assertNotEqual(found, [])

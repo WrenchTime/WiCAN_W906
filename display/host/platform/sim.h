@@ -51,6 +51,11 @@ static bool sim_check(bool ok, const char *what, const char *function, int line)
 // As an expression: true if the check passed, so that a stand-in can step around what would crash the PC
 #define CHECK(condition)    sim_check((condition), #condition, __func__, __LINE__)
 
+// NET_STACK_BYTES of main/net.c, the stack of the network task. net_sim.c checks that it is this number, and
+// gx_sim.c asks gx.c for a stack of at least as much: the task of the second source makes the same kinds of
+// calls, and how much of its stack it uses was not measured (gx_sim.c).
+#define SIM_NET_STACK_BYTES 6144
+
 #define NEED(condition) do { \
 		if(!(condition)) \
 		{ \

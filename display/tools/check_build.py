@@ -10,11 +10,16 @@ compile_commands.json CMake writes next to the build, and that is what is read h
 That the firmware holds no MQTT client. The display reads the broker of a Cerbo GX with a reader of its
 own that can build a CONNECT, a SUBSCRIBE and a PINGREQ and nothing else (components/core/mqtt_sub.h,
 main/gx.c): on that broker a published text switches relays, and what cannot be built cannot be sent.
-ESP-IDF v5.5.2 brings a client that can publish (components/mqtt, libmqtt.a). Its archive is on the
-command line of the linker in every build (tools/cmake/project.cmake links every component), so a source
-that declares one of its functions itself can call it without a line of a CMakeLists.txt changing. Whether
-one does is in the map the linker writes next to the firmware: it names every object it took from an
-archive, and it takes one only when something asks for it.
+ESP-IDF v5.5.2 brings a client that can publish (components/mqtt, libmqtt.a). The build system links a
+component only if another one requires it: while main/CMakeLists.txt does not name "mqtt", a source that
+calls the client does not link at all - undefined reference to esp_mqtt_client_init (so the counter-check of
+the CI failed for commit d456185 in the night to 2026-10-12; the message of commit b38ca10 tells it). That is
+the first guard. (This text said before that the archive is on the command line of the linker in every build,
+so that a declaration in a source would be enough. That was believed, not tried, and the CI showed the
+opposite.) The check of the map is the second guard, for the day somebody names the component, or brings a
+client under another name: the map the linker writes next to the firmware names every object it took from an
+archive, and it takes one only when something asks for it. What the check goes by is the name of the archive.
+A client whose archive does not bear the word, or whose sources were copied into main/, it does not see.
 
   python3 check_build.py --commands ../build/compile_commands.json
   python3 check_build.py --map ../build/wican-display.map
@@ -34,13 +39,18 @@ AT_LEAST = 100
 # An object the linker took from an archive, as its map names it wherever it speaks of one - in the list
 # "Archive member included to satisfy reference by file (symbol)", with the sections it placed, with those
 # it discarded: esp-idf/main/libmain.a(main.c.obj). A line "LOAD esp-idf/mqtt/libmqtt.a" names no object:
-# every archive of the build is on the command line of the linker, whether anything of it is taken or not.
+# an archive that is on the command line of the linker is loaded whether anything of it is taken or not.
 MEMBER = re.compile(r"([^\s()]+\.a)\(([^\s()]+)\)")
-# The client of ESP-IDF v5.5.2 is libmqtt.a; as a managed component it would be libespressif__mqtt.a
-MQTT_ARCHIVE = re.compile(r"lib\w*mqtt\w*\.a", re.I)
+# The client of ESP-IDF v5.5.2 is libmqtt.a; as a managed component it would be libespressif__mqtt.a. Other
+# clients, and that one under the name of its repository, have a hyphen or a dot in the name of their
+# archive: libesp-mqtt.a, libpaho-mqtt3c.a, libmqtt-c.a. Until 2026-10-12 the pattern took letters, digits
+# and the underscore only, and an object of each of these three passed as none of a client.
+MQTT_ARCHIVE = re.compile(r"lib[\w.-]*mqtt[\w.-]*\.a", re.I)
 # What every firmware of the display has: without it the text is not its map
 OWN_OBJECT = ("libmain.a", "main.c.obj")
-# The firmware is linked of well over a thousand objects. Fewer than this and the map is not that of a build.
+# The firmware is linked of 916 objects (the build of the CI for commit b38ca10, 2026-10-11 at 23:49 UTC: "no
+# object of an MQTT client among the 916 the firmware is linked of"). Fewer than this and the map is not that
+# of a build.
 MAP_AT_LEAST = 200
 
 

@@ -1233,7 +1233,7 @@ static void model_both(const values_t *wican, const char *view, const values_t *
 	at += (size_t)snprintf(expected + at, sizeof(expected) - at, "{\"view\":%s,", q(view));
 	at += (size_t)snprintf(expected + at, sizeof(expected) - at, "\"cerbo\":%s,\"values\":{", q(cerbo_view));
 	at = model_store(at, wican, now_ms, 3000, 10000, true, &first);
-	at = model_store(at, cerbo, now_ms, 5000, 60000, false, &first);
+	at = model_store(at, cerbo, now_ms, 10000, 60000, false, &first);
 	snprintf(expected + at, sizeof(expected) - at, "}}");
 }
 
@@ -1286,10 +1286,12 @@ static void test_values_cerbo(void)
 		{5000, "\"A\":{\"v\":1,\"age\":\"fresh\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen just now: both fresh"},
 		{7999, "\"A\":{\"v\":1,\"age\":\"fresh\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen 2999 ms ago: both fresh"},
 		{8000, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen 3000 ms ago: the value of the adapter is old, the one of the Cerbo fresh"},
-		{9999, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen 4999 ms ago: the value of the Cerbo is still fresh"},
-		{10000, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 5000 ms ago: the value of the Cerbo is old as well"},
-		{14999, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 9999 ms ago: both old"},
-		{15000, "\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 10000 ms ago: the value of the adapter is left out, the one of the Cerbo stays, without a comma in front"},
+		{10300, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}",
+		 "values with a Cerbo: seen 5300 ms ago: the value of the Cerbo is fresh - the longest pause of the flow that was measured (2026-10-11) makes no value old"},
+		{14999, "\"A\":{\"v\":1,\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}", "values with a Cerbo: seen 9999 ms ago: the value of the Cerbo is still fresh"},
+		{15000, "\"GX_A\":{\"v\":2,\"age\":\"old\"}",
+		 "values with a Cerbo: seen 10000 ms ago: the value of the adapter is left out, the one of the Cerbo is old and stays, without a comma in front"},
+		{35000, "\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 30 s ago: the value of the Cerbo is old"},
 		{64999, "\"GX_A\":{\"v\":2,\"age\":\"old\"}", "values with a Cerbo: seen 59999 ms ago: the value of the Cerbo is still there"},
 		{65000, "", "values with a Cerbo: seen 60000 ms ago: the value of the Cerbo is left out as well"},
 		{UINT64_MAX, "", "values with a Cerbo: seen the longest time ago: both left out"},
@@ -1307,8 +1309,9 @@ static void test_values_cerbo(void)
 	add_value("DPF_REGEN_STATUS", VALUE_ON, 0, 5000);
 	no_gx();
 	add_gx("GX_BATT_SOC", VALUE_NUMBER, 99.7, 10000);
-	add_gx("GX_SW_B2B", VALUE_ON, 0, 8500);
-	add_gx("GX_TANK_FRESH", VALUE_NUMBER, 77, 5000);
+	// Seen 9999 and 10000 ms ago: the last millisecond of fresh, and the first of old
+	add_gx("GX_SW_B2B", VALUE_ON, 0, 3000);
+	add_gx("GX_TANK_FRESH", VALUE_NUMBER, 77, 2999);
 	add_gx("GX_T_BOILER", VALUE_NUMBER, 61.1, 0);
 	both_now.values = &values;
 	both_now.view = "live";
@@ -1380,7 +1383,7 @@ static void test_values_cerbo(void)
 	      "values with a Cerbo: the first and the last value of the adapter bear the prefix, a number and a switch: the one between them is written, and one comma stands before the value of the Cerbo");
 	check(both_give("live", "live", 8000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"A\":{\"v\":\"on\",\"age\":\"old\"},\"GX_A\":{\"v\":2,\"age\":\"fresh\"}}}") &&
 	      both_give("live", "live", 15000, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_A\":{\"v\":2,\"age\":\"old\"}}}"),
-	      "values with a Cerbo: such a value of the adapter is left out fresh, old and gone alike: GX_A is the one of the Cerbo at every age, old after 5 s and not after 3");
+	      "values with a Cerbo: such a value of the adapter is left out fresh, old and gone alike: GX_A is the one of the Cerbo at every age, old after 10 s and not after 3");
 	no_values();
 	add_value("GX_A", VALUE_NUMBER, 1, 5000);
 	add_value("GX_B", VALUE_OFF, 0, 5000);

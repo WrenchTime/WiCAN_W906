@@ -63,7 +63,7 @@
 #define CERBO_SESSION_MS        15000u      // from the order to open to the SUBACK at most
 #define CERBO_RETRY_MS          {2000u, 5000u, 10000u, 30000u}  // waits after a failed attempt, as LINK_SCAN_WAITS_MS
 #define CERBO_GRACE_MS          15000u      // without a session for this long: "not reachable", before: "waiting"
-#define CERBO_FRESH_MS          5000u       // a value seen less than this ago is shown normally, ...
+#define CERBO_FRESH_MS          10000u      // a value seen less than this ago is shown normally, ...
 #define CERBO_KEPT_MS           60000u      // ... less than this ago dimmed, and then as a dash
 #define CERBO_LIVE_MS           10000u      // a bundle taken less than this ago: the source delivers
 #define CERBO_SILENT_MS         20000u      // a session that answers and brings no bundle for this long
@@ -114,7 +114,7 @@ typedef struct
 	uint8_t out[MQTT_SUB_OUT_MAX];  // the packet of the last CERBO_DO_SEND, or the one that waits
 	size_t out_length;
 	uint64_t open_ms;               // when CERBO_DO_OPEN was handed out
-	int wait_step;                  // index into CERBO_RETRY_MS of the wait behind the next connection that ends
+	int wait_step;                  // index into CERBO_RETRY_MS of the wait behind the next attempt that fails
 	uint32_t wait_ms;               // the wait before the next attempt, 0 = due at once, ...
 	uint64_t wait_since_ms;         // ... counted from here
 	uint64_t grace_since_ms;        // the network joined, the address set or the last session ended: the latest
@@ -136,7 +136,8 @@ typedef struct
 	bool newer;                     // a bundle with a version above CERBO_VERSION came, and none was taken since
 	bool has_boot;                  // boot, t_ms and lag_ms are those of the last bundle taken
 	uint32_t boot;
-	bool has_clock;                 // a bundle was taken on this connection: the next one of its boot is measured by it
+	bool has_clock;                 // a bundle was taken on this connection: the next one of its boot is measured by it,
+	                                // and the waits begin anew behind its session
 	int64_t t_ms;
 	uint32_t lag_ms;                // also for the info page: the lag of the last bundle taken
 	uint32_t yield_rest;            // thousandths of a millisecond the yield has not given way yet
@@ -212,8 +213,8 @@ void cerbo_opened(cerbo_t *cerbo, uint64_t now_ms);
  * CONNACK    while greeting, after CONNECT was handed out, with the return code 0: SUBSCRIBE waits to be sent.
  *            With another code: refused, the connection is closed.
  * SUBACK     while subscribing, after SUBSCRIBE was handed out, with CERBO_PACKET_ID and the return code 0: the
- *            session stands, and the waits start from the beginning. With another code - also 1 or 2, a QoS
- *            the display did not ask for and cannot acknowledge -: refused, closed.
+ *            session stands. With another code - also 1 or 2, a QoS the display did not ask for and cannot
+ *            acknowledge -: refused, closed.
  * PINGRESP   in a session, with a PINGREQ waiting for it: noted, with its time.
  * PUBLISH    after SUBSCRIBE was handed out, so also before the SUBACK (MQTT 3.1.1, 3.8.4 lets a broker do
  *            that): the rules below.
@@ -273,7 +274,8 @@ void cerbo_opened(cerbo_t *cerbo, uint64_t now_ms);
  * - else base = min(d, base + yielded), the lag is d - base. yielded: CERBO_YIELD_PER_MILLE thousandths of
  *   the time since the bundle before was taken, in whole milliseconds; what the division leaves is carried
  *   on to the next bundle (so a step of 990 ms does not yield nothing). An offset that stays is a clock that
- *   was set or runs fast, not a backlog, and has to wear off: 11 s are below CERBO_FRESH_MS after 61 s.
+ *   was set or runs fast, not a backlog, and has to wear off: 11 s are below CERBO_FRESH_MS after 11 s, and
+ *   45 s, the most that is believed, after 351 s.
  * - a lag above CERBO_LAG_MAX_MS is not believed: base = d, the lag is 0, counted in `distrusted`. On a
  *   session that lives nothing waits longer: a PINGRESP lies behind everything the broker piled up, and
  *   without it the session ends after CERBO_PING_MS + CERBO_PONG_MS.
@@ -286,7 +288,15 @@ void cerbo_bytes(cerbo_t *cerbo, const uint8_t *data, size_t length, uint64_t no
 
 // The caller lost the connection and closed the socket: connecting failed, sending failed, reading failed,
 // or the broker closed. Ignored without a connection. The next attempt follows after the next wait of
-// CERBO_RETRY_MS, counted from here: 2 s, 5 s, 10 s, then 30 s each time; after a session that stood, 2 s.
+// CERBO_RETRY_MS, counted from here: 2 s, 5 s, 10 s, then 30 s each time. The waits begin anew, with 2 s,
+// behind a session on whose connection a bundle was taken (one that came before the SUBACK counts), and
+// behind no other connection: a session that ends without a bundle is an attempt that failed. The same holds
+// for a connection that cerbo_next() orders closed.
+// A broker that takes the subscription and then breaks every session is so asked after 2, 5 and 10 s and then
+// every 30 s - 5 times in the first minute and 23 times in ten - and cerbo_view() says CONNECTING for
+// CERBO_GRACE_MS behind each of these sessions and UNREACHABLE for the rest of the wait: from 32 s on, for
+// 15 s of the first minute and 285 s of the first ten (test_cerbo.c reckons it). Before 2026-10-12 the waits
+// began anew with every SUBACK: 29 sessions in 60 s against such a broker, and never UNREACHABLE.
 // The values stay - they grow old.
 void cerbo_down(cerbo_t *cerbo, uint64_t now_ms);
 
@@ -313,6 +323,10 @@ bool cerbo_showing(const cerbo_t *cerbo, uint64_t now_ms);
 
 // As values_age(), with CERBO_FRESH_MS and CERBO_KEPT_MS. A time before seen_ms counts as no time passed.
 // value may be NULL (gone).
+// CERBO_FRESH_MS is CERBO_LIVE_MS: a value is shown normally for as long as the source counts as delivering.
+// The flow does not publish every second - gaps of up to 5.3 s in a fixed beat, about three ticks missing
+// every 20 s (measured at the broker of the Cerbo on 2026-10-11 and 2026-10-12, listening only) -, and with
+// the 5 s this limit had before every value would have been dimmed for a moment again and again.
 value_age_t cerbo_age(const value_t *value, uint64_t now_ms);
 
 // true if the key begins with CERBO_PREFIX: a value of this source, whatever the stores hold. NULL is none.

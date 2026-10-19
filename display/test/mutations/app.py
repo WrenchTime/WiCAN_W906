@@ -107,6 +107,10 @@ GX_APPEND = "\t\tlayout_append(&app->layout, &app->builtin_gx);\n"
 GX_APPEND_TEXT = "\t\t(void)layout_to_json(&app->layout, app->layout_text, sizeof(app->layout_text));\n"
 GX_READ = ("\tif(boot->builtin_gx != NULL && layout_parse(boot->builtin_gx, boot->builtin_gx_length, &app->builtin_gx, NULL, app->work, app->work_count))\n"
            "\t{\n\t\tapp->has_builtin_gx = true;\n\t}\n")
+GX_PAGE = "\tint gx_page = app->gx_appended && app->nav.page < app->layout.page_count ? app->nav.page - (app->layout.page_count - app->builtin_gx.page_count) : -1;\n"
+GX_STAYS = "\tif(source == app->source && gx_page >= 0 && app->gx_appended) app->nav.page = app->layout.page_count - app->builtin_gx.page_count + gx_page;\n"
+GX_NOTED_OFF = "\tapp->gx_appended = false;\n"
+GX_NOTED_ON = "\t\tapp->gx_appended = true;\n"
 GX_WORLD = "\tworld->home_set = true;\n\tworld->home = home_page(app, now);\n"
 GX_SCENE = "\tinput.cerbo = &app->cerbo;\n"
 
@@ -1022,6 +1026,19 @@ MUTATIONS += [
     ("app_gx_pages_read_whatever_the_text", T, F, GX_READ,
      "\tlayout_parse(boot->builtin_gx != NULL ? boot->builtin_gx : \"\", boot->builtin_gx_length, &app->builtin_gx, NULL, app->work, app->work_count);\n\tapp->has_builtin_gx = true;\n"),
     ("app_gx_pages_read_from_the_views_of_the_vehicle", T, F, GX_READ, GX_READ.replace("layout_parse(boot->builtin_gx, boot->builtin_gx_length,", "layout_parse(boot->builtin_layout, boot->builtin_length,")),
+    # The same views made anew: a page of the Cerbo that is shown stays that page. The first is the display before
+    # 2026-10-12, on which the number stayed and another page came under it.
+    ("app_gx_page_keeps_its_number_when_the_views_are_made_anew", T, F, GX_STAYS, GX_STAYS.replace("app->nav.page = app->layout.page_count - app->builtin_gx.page_count + gx_page;", "app->nav.page += 0;")),
+    ("app_gx_page_stays_also_in_other_views", T, F, GX_STAYS, GX_STAYS.replace("source == app->source && ", "")),
+    ("app_gx_last_page_of_the_vehicle_moves_with_those_of_the_cerbo", T, F, GX_STAYS, GX_STAYS.replace("gx_page >= 0", "gx_page >= -1")),
+    ("app_gx_first_page_of_the_cerbo_keeps_its_number", T, F, GX_STAYS, GX_STAYS.replace("gx_page >= 0", "gx_page > 0")),
+    ("app_gx_page_moves_where_no_pages_of_the_cerbo_are_left", T, F, GX_STAYS, GX_STAYS.replace(" && app->gx_appended", "")),
+    ("app_gx_page_put_one_behind_its_place", T, F, GX_STAYS, GX_STAYS.replace("+ gx_page;", "+ gx_page + (gx_page < 4);")),
+    ("app_gx_page_counted_from_the_first_page", T, F, GX_PAGE, GX_PAGE.replace("app->nav.page - (app->layout.page_count - app->builtin_gx.page_count)", "app->nav.page - app->layout.page_count + app->layout.page_count")),
+    ("app_gx_number_without_a_page_taken_for_a_page_of_the_cerbo", T, F, GX_PAGE, GX_PAGE.replace(" && app->nav.page < app->layout.page_count", "")),
+    ("app_gx_views_without_the_pages_taken_for_views_with_them", T, F, GX_PAGE, GX_PAGE.replace("app->gx_appended && ", "")),
+    ("app_gx_appended_pages_never_noted", T, F, GX_NOTED_ON, ""),
+    ("app_gx_appended_pages_never_forgotten", T, F, GX_NOTED_OFF, ""),
     ("app_gx_scene_without_the_source", T, F, GX_SCENE, ""),
     ("app_gx_standby_kept_off_by_the_cerbo", T, F, SHOWN_VIEW, "\tif(view == CONN_VIEW_LIVE || view == CONN_VIEW_SCAN || cerbo_showing(&app->cerbo, now)) return true;"),
     ("app_gx_display_goes_home_by_itself", T, F, TICK_NAV, TICK_NAV + "\n\tif(app->nav.screen == NAV_PAGES && world.home >= 0) app->nav.page = world.home;"),

@@ -56,7 +56,7 @@ Taken from the sources, read and written a second time here:
   - the second source, the Cerbo GX (cerbo.c, settings.c, web_json.c, app_web.c): the setting
     "cerbo" - empty or an IPv4 address in dotted form, written only while it is set -, the object
     "cerbo" in /api/info and the member "cerbo" and the values with GX_ in /api/values, each only
-    while an address is set, the values fresh under 5 s and left out from 60 s on. With an address
+    while an address is set, the values fresh under 10 s and left out from 60 s on. With an address
     the prefix GX_ is the Cerbo's: a value of the adapter that bears it is left out of /api/values,
     so that no key stands twice; and "values" of /api/info counts what /api/values names of the
     Cerbo - not a number without end, which has no text there. While it has an address the views the
@@ -195,7 +195,7 @@ VALUE_FRESH_MS = 3000
 VALUE_KEPT_MS = 10000
 # cerbo.h
 CERBO_PREFIX = "GX_"
-CERBO_FRESH_MS = 5000
+CERBO_FRESH_MS = 10000
 CERBO_KEPT_MS = 60000
 CERBO_LIVE_MS = 10000
 CERBO_SILENT_MS = 20000

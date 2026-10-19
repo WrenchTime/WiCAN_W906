@@ -168,4 +168,6 @@ MUTATIONS = [
     ("net_access_point_not_configured_before_the_start", S, F, AP_GIVEN, ""),
     ("net_starts_as_an_access_point", S, F, START_STA, ""),
     ("net_no_name_for_mdns", S, F, MDNS_NAME, "\t\terr = ESP_OK;\n"),
+    # the stack the task of the second source is measured by (sim.h, gx_sim.c): a change here has to be followed there
+    ("net_stack_that_the_other_simulation_does_not_know", S, F, "#define NET_STACK_BYTES     6144", "#define NET_STACK_BYTES     8192"),
 ]

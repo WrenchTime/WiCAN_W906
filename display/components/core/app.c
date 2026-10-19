@@ -367,6 +367,10 @@ void app_choose_layout(app_t *app)
 {
 	const catalog_t *catalog = &app->poll.catalog;
 	app_layout_source_t source = app->has_builtin && layout_suits(&app->builtin, catalog) ? APP_LAYOUT_BUILTIN : APP_LAYOUT_GENERATED;
+	// The page shown, counted from the first page of the second source in the views that go: negative if it is
+	// none of them. A number behind the last page is none either: the views lost that page, and nav.h is about to
+	// find another one.
+	int gx_page = app->gx_appended && app->nav.page < app->layout.page_count ? app->nav.page - (app->layout.page_count - app->builtin_gx.page_count) : -1;
 
 	if(source == APP_LAYOUT_BUILTIN)
 	{
@@ -382,9 +386,11 @@ void app_choose_layout(app_t *app)
 	}
 	// The pages of the second source behind those of the vehicle, while that source is on. The text is then
 	// the one of the whole: the browser gets the views in use, and no text of the two was read as one.
+	app->gx_appended = false;
 	if(app->has_builtin_gx && cerbo_on(&app->cerbo))
 	{
 		layout_append(&app->layout, &app->builtin_gx);
+		app->gx_appended = true;
 		// An empty text if it could not be written, as above; its length is counted below
 		(void)layout_to_json(&app->layout, app->layout_text, sizeof(app->layout_text));
 	}
@@ -393,6 +399,12 @@ void app_choose_layout(app_t *app)
 	// Other views: the page shown before means nothing in them. The same views made anew (the catalogue grew)
 	// must not throw the driver back to the first page.
 	if(source != app->source) app->nav.page = layout_first_page(&app->layout, catalog);
+	// Nor may they put another page under his eyes. A page of the vehicle keeps its number: views made from a
+	// catalogue that grew are the pages of before and more behind them. The pages of the second source stand
+	// behind those, so they move with every page that comes or goes - a page of them that is shown stays that
+	// page, at its new number. (Until 2026-10-12 the number stayed: "Batterie" became "Werte 4" without an
+	// input.) The built-in views of the vehicle have the same pages every time: nothing moves there.
+	if(source == app->source && gx_page >= 0 && app->gx_appended) app->nav.page = app->layout.page_count - app->builtin_gx.page_count + gx_page;
 	app->source = source;
 }
 

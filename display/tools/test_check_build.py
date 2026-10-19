@@ -2,6 +2,8 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -25,7 +27,9 @@ def command(source, *options):
 def linker_map(count=300, taken=(), discarded=(), own=True):
     """The map of a build as GNU ld writes it, in the parts check_build.py reads: `count` objects of the
     archives of ESP-IDF and of the display, those of `taken` among them, and those of `discarded` with
-    sections that were thrown away. Every archive of the build is loaded, the MQTT client of ESP-IDF too."""
+    sections that were thrown away. The archive of the MQTT client of ESP-IDF is loaded, as in a build whose
+    main/ names the component among its requirements: without that it is not on the command line of the
+    linker at all (the build of the CI on 2026-10-12)."""
     placed = ["esp-idf/core/libcore.a(mqtt_sub.c.obj)", "esp-idf/core/libcore.a(cerbo.c.obj)", "esp-idf/main/libmain.a(gx.c.obj)"]
     placed += ["esp-idf/lwip/liblwip.a(file_%d.c.obj)" % number for number in range(count - len(placed) - (1 if own else 0))]
     if own:
@@ -134,8 +138,8 @@ class CheckBuild(unittest.TestCase):
 
 class CheckMap(unittest.TestCase):
     def test_a_firmware_without_a_client_is_fine(self):
-        # The archive of the client is loaded in every build, and the display has its own reader of MQTT:
-        # neither is an object of a client
+        # The archive of the client is loaded where a component requires it, and the display has its own
+        # reader of MQTT: neither is an object of a client
         text = linker_map()
         self.assertIn("LOAD esp-idf/mqtt/libmqtt.a\n", text)
         self.assertIn("libcore.a(mqtt_sub.c.obj)", text)
@@ -167,6 +171,21 @@ class CheckMap(unittest.TestCase):
             found = check_build.map_problems(linker_map(taken=(member,)))
             self.assertEqual(len(found), 1, member)
             self.assertIn("1 objects of an MQTT client", found[0])
+
+    def test_a_hyphen_or_a_dot_in_the_name_of_the_archive_hides_no_client(self):
+        # The client of ESP-IDF cloned into components/ under the name of its repository, Paho, MQTT-C: each of
+        # these passed with OK until 2026-10-12, when the pattern knew letters, digits and the underscore only
+        for member in ("esp-idf/esp-mqtt/libesp-mqtt.a(mqtt_client.c.obj)", "esp-idf/paho/libpaho-mqtt3c.a(MQTTClient.c.obj)",
+                       "esp-idf/mqtt-c/libmqtt-c.a(mqtt.c.obj)", "esp-idf/paho/libpaho.mqtt.embedded-c.a(MQTTPacket.c.obj)",
+                       "esp-idf/x/libx-MQTT.v5.a(client.c.obj)", "esp-idf/x/lib-mqtt-.a(client.c.obj)"):
+            found = check_build.map_problems(linker_map(taken=(member,)))
+            self.assertEqual(len(found), 1, member)
+            self.assertIn("1 objects of an MQTT client", found[0])
+            self.assertIn(member.replace("\\", "/").rsplit("/", 1)[-1], found[0])
+        # ... and an archive without the word is none for a hyphen or a dot in its name
+        for member in ("esp-idf/esp-tls/libesp-tls.a(esp_tls.c.obj)", "esp-idf/x/libm.q.t.t.a(file.c.obj)", "esp-idf/x/libmq-tt.a(file.c.obj)",
+                       "esp-idf/mqtt-notes/libnotes.a(mqtt-client.c.obj)"):
+            self.assertEqual(check_build.map_problems(linker_map(taken=(member,))), [], member)
 
     def test_only_the_archive_tells_whose_object_it_is(self):
         # A source of the display may bear the word in its name, and a directory may: no client
@@ -206,6 +225,85 @@ class CheckMap(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stopped:
                 check_build.main([])
             self.assertEqual(stopped.exception.code, 2)
+
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+WORKFLOW = os.path.join(HERE, "..", "..", ".github", "workflows", "display.yml")
+
+
+def step_script(name):
+    """The lines of `run: |` of the step with this name in the workflow of the CI, as the runner hands them to
+    its shell"""
+    with open(WORKFLOW, encoding="utf-8") as handle:
+        lines = handle.read().split("\n")
+    at = lines.index("      - name: " + name)
+    if lines[at + 1] != "        run: |":
+        raise ValueError("the step %s has no script" % name)
+    script = []
+    for line in lines[at + 2:]:
+        if line.strip() and not line.startswith("          "):
+            break
+        script.append(line[10:])
+    return "\n".join(script) + "\n"
+
+
+@unittest.skipUnless(shutil.which("bash") and os.path.exists(WORKFLOW), "needs bash and the workflow of the CI")
+class CounterCheckSteps(unittest.TestCase):
+    """The two steps of .github/workflows/display.yml that break the build on purpose and wait for the check
+    to say so. Each has to pass on the one line it waits for and on nothing else: until 2026-10-12 both took
+    any status but 0 for the report, so a map that was not there made the counter-check green."""
+
+    def run_step(self, name, files):
+        """The status of the step in a checkout that has check_build.py and these files of a build"""
+        with tempfile.TemporaryDirectory() as directory:
+            os.makedirs(os.path.join(directory, "display", "tools"))
+            os.makedirs(os.path.join(directory, "display", "build"))
+            shutil.copy(os.path.join(HERE, "check_build.py"), os.path.join(directory, "display", "tools"))
+            for file, text in files.items():
+                with open(os.path.join(directory, "display", "build", file), "w", encoding="utf-8") as handle:
+                    handle.write(text)
+            # As the runner calls it (the default shell of a step on Linux)
+            run = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-c", step_script(name)], cwd=directory, capture_output=True,
+                                 encoding="utf-8", errors="replace")
+            return run.returncode, run.stdout + run.stderr
+
+    def test_the_client_is_reported(self):
+        name = "Counter-check, the client is reported"
+        more = ("esp-idf/mqtt/libmqtt.a(mqtt_msg.c.obj)", "esp-idf/mqtt/libmqtt.a(mqtt_outbox.c.obj)", "esp-idf/mqtt/libmqtt.a(platform_esp32.c.obj)")
+        status, said = self.run_step(name, {"wican-display.map": linker_map(count=916, taken=(CLIENT,) + more)})
+        self.assertEqual(status, 0, said)
+        self.assertIn("PROBLEM: 4 objects of an MQTT client are linked into the firmware, the first: libmqtt.a(mqtt_client.c.obj)", said)
+        # What is no such report: no map, a map without the client, a map that is none, the client of another name
+        for what, files in (("no map", {}), ("no client", {"wican-display.map": linker_map(count=916)}),
+                            ("an empty map", {"wican-display.map": ""}),
+                            ("a map cut short", {"wican-display.map": linker_map(count=50, taken=(CLIENT,))}),
+                            ("another archive", {"wican-display.map": linker_map(taken=("esp-idf/main/libmain.a(mqtt_client.c.obj)",))})):
+            status, said = self.run_step(name, files)
+            self.assertNotEqual(status, 0, what + ": " + said)
+
+    def test_the_absence_of_the_definition_is_reported(self):
+        name = "Counter-check, its absence is reported"
+        status, said = self.run_step(name, {"compile_commands.json": json.dumps(build(count=463, options=()))})
+        self.assertEqual(status, 0, said)
+        self.assertIn("PROBLEM: 463 of 463 sources of LVGL are not compiled with -DLV_ASSERT_HANDLER=if((abort(),0)){}", said)
+        one = build(count=120)
+        one[7] = command(LVGL + "draw/lv_draw_other.c")
+        most = build(count=120, options=())
+        for number in range(10):
+            most[number] = command("%score/lv_file_%d.c" % (LVGL, number), QUOTED[0])
+        for what, files in (("no commands", {}), ("the definition is there", {"compile_commands.json": json.dumps(build(count=463))}),
+                            ("no JSON", {"compile_commands.json": "not the commands of a build"}),
+                            ("too few sources", {"compile_commands.json": json.dumps(build(count=50, options=()))}),
+                            ("one source without it", {"compile_commands.json": json.dumps(one)}),
+                            ("ten sources still with it", {"compile_commands.json": json.dumps(most)})):
+            status, said = self.run_step(name, files)
+            self.assertNotEqual(status, 0, what + ": " + said)
+
+    def test_the_steps_are_the_ones_of_the_workflow(self):
+        # Both scripts run the check itself, on the files the build writes
+        self.assertIn("python3 display/tools/check_build.py --map display/build/wican-display.map", step_script("Counter-check, the client is reported"))
+        self.assertIn("python3 display/tools/check_build.py --commands display/build/compile_commands.json",
+                      step_script("Counter-check, its absence is reported"))
 
 
 if __name__ == "__main__":

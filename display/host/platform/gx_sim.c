@@ -200,7 +200,11 @@ void *heap_caps_malloc(size_t size, uint32_t caps)
 		return NULL;
 	}
 	rooms++;
-	return sim_alloc(size);
+	// The room is the whole of gx_room_t: sizeof of the struct, not of the pointer to it. What is handed out is
+	// never less than the struct, so that a room that was asked too small is this failed check and not a write
+	// behind 8 bytes, which only stops the simulation without naming a rule.
+	CHECK(size == sizeof(gx_room_t));
+	return sim_alloc(size > sizeof(gx_room_t) ? size : sizeof(gx_room_t));
 }
 
 /* FreeRTOS */
@@ -225,9 +229,13 @@ BaseType_t xTaskCreatePinnedToCore(TaskFunction_t code, const char *const name, 
                                    UBaseType_t priority, TaskHandle_t *const created, const BaseType_t core)
 {
 	(void)name;
-	(void)stack;
 	(void)arg;
 	(void)created;
+	// At least the stack of the network task, which makes the same kinds of calls (sim.h; net_sim.c checks the
+	// number). What this task needs was not measured: a stack that is too small is a crash on the board, and no
+	// simulation sees it. With the 6144 bytes it ran on the device for three hours (read 2026-10-12: one session,
+	// 9284 bundles in 11160 s, none refused) - enough for that, and nothing was read of how much less would be.
+	CHECK(stack >= SIM_NET_STACK_BYTES);
 	// Its room first: the task uses it from its first round on
 	if(!CHECK(room != NULL))
 	{
@@ -1132,7 +1140,7 @@ static void test_broker_closes(void)
 	run(300);
 	// Closed once and reported once
 	CHECK(net.closed == 1 && downs == 1 && net.fd < 0 && platform_app->cerbo.phase == CERBO_IDLE);
-	// After a session that stood the next attempt follows after two seconds, not before
+	// After a session that brought bundles the next attempt follows after two seconds, not before
 	run(1500);
 	CHECK(net.made == made);
 	run(1000);
@@ -1175,6 +1183,13 @@ static void test_read_fails(void)
 static void test_attempt_fails(void)
 {
 	int made, closed, reported, opened, connects, fcntls, asked;
+	uint32_t bundles = platform_app->cerbo.bundles;
+
+	// The session that stands is half a second old and has brought no bundle: if it ended now it would be an
+	// attempt that failed itself, and the wait behind it the second one, 5 s (cerbo.h, since 2026-10-12). The
+	// flow publishes a second after the SUBSCRIBE.
+	run(1000);
+	CHECK(in_session() && platform_app->cerbo.bundles > bundles);
 
 	// The broker is gone and refuses: after two seconds the first attempt, then after 5, 10 and 30
 	net.peer_closed = true;

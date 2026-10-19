@@ -22,6 +22,7 @@
  */
 #include <inttypes.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -161,6 +162,12 @@ int main(int argc, char **argv)
 		fprintf(stderr, "usage: gx_live <IPv4 address of the broker> [seconds, 60 if not given]\n");
 		return 2;
 	}
+
+	// A send() on a connection the broker has reset raises SIGPIPE on a PC, and that ended this program at once,
+	// with status 141 and without its summary (seen 2026-10-12 against a broker that reset behind its CONNACK:
+	// the SUBSCRIBE met the socket). Ignored, the send() fails with EPIPE and gx.c ends the connection as it
+	// does on the board, which has no signals: a broker that restarts ends a session, not the listening.
+	signal(SIGPIPE, SIG_IGN);
 
 	clock_gettime(CLOCK_MONOTONIC, &began);
 	platform_app = calloc(1, sizeof(*platform_app));

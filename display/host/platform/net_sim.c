@@ -339,10 +339,11 @@ BaseType_t xTaskCreate(TaskFunction_t code, const char *const name, const uint32
                        UBaseType_t priority, TaskHandle_t *const created)
 {
 	(void)name;
-	(void)stack;
 	(void)arg;
 	(void)priority;
 	(void)created;
+	// The number gx_sim.c measures the stack of the task of the second source by (sim.h)
+	CHECK(stack == SIM_NET_STACK_BYTES);
 	the_task = code;
 	return pdPASS;
 }

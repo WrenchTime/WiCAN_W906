@@ -134,6 +134,9 @@ MUTATIONS = [
     ("gx_task_without_its_room", S, F, NO_ROOM, ""),
     ("gx_no_task_taken_for_one", S, F, NO_TASK, "!= pdPASS)\n\t{\n\t}\n\trunning = true;"),
     ("gx_room_in_the_internal_ram", S, F, "MALLOC_CAP_SPIRAM", "MALLOC_CAP_INTERNAL"),
+    ("gx_room_of_the_size_of_a_pointer", S, F, "heap_caps_malloc(sizeof(*room), ", "heap_caps_malloc(sizeof(room), "),
+    ("gx_stack_of_a_kilobyte", S, F, "#define GX_STACK_BYTES      6144", "#define GX_STACK_BYTES      1024"),
+    ("gx_stack_of_the_design", S, F, "#define GX_STACK_BYTES      6144", "#define GX_STACK_BYTES      4096"),
     ("gx_on_the_core_of_the_panel", S, F, "#define GX_CORE             0 ", "#define GX_CORE             1 "),
     ("gx_at_the_priority_of_the_network_task", S, F, "#define GX_PRIORITY         4 ", "#define GX_PRIORITY         5 "),
 ]

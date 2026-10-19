@@ -34,6 +34,8 @@
  * v5.5.2 and of its lwIP (espressif/esp-lwip at fd432e4e), 2026-10-11. What only the board can decide is
  * marked CHECK. The file is run on a PC as it is: against stand-ins that play a broker
  * (display/host/platform/gx_sim.c) and against the sockets of the PC (display/host/gx_live).
+ * On the board it has run since 2026-10-12 (commit cf30cfe, against the broker of the Cerbo): what one GET
+ * /api/info read of it that day stands with the memory below. That reading answers none of the CHECKs.
  *
  * Where the calls come from in ESP-IDF v5.5.2:
  *   socket() connect() send() recv() getsockopt() inet_pton()
@@ -68,7 +70,9 @@
  * - send() on such a socket never waits: it takes what the send buffer has room for and returns that
  *   number, or -1 with EWOULDBLOCK if there is no room at all (lwip_netconn_do_writemore()). The packets of
  *   the core have 2 to MQTT_SUB_OUT_MAX bytes, the buffer has 11520 (sdkconfig.defaults).
- * A PC does the same in all of this, but for the numbers: a refusal is ECONNREFUSED there.
+ * A PC does the same in all of this, but for the numbers - a refusal is ECONNREFUSED there - and for one
+ * thing the board does not have: a send() on a connection the peer has reset raises the signal SIGPIPE there,
+ * which ends a program that does not ignore it. display/host/gx_live ignores it; then the send() fails, as here.
  * ESP-IDF connects this way itself: esp_tls.c (esp_tls_set_socket_non_blocking(), tcp_connect()) makes the
  * same calls in the same order, with the same headers.
  * CHECK: the log never says "the socket would block". That would be fcntl() refusing the flag, which lwIP
@@ -109,6 +113,10 @@
  * has confirmed it, up to CONFIG_LWIP_TCP_SND_BUF_DEFAULT (11520 bytes) for each connection. The display went
  * on as before: what malloc() does not find in the internal RAM it takes from the external, and the reserve
  * of 32 KB is not part of these numbers.
+ * Read WITH this source on the device (2026-10-12 at 11:17, commit cf30cfe, one GET /api/info): the view live,
+ * 41 values, 9284 bundles taken in 11160 s, none refused, one session, lag 0 ms; heap_malloc 64 KB,
+ * heap_malloc_min 33 KB, heap_block 53 KB. One reading, and none of the loads below: who had asked the web
+ * server before it is not known, so the 33 KB cannot be held against the 50 KB above.
  * So the low mark alone says nothing about this source. CHECK, with the source running - the numbers to stop
  * at, each against the same load WITHOUT the source:
  *   while nobody asks the web server (an hour of rest in the vehicle, a read of the fault memory, a pause of
@@ -118,7 +126,8 @@
  *   a firmware upload goes through.
  * If one of them is missed: first the stack, by its measured low mark; this source has no buffer in the
  * internal RAM. The 14 KB were set when the window was 5760 bytes; with 11520 a backlog that arrives at once
- * can take 6 KB more for the moment it takes to read it (CERBO_READ_MAX bytes every CERBO_TURN_MS).
+ * can take 6 KB more for the moment it takes to read it (CERBO_READ_MAX bytes every 30 ms, see gx_wait(): a
+ * full window in 0.36 s).
  * If the task cannot be created because the web server holds the internal RAM at that moment, net.c says so
  * and tries again with every round.
  */
@@ -305,9 +314,19 @@ static void gx_wait(void)
 		platform_lock();
 		cerbo_bytes(&platform_app->cerbo, room->in, (size_t)received, now, room->work, CERBO_TOKENS);
 		platform_unlock();
-		// CERBO_TURN_MS between two reads: a broker cannot make the display read more than CERBO_READ_MAX
-		// bytes in that time (51 KB a second), and the lock is free for the screen task in between. One tick
-		// more than that: a wait of FreeRTOS ends with a tick, and the first one may be a moment away.
+		// CERBO_TURN_MS between two reads at least: a broker cannot make the display read more than
+		// CERBO_READ_MAX bytes in that time, and the lock is free for the screen task in between. One tick
+		// more than that: a wait of FreeRTOS ends with a tick, and the first one may be a moment away (without
+		// it two reads can be 12 ms apart).
+		// What the pace is: with the tick of 10 ms of this firmware (CONFIG_FREERTOS_HZ=100) these are 3 ticks,
+		// and once the task runs in step with the tick a round behind a read lasts exactly that - 1024 bytes
+		// every 30 ms, 34 KB a second, not the 51 KB a second that 20 ms would be. A backlog of a full window
+		// (11520 bytes) takes 0.36 s to read, and a megabyte takes 30 s: longer than a PINGREQ may wait for its
+		// answer, so a message of that size ends the session (cerbo.h) and is never counted. From about 34
+		// bundles of 1 KB a second on the display falls behind. Reckoned, and seen on a PC (2026-10-12, gx_live
+		// against mock_flow.py --fault flood: the smallest gap between two bundles was 30 ms); not measured on
+		// the board, where the flow of the owner comes nowhere near it (read there 2026-10-12: 9284 bundles in
+		// 11160 s, lag 0 ms).
 		vTaskDelay(pdMS_TO_TICKS(CERBO_TURN_MS) + 1);
 	}
 	else if(received == 0)

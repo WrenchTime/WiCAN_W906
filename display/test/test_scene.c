@@ -5543,10 +5543,13 @@ static void test_cerbo_screens(void)
 		screen(VIEWS[v].view == CONN_VIEW_SCAN ? "gx_fresh_scan" : "gx_fresh", rule);
 	}
 
+	// The flow of the owner does not publish every second: gaps of up to 5.3 s in a fixed beat (measured
+	// 2026-10-11 and 2026-10-12). Until 2026-10-12 a value was dimmed from 5 s on, under a yellow ring.
 	gx_stage(1);
 	gx_live(7000);
 	expect_gx(CERBO_VIEW_LIVE);
-	screen("gx_old", "the bundle is 7 s old: the values stand dimmed under a yellow ring - the Cerbo still counts as delivering, so no note");
+	screen("gx_fresh", "the bundle is 7 s old: the values stand as they are, no ring and no note - a value is fresh for as long as the Cerbo counts as delivering, and a flow that pauses "
+	                   "for 5.3 s dims nothing");
 	gx_stage(1);
 	gx_live(12000);
 	expect_gx(CERBO_VIEW_QUIET);
@@ -5577,10 +5580,10 @@ static void test_cerbo_screens(void)
 	gx_stage(1);
 	gx_session(90000);
 	gx_bundle(gx_members, 20000, 20000);
-	gx_bundle(gx_members, 7000, 1000);
+	gx_bundle(gx_members, 12000, 1000);
 	expect_gx(CERBO_VIEW_LIVE);
-	check(gx.lag_ms == 4100, "a bundle published 13 s after the one before arrives 19 s after it: 4100 ms of lag when the base gave way by a tenth of the time");
-	screen("gx_lagging", "that bundle arrived a second ago and is shown as 5.1 s old: dimmed under a yellow ring - never newer than it is");
+	check(gx.lag_ms == 9100, "a bundle published 8 s after the one before arrives 19 s after it: 9100 ms of lag when the base gave way by a tenth of the time");
+	screen("gx_lagging", "that bundle arrived a second ago and is shown as 10.1 s old: dimmed under a yellow ring while the Cerbo counts as delivering, so no note - never newer than it is");
 
 	// The Cerbo has nothing to show
 	gx_stage(1);
@@ -5609,10 +5612,10 @@ static void test_cerbo_screens(void)
 	expect_gx(CERBO_VIEW_NEWER);
 	screen("gx_newer", "a bundle of a newer contract and none that could be read: the notice says that the flow is newer than the display, red");
 	gx_stage(1);
-	gx_live(6000);
+	gx_live(12000);
 	gx_message("{\"v\":2,\"boot\":7,\"t\":1,\"values\":{\"GX_BATT_SOC\":1}}", 500);
 	expect_gx(CERBO_VIEW_NEWER);
-	screen("gx_newer_values", "the same behind a bundle that was read 6 s ago: its values stand dimmed, and the note says what is wrong");
+	screen("gx_newer_values", "the same behind a bundle that was read 12 s ago: its values stand dimmed, and the note says what is wrong");
 	gx_stage(1);
 	gx_off();
 	screen("gx_off", "no address is set: the page says that the Cerbo is not set up, grey - nothing is wrong");
@@ -5648,8 +5651,10 @@ static void test_cerbo_screens(void)
 	screen("gx_water_alarm", "97 percent of grey water as well, beyond its crit limit of 95: that value in the alarm tone, the ring red");
 	gx_stage(2);
 	gx_session(90000);
-	gx_bundle(water("15", "97"), 7000, 7000);
-	screen("gx_water_old_alarm", "the same bundle 7 s old: every value dimmed, and the ring stays red - a value that is shown counts with its level");
+	gx_bundle(water("15", "97"), 12000, 12000);
+	expect_gx(CERBO_VIEW_QUIET);
+	screen("gx_water_old_alarm", "the same bundle 12 s old: every value dimmed, the note that the display waits for the Cerbo, and the ring stays red - a value that is shown counts with "
+	                             "its level");
 
 	// A page of both sources
 	gx_stage(3);
@@ -5732,10 +5737,10 @@ static void test_cerbo_rules(void)
 		const char *rule;
 	} ages[] = {
 		{0, SCENE_TONE_NORMAL, RING_NONE, true, "a value of the Cerbo seen this very millisecond is fresh"},
-		{4999, SCENE_TONE_NORMAL, RING_NONE, true, "one seen 4999 ms ago is fresh: the Cerbo has 5 s where the adapter has 3"},
-		{5000, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 5000 ms ago is old: dimmed, the ring yellow"},
-		{9999, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 9999 ms ago is old"},
-		{10000, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 10 s ago is still shown, dimmed: the Cerbo has a minute where the adapter has 10 s"},
+		{5300, SCENE_TONE_NORMAL, RING_NONE, true, "one seen 5.3 s ago is fresh: the longest pause of the flow that was measured dims nothing"},
+		{9999, SCENE_TONE_NORMAL, RING_NONE, true, "one seen 9999 ms ago is fresh: the Cerbo has 10 s where the adapter has 3"},
+		{10000, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 10000 ms ago is old: dimmed, the ring yellow - and still shown: the Cerbo has a minute where the adapter has 10 s"},
+		{30000, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 30 s ago is old"},
 		{59999, SCENE_TONE_DIM, RING_YELLOW, true, "one seen 59999 ms ago is still shown, dimmed"},
 		{60000, SCENE_TONE_DIM, RING_RED, false, "one seen 60 s ago is gone: the page has nothing left to show"},
 	};
@@ -5744,7 +5749,7 @@ static void test_cerbo_rules(void)
 	bool good;
 	int count;
 
-	check(CERBO_FRESH_MS == 5000 && CERBO_KEPT_MS == 60000 && VALUE_FRESH_MS == 3000 && VALUE_KEPT_MS == 10000, "the ages of the two sources: fresh for 5 s and kept for 60 with the Cerbo, 3 and 10 with the adapter");
+	check(CERBO_FRESH_MS == 10000 && CERBO_KEPT_MS == 60000 && VALUE_FRESH_MS == 3000 && VALUE_KEPT_MS == 10000, "the ages of the two sources: fresh for 10 s and kept for 60 with the Cerbo, 3 and 10 with the adapter");
 	for(int i = 0; i < COUNT(ages); i++)
 	{
 		stage();
@@ -6375,7 +6380,7 @@ static const char *model_cerbo_page(int *shown_values, int *missed_values)
 			{
 				uint64_t age_ms = input.now_ms > value->seen_ms ? input.now_ms - value->seen_ms : 0;
 
-				fresh = age_ms < 5000;
+				fresh = age_ms < 10000;
 				there = age_ms < 60000 && layout_item_text(item, value, text, sizeof(text));
 				missed = !there;
 			}

@@ -1,7 +1,7 @@
 kind: values
 ring: red
 title: Wasser
-note:
+note: Warte auf Cerbo …
 item: Frischwasser | 15 | % | dim | bar | 150
 item: Grauwasser | 97 | % | dim | bar | 970
 item: Boiler | 45 | °C | dim | number | -1

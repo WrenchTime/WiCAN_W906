@@ -59,6 +59,10 @@ static void at_once(cerbo_t *cerbo)
 // The connection is gone, by a report of the caller or by an order to close it
 static void ended(cerbo_t *cerbo)
 {
+	// The waits begin anew behind a session that brought a bundle. One that ends without any counts as an
+	// attempt that failed: a broker that takes the subscription and then breaks the session was asked again
+	// every 2 s for ever (29 sessions in 60 s, seen 2026-10-12 with mock_flow.py --fault garbage).
+	if(cerbo->phase == CERBO_SESSION && cerbo->has_clock) cerbo->wait_step = 0;
 	// "Waiting" begins anew behind a session, not behind an attempt that made none
 	if(cerbo->phase == CERBO_SESSION) cerbo->grace_since_ms = cerbo->clock_ms;
 	cerbo->phase = CERBO_IDLE;
@@ -227,7 +231,6 @@ static void suback(cerbo_t *cerbo, const mqtt_sub_packet_t *packet)
 	}
 	cerbo->phase = CERBO_SESSION;
 	cerbo->sessions++;
-	cerbo->wait_step = 0;
 	cerbo->ping_ms = cerbo->clock_ms;
 	cerbo->pings_open = 0;
 	cerbo->quiet_since_ms = cerbo->clock_ms;

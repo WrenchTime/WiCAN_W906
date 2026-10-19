@@ -279,6 +279,10 @@ typedef struct
  *                              unit = the unit of the item if it has one, else empty - no catalogue is asked;
  *                              empty for a state widget and when the text is no value. The rule of the view
  *                              SCAN does not count for it: the Cerbo delivers through a scan of the adapter.
+ *                              CERBO_FRESH_MS is CERBO_LIVE_MS: the values of a bundle that came in time are
+ *                              dimmed in the millisecond the note of the Cerbo below appears, not before - a
+ *                              flow that pauses for some seconds dims nothing. Dimmed values without that
+ *                              note are those of a bundle that came late (its lag, cerbo.h).
  *     level and old, for the ring: as above. A value of the Cerbo is old if it is shown dimmed, or is a dash
  *     while the store of the Cerbo still holds it (gone by its age, or without a text). A key the last bundle
  *     did not name is not in that store: the Cerbo does not have the value, nothing went missing, and it does

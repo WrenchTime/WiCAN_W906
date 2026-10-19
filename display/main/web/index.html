@@ -261,6 +261,7 @@ const S = {
 	file: null, // the firmware the page may send, and its version
 	version: "",
 	settings: "", // of the display, as last put into the form
+	held: false, // ... but for the field somebody was typing into
 	wifi: {}
 };
 
@@ -1451,15 +1452,19 @@ function device()
 	$("cerbonow").hidden = !isObject(cerbo);
 	if(isObject(cerbo)) $("cerbonow").textContent = "Cerbo " + text(cerbo.host) + ": " + word(CERBO, cerbo.view) + " · Werte: " + text(cerbo.values) + " · Bündel: " + text(cerbo.ok) + " gelesen, " + text(cerbo.refused) + " verworfen · Verbindungen: " + text(cerbo.connects) + " · Verzug: " + text(cerbo.lag_ms) + " ms";
 	// The form follows the display when the settings changed there, not while somebody is setting them here
-	if(isObject(info.settings) && JSON.stringify(info.settings) !== S.settings) fillSettings(info.settings);
+	if(isObject(info.settings) && (S.held || JSON.stringify(info.settings) !== S.settings)) fillSettings(info.settings, document.activeElement);
 	uploadGate();
 }
 
-function fillSettings(settings)
+// held: what has the focus when the poll calls. A field somebody types into stays his - an address half typed
+// was emptied when another setting changed at the display -, and the next poll fills it in once he has left it
+function fillSettings(settings, held)
 {
+	S.held = !!held && SETTINGS.includes(held.id) && /text|number/.test(held.type);
 	S.settings = JSON.stringify(settings);
 	SETTINGS.forEach(name =>
 	{
+		if(S.held && $(name) === held) return;
 		if($(name).type === "checkbox") $(name).checked = settings[name] === true;
 		else $(name).value = text(settings[name]);
 	});

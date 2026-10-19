@@ -172,12 +172,17 @@ jobs:
           path: display
           command: idf.py build
 
+      # What is waited for is the line the check prints for exactly this finding, and nothing else: a map
+      # that is not there, a traceback or "not the map of a whole build" end with a status that is not 0 as
+      # well, and must not count as the report (display/tools/test_check_build.py runs these lines with each).
       - name: Counter-check, the client is reported
         run: |
-          if python3 display/tools/check_build.py --map display/build/wican-display.map; then
-            echo "the check did not notice the MQTT client in the firmware"
-            exit 1
-          fi
+          status=0
+          python3 display/tools/check_build.py --map display/build/wican-display.map > counter_check.txt 2>&1 || status=$?
+          cat counter_check.txt
+          test "$status" = 1
+          test "$(grep -c "" counter_check.txt)" = 1
+          grep -E "^PROBLEM: [1-9][0-9]* objects of an MQTT client are linked into the firmware, the first: libmqtt\.a\(.+\)$" counter_check.txt
 
       # Counter-check of the check of the definition, the same way: nothing is built from here on.
       # Without the line of components/ui/CMakeLists.txt the check has to fail.
@@ -195,9 +200,14 @@ jobs:
           path: display
           command: idf.py reconfigure
 
+      # The same: the one line that says that no source of LVGL has the definition any more - as many
+      # sources without it as there are, and at least the hundred a whole build has
       - name: Counter-check, its absence is reported
         run: |
-          if python3 display/tools/check_build.py --commands display/build/compile_commands.json; then
-            echo "the check did not notice that the definition is gone"
-            exit 1
-          fi
+          status=0
+          python3 display/tools/check_build.py --commands display/build/compile_commands.json > counter_check.txt 2>&1 || status=$?
+          cat counter_check.txt
+          test "$status" = 1
+          test "$(grep -c "" counter_check.txt)" = 1
+          grep -E "^PROBLEM: [1-9][0-9]{2,} of [1-9][0-9]{2,} sources of LVGL are not compiled with -DLV_ASSERT_HANDLER=" counter_check.txt
+          awk '$2 != $4 { exit 1 }' counter_check.txt

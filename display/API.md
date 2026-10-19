@@ -253,8 +253,11 @@ password; the client id is made of the letters and digits of the name of its own
 (`WiCAN-Display-C9A8` names itself `WiCANDisplayC9A8`). One SUBSCRIBE to `display/gx/values` with QoS 0. A
 PINGREQ every 10 s. Nothing else is ever sent. A connection without a session after 15 s, or without the
 answer to a PINGREQ after 20 s, is closed; the next attempt follows after 2, 5, 10 and then every 30 s, and
-at once when the display joins a network or is given another address. In safe mode nothing is opened. What
-a broker sends is read at 51 KB a second at most. `tools/mock_flow.py` plays the broker and the flow of a
+at once when the display joins a network or is given another address. The waits begin anew, with 2 s, only
+behind a session that brought a bundle: a broker that takes the subscription and then breaks every session
+is asked 5 times in the first minute and 23 times in ten, and `cerbo.view` alternates between `connecting`
+(15 s behind each of these sessions) and `unreachable`. In safe mode nothing is opened. What a broker sends
+is read at 34 KB a second: 1024 bytes every 30 ms. `tools/mock_flow.py` plays the broker and the flow of a
 Cerbo on a PC, with every fault they can have.
 
 ### `GET /api/catalog`
@@ -323,9 +326,12 @@ so - is left out of this answer, whether the Cerbo publishes that key or not, fr
 set (also in safe mode, where the source is off). So no key stands twice in `values`, a key with `GX_` is
 always a value of the Cerbo, and there are as many of them as `cerbo.values` in `GET /api/info` says.
 
-A value of the Cerbo is `fresh` under 5 s and `old` under 60 s: the radio link to it drops out, and a state
-of charge of 40 s ago still says something. A value the last bundle of the Cerbo did not name is left out at
-once: the Cerbo has none.
+A value of the Cerbo is `fresh` under 10 s and `old` under 60 s. Fresh for as long as the Cerbo counts as
+delivering (`cerbo` is `live` for 10 s behind a bundle): the flow does not publish every second - pauses of
+up to 5.3 s were measured on 2026-10-11 - and no value is called old for that. Old for a minute: the radio
+link to the Cerbo drops out, and a state of charge of 40 s ago still says something. A bundle that arrives
+late is as old as its delay (`cerbo.lag_ms`), so a value can be `old` while `cerbo` is `live`. A value the
+last bundle of the Cerbo did not name is left out at once: the Cerbo has none.
 Without the address the answer is the one above, byte for byte: no member `cerbo`, and no value left out for
 its name - one of the adapter named `GX_...` is then a value like every other, as it always was. With both
 stores full the answer has at most 19511 bytes.
@@ -371,7 +377,7 @@ appended to** - a stored layout and a preview stay what was sent, with the addre
 pages of the Cerbo they hold: such a page says "Cerbo nicht eingerichtet" on a display without the address.
 A display without the address answers the text of before, byte for byte.
 
-A page shows a value whose key begins with `GX_` from what the Cerbo sent - under 5 s as it is, under 60 s
+A page shows a value whose key begins with `GX_` from what the Cerbo sent - under 10 s as it is, under 60 s
 dimmed, then a dash - with the label and the unit the layout gives it (no catalogue is asked for it). A page of
 such values alone shows them whatever the adapter does, also while the vehicle is parked and the adapter
 sleeps; a page that names values of both shows dashes for the source that is away.

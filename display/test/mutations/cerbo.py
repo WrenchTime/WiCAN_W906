@@ -15,6 +15,8 @@ HOST_NULL = "\tif(text == NULL) return;\n"
 HOST_LONG = "\tif(length == CERBO_HOST_SIZE) return;\n"
 ONCE_STEP = "\tcerbo->wait_step = 0;\n\tcerbo->wait_ms = 0;\n"
 ONCE_WAIT = "\tcerbo->wait_ms = 0;\n\tcerbo->grace_since_ms = cerbo->clock_ms;\n}"
+WAITS_ANEW = "\tif(cerbo->phase == CERBO_SESSION && cerbo->has_clock) cerbo->wait_step = 0;\n"
+SESSION_COUNTED = "\tcerbo->sessions++;\n\tcerbo->ping_ms = cerbo->clock_ms;\n"
 ENDED_GRACE = "\tif(cerbo->phase == CERBO_SESSION) cerbo->grace_since_ms = cerbo->clock_ms;\n\tcerbo->phase = CERBO_IDLE;"
 ENDED_FLAGS = "\tcerbo->send = false;\n\tcerbo->failed = false;\n"
 ENDED_MOVED = "\t\tcerbo->moved = false;\n\t\treturn;\n\t}\n"
@@ -127,7 +129,9 @@ MUTATIONS = [
     ("cerbo_first_wait_changed", T) + define("CERBO_RETRY_MS", "{2000u, 5000u, 10000u, 30000u}", "{1000u, 5000u, 10000u, 30000u}", 10),
     ("cerbo_last_wait_changed", T) + define("CERBO_RETRY_MS", "{2000u, 5000u, 10000u, 30000u}", "{2000u, 5000u, 10000u, 60000u}", 10),
     ("cerbo_grace_of_16_s", T) + define("CERBO_GRACE_MS", "15000u", "16000u", 10),
-    ("cerbo_fresh_for_6_s", T) + define("CERBO_FRESH_MS", "5000u", "6000u", 10),
+    ("cerbo_fresh_for_11_s", T) + define("CERBO_FRESH_MS", "10000u", "11000u", 10),
+    # as it was before 2026-10-12: a pause of the flow of 5.3 s would dim every value
+    ("cerbo_fresh_for_5_s", T) + define("CERBO_FRESH_MS", "10000u", "5000u", 10),
     ("cerbo_kept_for_61_s", T) + define("CERBO_KEPT_MS", "60000u", "61000u", 11),
     ("cerbo_live_for_11_s", T) + define("CERBO_LIVE_MS", "10000u", "11000u", 11),
     ("cerbo_silent_after_21_s", T) + define("CERBO_SILENT_MS", "20000u", "21000u", 9),
@@ -175,7 +179,14 @@ MUTATIONS = [
     ("cerbo_starting_over_keeps_the_wait", T, F, ONCE_WAIT, "\tcerbo->grace_since_ms = cerbo->clock_ms;\n}"),
     ("cerbo_starting_over_keeps_the_grace", T, F, ONCE_WAIT, "\tcerbo->wait_ms = 0;\n}"),
 
-    # the end of a connection
+    # the end of a connection. The waits begin anew behind a session that brought a bundle, and behind no other:
+    # the first two are the rule before 2026-10-12, which let a broker that breaks every session be asked every 2 s
+    ("cerbo_waits_anew_with_every_suback", T, F, SESSION_COUNTED, "\tcerbo->sessions++;\n\tcerbo->wait_step = 0;\n\tcerbo->ping_ms = cerbo->clock_ms;\n"),
+    ("cerbo_waits_anew_behind_every_session", T, F, WAITS_ANEW, "\tif(cerbo->phase == CERBO_SESSION) cerbo->wait_step = 0;\n"),
+    ("cerbo_waits_anew_behind_a_bundle_without_session", T, F, WAITS_ANEW, "\tif(cerbo->has_clock) cerbo->wait_step = 0;\n"),
+    ("cerbo_waits_anew_behind_every_connection_that_stood", T, F, WAITS_ANEW, "\tif(cerbo->phase != CERBO_OPENING) cerbo->wait_step = 0;\n"),
+    ("cerbo_waits_never_anew_behind_a_session", T, F, WAITS_ANEW, ""),
+    ("cerbo_waits_anew_with_the_second_wait", T, F, WAITS_ANEW, WAITS_ANEW.replace("wait_step = 0", "wait_step = 1")),
     ("cerbo_session_end_starts_no_grace", T, F, ENDED_GRACE, "\tcerbo->phase = CERBO_IDLE;"),
     ("cerbo_every_end_starts_the_grace", T, F, ENDED_GRACE, "\tcerbo->grace_since_ms = cerbo->clock_ms;\n\tcerbo->phase = CERBO_IDLE;"),
     ("cerbo_connection_never_ends", T, F, ENDED_GRACE, "\tif(cerbo->phase == CERBO_SESSION) cerbo->grace_since_ms = cerbo->clock_ms;"),
@@ -259,7 +270,6 @@ MUTATIONS = [
     ("cerbo_suback_out_of_place_ignored", T, F, SUBACK_FAILS, SUBACK_IF + "\n\t{\n"),
     ("cerbo_suback_makes_no_session", T, F, "\tcerbo->phase = CERBO_SESSION;\n", ""),
     ("cerbo_session_not_counted", T, F, "\tcerbo->sessions++;\n", ""),
-    ("cerbo_session_keeps_the_wait_step", T, F, "\tcerbo->sessions++;\n\tcerbo->wait_step = 0;\n", "\tcerbo->sessions++;\n"),
     ("cerbo_first_ping_not_from_the_suback", T, F, "\tcerbo->ping_ms = cerbo->clock_ms;\n\tcerbo->pings_open = 0;", "\tcerbo->pings_open = 0;"),
     ("cerbo_pings_of_the_session_before_stay_open", T, F, "\tcerbo->ping_ms = cerbo->clock_ms;\n\tcerbo->pings_open = 0;", "\tcerbo->ping_ms = cerbo->clock_ms;"),
     ("cerbo_silence_not_counted_from_the_suback", T, F, "\tcerbo->pings_open = 0;\n\tcerbo->quiet_since_ms = cerbo->clock_ms;", "\tcerbo->pings_open = 0;"),

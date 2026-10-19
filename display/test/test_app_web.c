@@ -325,7 +325,7 @@ static bool only_room(void)
 // The parts of the app a request may change, by what app_web.h names for it
 #define MAY_CLOCK       0x01u   // the time the app has seen: it is then the time of the request
 #define MAY_CHECKED     0x02u   // the room a layout is read into
-#define MAY_LAYOUT      0x04u   // the views in use, their text and source, and the page shown
+#define MAY_LAYOUT      0x04u   // the views in use, whether they end with the pages of the Cerbo, their text and source, and the page shown
 #define MAY_ASKED       0x08u   // what a question asks for: the network and the detail
 #define MAY_NETWORKS    0x10u   // the stored networks, the link, and what the poll and the lines make of a network that is left
 #define MAY_SETTINGS    0x20u   // the settings and the direction of the knob
@@ -347,6 +347,7 @@ static bool nothing_but(unsigned may, const access_t *release, uint64_t time)
 	if(may & MAY_LAYOUT)
 	{
 		memcpy(&before.layout, &app->layout, sizeof(before.layout));
+		before.gx_appended = app->gx_appended;
 		memcpy(before.layout_text, app->layout_text, sizeof(before.layout_text));
 		before.layout_length = app->layout_length;
 		before.source = app->source;
@@ -3662,16 +3663,18 @@ static void test_cerbo(void)
 	check(answered(200, "values_cerbo"), "the values of the adapter 2999 ms after they were seen, those of the Cerbo 2959 ms: all fresh");
 	get_at("/api/values", 5000);
 	check(answered(200, "values_cerbo_fresh"), "app_web_values_cerbo_fresh.json: 3000 ms after the values of the adapter were seen they are old; those of the Cerbo, 2960 ms old, are fresh");
-	get_at("/api/values", 7039);
-	check(answered(200, "values_cerbo_fresh"), "the values of the Cerbo 4999 ms after they were seen: still fresh");
-	get_at("/api/values", 7040);
-	check(answered_with(200, "\"INTAKE_TEMP\":{\"v\":19,\"age\":\"old\"},\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"old\"},") && reply_length == strlen(fixture("values_cerbo")) - 24,
-	      "the values of the Cerbo 5000 ms after they were seen: old, by the limits of their source - all twelve values are old now, two bytes less each");
+	get_at("/api/values", 7340);
+	check(answered(200, "values_cerbo_fresh"), "the values of the Cerbo 5300 ms after they were seen, the longest pause of the flow that was measured: fresh - until 2026-10-12 they were old from 5000 ms on");
+	get_at("/api/values", 11999);
+	check(answered(200, "values_cerbo_fresh"), "9999 ms after the values of the adapter were seen: they are old, and those of the Cerbo, 9959 ms old, are fresh");
+	get_at("/api/values", 12000);
+	check(answered_with(200, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"fresh\"},") && reply_length == strlen(fixture("values_cerbo_alone")) + 11,
+	      "10000 ms after the values of the adapter were seen they are left out, and the first value of the Cerbo has no comma in front: the six values of the Cerbo alone, fresh");
 	get_at("/api/values", 12039);
-	check(answered_with(200, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"old\"},"),
-	      "10039 ms after the values of the adapter were seen they are left out, and the first value of the Cerbo has no comma in front; the Cerbo still counts as delivering");
+	check(answered_with(200, "{\"view\":\"live\",\"cerbo\":\"live\",\"values\":{\"GX_BATT_SOC\":{\"v\":87.5,\"age\":\"fresh\"},") && reply_length == strlen(fixture("values_cerbo_alone")) + 11,
+	      "the values of the Cerbo 9999 ms after they were seen: fresh, and the Cerbo still counts as delivering");
 	get_at("/api/values", 12040);
-	check(answered(200, "values_cerbo_alone"), "app_web_values_cerbo_alone.json: 10000 ms after the last bundle the view of the Cerbo is quiet, its values old");
+	check(answered(200, "values_cerbo_alone"), "app_web_values_cerbo_alone.json: 10000 ms after the last bundle the view of the Cerbo is quiet and its values are old, in the same millisecond");
 	get_at("/api/values", 62039);
 	check(answered(200, "values_cerbo_alone"), "the values of the Cerbo 59999 ms after they were seen: still there");
 	get_at("/api/values", 62040);

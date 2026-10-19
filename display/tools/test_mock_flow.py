@@ -15,6 +15,7 @@ import contextlib
 import io
 import json
 import math
+import os
 import re
 import socket
 import threading
@@ -24,6 +25,7 @@ import unittest
 import mock_flow
 
 FAST = 50
+CERBO_H = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "components", "core", "cerbo.h")
 KEY = re.compile(r"GX_[A-Z0-9_]{1,29}")
 
 
@@ -143,6 +145,43 @@ class TheFlow(unittest.TestCase):
         names = contract_problems(bundles("names", seconds=1)[0][2])
         self.assertEqual(len(names), 8, names)
 
+    def test_tokens_and_length_are_two_limits(self):
+        # Each of the two faults reaches the limit it is named for and no other one. Until 2026-10-12 "tokens"
+        # was a bundle of more than 1400 bytes: the display refused it for its length, as it does with "long",
+        # and no fault reached the limit of the tokens (seen with gx_live: too long 60, invalid 0).
+        self.assertEqual((mock_flow.TOKENS_MAX, mock_flow.BUNDLE_MAX), (256, 1400))
+        for seconds, topic, payload, retain, qos in bundles("tokens", seconds=300):
+            found = contract_problems(payload)
+            self.assertEqual(len(found), 1, found)
+            self.assertRegex(found[0], r"^\d+ tokens, more than 256$")
+            self.assertLessEqual(len(payload), mock_flow.BUNDLE_MAX)
+            self.assertEqual(tokens(read(payload)), 267)
+        for seconds, topic, payload, retain, qos in bundles("long", seconds=300):
+            found = contract_problems(payload)
+            self.assertEqual(len(found), 1, found)
+            self.assertRegex(found[0], r"^\d+ bytes, more than 1400$")
+            self.assertLessEqual(tokens(read(payload)), mock_flow.TOKENS_MAX)
+
+    def test_late_is_later_than_a_value_is_fresh(self):
+        # The fault has to reach the limit it is there for. A bundle that is held back for LATE_S arrives with a
+        # lag of that time less what the base of the lag gave way in the gap in front of it (cerbo.h: a tenth of
+        # LATE_S and the second to the bundle before), and only a lag of CERBO_FRESH_MS and more dims a value.
+        # The limit is read from the header: when it went from 5 to 10 s on 2026-10-12 the fault still held
+        # back for 8 s, a lag of 7.1 s at first, and the display would have shown nothing of it.
+        with open(CERBO_H, encoding="utf-8") as handle:
+            header = handle.read()
+        fresh = int(re.search(r"^#define CERBO_FRESH_MS +(\d+)u ", header, re.M).group(1))
+        per_mille = int(re.search(r"^#define CERBO_YIELD_PER_MILLE +(\d+) ", header, re.M).group(1))
+
+        def first_lag(held_s):
+            return held_s * 1000 - (held_s + 1) * per_mille
+
+        self.assertEqual((fresh, per_mille), (10000, 100))
+        self.assertEqual(first_lag(mock_flow.LATE_S), 10700)
+        self.assertGreater(first_lag(mock_flow.LATE_S), fresh)
+        self.assertEqual(first_lag(8), 7100)
+        self.assertLess(first_lag(8), fresh)
+
     def test_faults_of_the_wire_leave_the_payload_alone(self):
         for fault, wrong in (("topic", ("display/gx/other", False, 0)), ("retained", ("display/gx/values", True, 0)),
                              ("qos1", ("display/gx/values", False, 1))):
@@ -177,6 +216,27 @@ class TheFlow(unittest.TestCase):
         lines = output.getvalue().splitlines()
         self.assertEqual([line.split()[0] for line in lines], list(mock_flow.FAULTS))
         self.assertTrue(all("Display: " in line for line in lines))
+        # What the display does, as it was measured with gx_live on 2026-10-12 - not that a megabyte "goes by"
+        # and that a flood is read as it comes, which the list said before and the display does not do
+        said = {line.split()[0]: line for line in lines}
+        self.assertIn("the megabyte never goes by", said["huge"])
+        self.assertIn("the session ends and is made anew each time", said["huge"])
+        self.assertNotIn("it goes by", said["huge"])
+        self.assertIn("falls behind", said["flood"])
+        self.assertIn("the session ends", said["flood"])
+        self.assertNotIn("Display: live", said["flood"])
+        self.assertIn("less than 1400 bytes", said["tokens"])
+        # ... and what it does since 2026-10-12, when a value of the Cerbo became fresh for 10 s and the waits
+        # stopped beginning anew with every SUBACK: a clock that lost 11 s is forgotten after 20 s, not after a
+        # minute, and a broker that breaks every session is asked every 30 s in the end, not every 2 s
+        self.assertIn("after 20 s for good", said["clock_lost"])
+        self.assertNotIn("a minute later", said["clock_lost"])
+        self.assertIn("twelve seconds", said["late"])
+        self.assertIn("the values dimmed until the lag is below 10 s", said["late"])
+        self.assertIn("after 2, 5, 10 and then every 30 s", said["garbage"])
+        self.assertIn("\"Cerbo nicht erreichbar\"", said["garbage"])
+        for fault in ("qos1", "puback"):
+            self.assertIn("tries again as with garbage", said[fault])
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stopped:
             mock_flow.main(["--fault", "nonsense"])
         self.assertEqual(stopped.exception.code, 2)
@@ -321,6 +381,168 @@ class TheBroker(unittest.TestCase):
         self.assertEqual(display.packet(), (0x90, b"\x00\x07\x80"))
         self.assertIsNone(display.packet(0.2))
 
+    def test_a_subscribe_without_a_topic_gets_no_answer(self):
+        # [MQTT-3.8.3-3]: a SUBSCRIBE names at least one topic. Until 2026-10-12 one without a body was answered
+        # with 90 03 80: a SUBACK that announces three bytes and has one. Now the connection ends, as for
+        # everything a display never sends.
+        for packet in (b"\x82\x00", b"\x82\x02\x00\x01", b"\x82\x04\x00\x01\x00\x00", b"\x82\x05\x00\x01\x00\x00\x00",
+                       b"\x82\x06\x00\x01\x00\x05ab", b"\x82\x05\x00\x01\x00\x01a"):
+            with self.subTest(packet):
+                broker, said = self.serve()
+                display = self.client(broker)
+                display.send(Subscriber.CONNECT)
+                self.assertEqual(display.packet(), (0x20, b"\x00\x00"))
+                display.send(packet)
+                self.assertEqual(display.raw(0.3), b"")
+                self.assertTrue(display.closed)
+                self.assertTrue(any("sent a SUBSCRIBE without a topic filter and its QoS" in line for line in said), said)
+        # The shortest one that names a topic is answered: a topic of one character, refused as no topic of this broker
+        broker, said = self.serve()
+        display = self.client(broker)
+        display.send(Subscriber.CONNECT)
+        display.packet()
+        display.send(b"\x82\x06\x00\x09\x00\x01a\x00")
+        self.assertEqual(display.packet(), (0x90, b"\x00\x09\x80"))
+
+    def test_what_a_client_sent_is_printed_with_nothing_that_steers_a_terminal(self):
+        # The client id and the topic are texts of whoever connects. An escape sequence, a line of its own or a
+        # mark that turns the writing round is printed as its number, and a long text is cut.
+        self.assertEqual(mock_flow.shown("WiCANDisplayC9A8"), "WiCANDisplayC9A8")
+        self.assertEqual(mock_flow.shown("Küche °C"), "Küche °C")
+        self.assertEqual(mock_flow.shown("a\x1b[2J\r\nb\x00\x7f\u202e"), "a\\u001b[2J\\u000d\\u000ab\\u0000\\u007f\\u202e")
+        self.assertEqual(mock_flow.shown("x" * 65), "x" * 64 + "... (65 characters)")
+        self.assertEqual(mock_flow.shown("x" * 64), "x" * 64)
+        broker, said = self.serve()
+        display = self.client(broker)
+        name = b"\x1b[31mred\x1b[0m\r\nfake line\x07"
+        display.send(mock_flow.fixed_header(0x10, 12 + len(name)) + b"\x00\x04MQTT\x04\x02\x00\x1e" + len(name).to_bytes(2, "big") + name)
+        self.assertEqual(display.packet(), (0x20, b"\x00\x00"))
+        topic = b"display/\x1b]0;title\x07\n"
+        display.send(mock_flow.fixed_header(0x82, 5 + len(topic)) + b"\x00\x01" + len(topic).to_bytes(2, "big") + topic + b"\x00")
+        self.assertEqual(display.packet(), (0x90, b"\x00\x01\x80"))
+        lines = [line for line in said if "CONNECT as" in line or "SUBSCRIBE to" in line]
+        self.assertEqual(len(lines), 2, said)
+        self.assertTrue(all(line.isprintable() for line in said), said)
+        self.assertIn("CONNECT as \"\\u001b[31mred\\u001b[0m\\u000d\\u000afake line\\u0007\"", lines[0])
+        self.assertIn("SUBSCRIBE to \"display/\\u001b]0;title\\u0007\\u000a\"", lines[1])
+
+    def test_a_packet_too_long_for_a_subscriber_is_not_waited_for(self):
+        # A length of 256 MB, and the first of its bytes: the connection ends at once, nothing is kept until the
+        # packet is whole. The longest packet a display sends has 64 bytes.
+        broker, said = self.serve()
+        display = self.client(broker)
+        display.send(Subscriber.CONNECT)
+        display.packet()
+        display.send(b"\x82\xff\xff\xff\x7f" + b"x" * 2000)
+        self.assertEqual(display.raw(0.3), b"")
+        self.assertTrue(display.closed)
+        self.assertTrue(any("sent a packet of more than 1024 bytes - not passed on" in line for line in said), said)
+        self.assertEqual(broker.clients, [])
+        # ... also by a broker that answers nothing: it must not keep what never ends either
+        broker, said = self.serve("mute")
+        display = self.client(broker)
+        display.send(Subscriber.CONNECT)
+        self.assertEqual(display.raw(0.2), b"")
+        self.assertFalse(getattr(display, "closed", False))
+        display.send(b"\x82\xff\xff\xff\x7f" + b"x" * 2000)
+        self.assertEqual(display.raw(0.3), b"")
+        self.assertTrue(getattr(display, "closed", False))
+        self.assertEqual(broker.clients, [])
+        # ... and one of exactly the limit is waited for, byte by byte
+        broker, said = self.serve()
+        display = self.client(broker)
+        display.send(b"\x10\x80\x08" + b"\x00\x04MQTT\x04\x02\x00\x1e\x03\xf4" + b"n" * 500)
+        self.assertEqual(display.raw(0.2), b"")
+        self.assertFalse(getattr(display, "closed", False))
+        display.send(b"n" * 512)
+        self.assertEqual(display.packet(), (0x20, b"\x00\x00"))
+
+    def test_what_waits_for_a_client_that_does_not_read_has_a_limit(self):
+        # A subscriber without a keep-alive that never reads: what waits for it must not grow for ever. The limit
+        # is that of the broker of a Cerbo, 8 MB. Told without a clock and without the buffers of this PC: the
+        # broker is handed a connection and bytes for it, and writes when it is told to.
+        self.assertEqual(mock_flow.WAITING_MAX, 8 * 1024 * 1024)
+        said = []
+        broker = mock_flow.Broker("127.0.0.1", 0, clock=lambda: 0.0, say=said.append)
+        self.addCleanup(broker.close)
+        ours, theirs = socket.socketpair()
+        self.addCleanup(theirs.close)
+        ours.setblocking(False)
+        theirs.setblocking(False)
+        client = mock_flow.Client(ours, ("127.0.0.1", 1), 0.0)
+        broker.clients.append(client)
+        megabyte = b"x" * (1024 * 1024)
+
+        def read_all():
+            """The broker writes what it can, the client reads it, until nothing waits; returns the bytes read"""
+            count = 0
+            while client.waiting:
+                broker.write(client, 0.0)
+                try:
+                    while True:
+                        count += len(theirs.recv(1 << 20))
+                except BlockingIOError:
+                    pass
+            return count
+
+        # A client that reads is never short of the limit, however much went through
+        for _ in range(3):
+            for _ in range(5):
+                broker.queue(client, megabyte, 0.0)
+            self.assertEqual(client.waiting_bytes, 5 * 1024 * 1024)
+            self.assertEqual(read_all(), 5 * 1024 * 1024)
+            self.assertEqual((client.waiting_bytes, client.waiting), (0, []))
+        self.assertEqual((broker.clients, said), ([client], []))
+        # One that does not: 8 MB may wait, one byte more ends the connection
+        for _ in range(8):
+            broker.queue(client, megabyte, 0.0)
+        broker.write(client, 0.0)
+        self.assertEqual(broker.clients, [client])
+        self.assertLessEqual(client.waiting_bytes, mock_flow.WAITING_MAX)
+        self.assertGreater(client.waiting_bytes, 7 * 1024 * 1024)
+        missing = mock_flow.WAITING_MAX - client.waiting_bytes
+        broker.queue(client, b"x" * missing, 0.0)
+        self.assertEqual((broker.clients, said, client.waiting_bytes), ([client], [], mock_flow.WAITING_MAX))
+        broker.queue(client, b"x", 0.0)
+        self.assertEqual(broker.clients, [])
+        self.assertEqual(said, ["127.0.0.1:1: does not read, %d bytes wait for it: closed after 0 s, 0 bundles" % (mock_flow.WAITING_MAX + 1)])
+        # Its socket is closed: the other end reads what was under way, and then the end
+        theirs.setblocking(True)
+        theirs.settimeout(2)
+        while theirs.recv(1 << 20) != b"":
+            pass
+
+    def test_a_broker_that_resets(self):
+        # The fault for display/host/gx_live: CONNACK, and then a reset in place of a close. What the client
+        # sends next meets a connection that is gone - on a PC that is a signal which ends a program that does
+        # not ignore it (Python does).
+        broker, said = self.serve("reset")
+        display = self.client(broker)
+        display.send(Subscriber.CONNECT)
+        # The CONNACK is sent before the reset. A PC hands it out if it was there first (macOS does, 2026-10-12);
+        # one that throws away what it had received when the reset comes hands out nothing.
+        self.assertIn(display.packet(), ((0x20, b"\x00\x00"), None))
+        time.sleep(0.1)
+        with self.assertRaises(OSError):
+            for _ in range(20):
+                display.send(Subscriber.SUBSCRIBE)
+                time.sleep(0.02)
+        self.assertTrue(any("reset by the broker" in line for line in said), said)
+        self.assertEqual(broker.clients, [])
+        self.assertFalse(any("SUBSCRIBE" in line for line in said), said)
+        # A reset and not a close: who reads on meets the error, where a connection that was closed just ends.
+        # Only the reset lets the very next send() of a display fail (and raise the signal, on a PC).
+        reader = socket.create_connection(("127.0.0.1", broker.port), timeout=2)
+        self.addCleanup(reader.close)
+        reader.sendall(Subscriber.CONNECT)
+        seen = b""
+        with self.assertRaises(ConnectionResetError):
+            while True:
+                part = reader.recv(16)
+                self.assertNotEqual(part, b"", "closed, not reset")
+                seen += part
+        self.assertIn(seen, (b"\x20\x02\x00\x00", b""))
+
     def test_who_publishes_is_no_display(self):
         broker, said = self.serve()
         listener = self.client(broker)
@@ -450,7 +672,7 @@ class TheBroker(unittest.TestCase):
         self.assertLess(max(behind), 3.0, gaps)
 
     def test_late(self):
-        # From second 15 of every half minute on each bundle leaves eight seconds after it was made
+        # From second 15 of every half minute on each bundle leaves twelve seconds after it was made
         broker, said = self.serve("late")
         display = self.client(broker)
         display.subscribe(keepalive=False)
@@ -462,7 +684,8 @@ class TheBroker(unittest.TestCase):
         on_time = [delay for made, delay in late if made % 30 < 15]
         held = [delay for made, delay in late if made % 30 >= 15]
         self.assertTrue(on_time and held)
-        self.assertGreater(min(held), 7.0, late)
+        self.assertEqual(mock_flow.LATE_S, 12.0)
+        self.assertGreater(min(held), mock_flow.LATE_S - 1, late)
         # The bundles behind the held ones wait in their order: none overtakes
         self.assertEqual([made for made, delay in late], sorted(made for made, delay in late))
         self.assertLess(min(on_time), 2.0, late)

@@ -5923,8 +5923,8 @@ static uint64_t mix_app(uint64_t number)
 	number = mix_bytes(number, bytes + settings_end, offsetof(app_t, cerbo) - settings_end);
 	if(trace_pages)
 	{
-		// Without the views in use and their text: the one has the pages of the Cerbo behind them
-		size_t layout_end = offsetof(app_t, layout) + sizeof(app->layout);
+		// Without the views in use and their text: the one has the pages of the Cerbo behind them, and knows it
+		size_t layout_end = offsetof(app_t, gx_appended) + sizeof(app->gx_appended);
 		size_t text_end = offsetof(app_t, layout_length) + sizeof(app->layout_length);
 
 		number = mix_bytes(number, bytes + cerbo_end, offsetof(app_t, layout) - cerbo_end);
@@ -6311,6 +6311,9 @@ typedef struct
 	long gx_rounds, gx_looked;  // rounds of its task, and those around which every byte of the app outside of it was compared
 	long gx_set, gx_moved, gx_cleared;      // settings of the browser that gave the address, another one, or took it away
 	long gx_paged;              // looks at views the display chose itself that end with the pages of the Cerbo
+	long gx_anew;               // ... made anew, the same kind as before, while a page of the Cerbo was shown
+	long gx_shifted;            // ... of them those in which the pages of the vehicle had become more or fewer:
+	                            // the page of the Cerbo stays, and its number is another one
 	long gx_looks;              // times the driver turned on to where the pages of the Cerbo are
 	long gx_values;             // values of the Cerbo on the screen that its store holds
 	long gx_homes;              // worlds in which the long press leads to a page of the Cerbo behind the pages of the vehicle
@@ -6410,6 +6413,8 @@ typedef struct
 	bool wifi_good;             // the network the browser asked for is one net_store() takes
 	bool info_cerbo;            // the info lines of the last tick, or of the start, had the two of the Cerbo
 	bool gx_pages;              // the views of the display end with the built-in pages of the Cerbo, as last looked at
+	int gx_first;               // ... and the first of them was this page; -1 where views the display chose itself
+	                            // had none, and for views of the user
 	bool layout_unseen;         // the views of this start were not looked at yet
 
 	// Around the round of the task of the second source that is going on
@@ -6455,6 +6460,7 @@ static void model_start(void)
 	m.last_input = now;
 	m.heat = GUARD_HEAT_NORMAL;
 	m.preview = -1;
+	m.gx_first = -1;
 	settings_defaults(&m.settings);
 	if(flash.has_settings) settings_from_json(&m.settings, flash.settings, strlen(flash.settings), NULL, 0, work, SETTINGS_TOKENS);
 	// The release from the first moment: the one for good if the stored settings say so or say nothing, none if
@@ -6905,7 +6911,18 @@ static void layout_holds(bool stepped)
 				broke(PROMISE_LAYOUT, "the views do not end with the five pages of the Cerbo exactly while the display has its address outside the safe mode");
 			}
 			if(stepped && app->source != m.source && app->nav.page != layout_first_page(&app->layout, catalog)) broke(PROMISE_LAYOUT, "other views do not start at their first page");
-			if(stepped && app->source == m.source && app->nav.page != m.page) broke(PROMISE_LAYOUT, "the same views made anew do not keep the page");
+			if(stepped && app->source == m.source)
+			{
+				// A page of the vehicle keeps its number. A page of the Cerbo stays that page: the pages of the
+				// vehicle in front of the five may be more or fewer than they were.
+				int first = pages ? app->layout.page_count - 5 : -1;
+				bool of_cerbo = m.gx_first >= 0 && first >= 0 && m.page >= m.gx_first;
+				int wanted = of_cerbo ? first + (m.page - m.gx_first) : m.page;
+
+				if(app->nav.page != wanted) broke(PROMISE_LAYOUT, "the same views made anew do not keep the page: the number of a page of the vehicle, or the page of the Cerbo that was shown");
+				if(of_cerbo) tally->gx_anew++;
+				if(of_cerbo && wanted != m.page) tally->gx_shifted++;
+			}
 			// The source was switched on or off: the page stays where the views still show one, else the first one
 			if(!m.layout_unseen && pages != m.gx_pages && app->source == m.source && sum == m.sum &&
 			   app->nav.page != (layout_page_shown(&app->layout, m.page, catalog) ? m.page : layout_first_page(&app->layout, catalog)))
@@ -6921,6 +6938,8 @@ static void layout_holds(bool stepped)
 		m.sum = sum;
 		m.source = app->source;
 		m.gx_pages = pages;
+		// By the pages of the vehicle, of which seven have room in front of the five
+		m.gx_first = own && pages ? (builtin ? builtin_layout.page_count : made.page_count > 7 ? 7 : made.page_count) : -1;
 		m.layout_unseen = false;
 	}
 	m.page = app->nav.page;
@@ -9105,8 +9124,13 @@ static void test_random_runs(void)
 	printf("  random runs, the pages of the Cerbo: %ld runs on a firmware with them and %ld on one without; views that end with them looked at %ld times; %ld values of the Cerbo "
 	       "on the screen behind %ld turns to its pages; the long press leads to one of its pages in %ld worlds\n", result.gx_firmwares[0], result.gx_firmwares[1], result.gx_paged,
 	       result.gx_values, result.gx_looks, result.gx_homes);
+	printf("  random runs, the pages of the Cerbo: the same views made anew %ld times while one of them was shown, %ld times with more or fewer pages of the vehicle in front of them\n",
+	       result.gx_anew, result.gx_shifted);
 	check(complete && result.gx_firmwares[0] >= 16 && result.gx_firmwares[1] >= 10 && result.gx_paged >= 20 && result.gx_values >= 1000 && result.gx_homes >= 1000,
 	      "the random runs reach views that end with the pages of the Cerbo, values of the Cerbo on the screen, and worlds in which the long press leads to a page of the Cerbo");
+	// The runs are those of the W906 and of one other vehicle whose catalogue does not grow by a page: test_gx_page_walk()
+	// is the walk in which the pages of the vehicle become more and fewer
+	check(complete && result.gx_anew >= 5, "the random runs make the same views anew while a page of the Cerbo is shown, and it stays that page");
 }
 
 static void test_fault_memory_with_cerbo(void)
@@ -9191,6 +9215,11 @@ static int home_now(void)
 	return seen.home_set ? seen.home : -99;
 }
 
+// A vehicle of eight values: with the battery voltage three pages of views made from its catalogue
+#define EIGHT_CONFIG    "{\"A1\":{\"class\":\"none\",\"unit\":\"\"},\"A2\":{\"class\":\"none\",\"unit\":\"\"},\"A3\":{\"class\":\"none\",\"unit\":\"\"}," \
+                        "\"A4\":{\"class\":\"none\",\"unit\":\"\"},\"A5\":{\"class\":\"none\",\"unit\":\"\"},\"A6\":{\"class\":\"none\",\"unit\":\"\"}," \
+                        "\"A7\":{\"class\":\"none\",\"unit\":\"\"},\"A8\":{\"class\":\"none\",\"unit\":\"\"}}"
+
 // How the text of the built-in views with the pages of the Cerbo begins
 #define WHOLE_HEAD  "{\"format\":\"wican-display-layout\",\"v\":1,\"name\":\"W906 OM651 Standard + Cerbo\",\"profile_hint\":\"W906\",\"pages\":["
 
@@ -9246,20 +9275,47 @@ static void test_gx_pages(void)
 	turn(3);
 	shows("gx_klima_41", "Klima on the road: a temperature below zero, an altitude of four digits, a signal of three");
 
+	// The Cerbo sets its clock back by 11 s, 21 s after the display started: the flow loses that time, and the
+	// display takes its bundles for late ones until the base of the lag has given way by a tenth of the time
+	// (cerbo.h). The one picture in which values stand dimmed while the Cerbo delivers. The bundles arrive at
+	// 21040, 22040, ... with lags of 10900, 10800, ... ms.
+	scene_camper(true);
+	turn(7);
+	run_to(20900);
+	shows("gx_batterie", "the camper 20.9 s after the start: Batterie, fresh");
+	gx.boot_ms += 11000;
+	run_to(21060);
+	check(gx_view() == CERBO_VIEW_LIVE && app->cerbo.lag_ms == 10900 && app->cerbo.distrusted == 0, "the Cerbo set its clock back by 11 s: its next bundle counts as 10.9 s late");
+	shows("gx_batterie_old", "... and its values stand dimmed under a yellow ring, without a note: the Cerbo delivers, and nothing is shown as newer than it may be");
+	run_to(30060);
+	check(gx_view() == CERBO_VIEW_LIVE && app->cerbo.lag_ms == 10000, "nine bundles later the lag is 10 s");
+	shows("gx_batterie_old", "... and the values are still dimmed");
+	run_to(31060);
+	check(app->cerbo.lag_ms == 9900, "the tenth bundle behind it has a lag of 9.9 s");
+	shows("gx_batterie", "... its values are fresh when it arrives, 10 s after the clock was set");
+	run_to(32020);
+	shows("gx_batterie_old", "... and old again before the next one comes: for ten seconds the values are fresh for a part of every second");
+	run_to(41060);
+	check(app->cerbo.lag_ms == 8900, "20 s after the clock was set the lag is 8.9 s");
+	shows("gx_batterie", "... and its values are fresh");
+	run_to(42020);
+	shows("gx_batterie", "... and stay so until the next bundle: the clock that was set is forgotten");
+
 	// The flow stops: the values grow old with the last bundle, which arrived at 2040
 	scene_camper(true);
 	turn(7);
 	gx.flow = false;
-	run_to(7020);
-	shows("gx_batterie", "the last bundle 4980 ms ago: its values are fresh");
 	run_to(7040);
 	check(gx_view() == CERBO_VIEW_LIVE, "5 s after its last bundle the Cerbo still counts as delivering");
-	shows("gx_batterie_old", "5000 ms after the last bundle: the values stand dimmed under a yellow ring");
+	shows("gx_batterie", "5000 ms after the last bundle its values stand as they are: until 2026-10-12 they were dimmed from here on");
+	run_to(7340);
+	shows("gx_batterie", "5300 ms after it, the longest pause of the flow of the owner that was measured (2026-10-11): the same - no value is dimmed for a pause of the flow");
 	run_to(12020);
-	shows("gx_batterie_old", "9980 ms after it: the same");
+	check(gx_view() == CERBO_VIEW_LIVE, "9980 ms after its last bundle the Cerbo still counts as delivering");
+	shows("gx_batterie", "9980 ms after the last bundle: its values are fresh for as long as the Cerbo counts as delivering");
 	run_to(12040);
 	check(gx_view() == CERBO_VIEW_QUIET, "10 s after its last bundle the session is quiet");
-	shows("gx_batterie_waiting", "10 s after the last bundle: the note that the display waits for the Cerbo");
+	shows("gx_batterie_waiting", "10 s after the last bundle: the values dimmed under a yellow ring, and the note that the display waits for the Cerbo");
 	run_to(30020);
 	shows("gx_batterie_waiting", "28 s after it, before the broker answered a ping that late: still waiting");
 	run_to(30060);
@@ -9277,11 +9333,11 @@ static void test_gx_pages(void)
 	scene_camper(true);
 	turn(7);
 	gx.there = false;
-	run_to(7020);
+	run_to(12020);
 	check(gx_view() == CERBO_VIEW_CONNECTING && has_line("ring: none") && has_line("note: Warte auf Cerbo …") && has_line("item: SOC | 87,5 | % | normal | arc | 875") && has_line("dots: 8/12"),
-	      "the broker is gone since 4.9 s: the values of the last bundle are still fresh, and the note says that the display waits");
-	run_to(7040);
-	shows("gx_batterie_waiting", "5 s after the last bundle: dimmed, yellow, waiting");
+	      "the broker is gone since 9.9 s: the values of the last bundle are still fresh, 9980 ms after it, and the note says that the display waits");
+	run_to(12040);
+	shows("gx_batterie_waiting", "10 s after the last bundle: dimmed, yellow, waiting");
 	run_to(17080);
 	shows("gx_batterie_waiting", "15 s after the session ended, less 20 ms: still waiting");
 	run_to(17100);
@@ -9571,6 +9627,110 @@ static void test_gx_views(void)
 	check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 7 && strstr(app->layout_text, "\"EXTRA\"") != NULL && strcmp(app->layout.pages[2].title, "Batterie") == 0 && page_at(1) && text_follows(),
 	      "the catalogue grows: the views are made anew with the pages of the Cerbo behind them, and the page shown stays");
 
+	// Views made from a catalogue that grows by a page while a page of the Cerbo shows: the display stays on
+	// that page. A vehicle of eight values and the battery has three pages of its own, and the five behind them;
+	// four values more that its profile did not name are a fourth page. (Found on 2026-10-12: the number of the
+	// page stayed, and the screen went from Batterie to Werte 4 without an input.)
+	for(int gx = 0; gx < 5; gx++)
+	{
+		static const char *const titles[] = {"Batterie", "Energie", "Alternator", "Wasser", "Klima"};
+		char title[32], dots[32], rule[200];
+
+		garage();
+		cerbo_there();
+		wican.config = EIGHT_CONFIG;
+		wican.values = "{\"A1\":1,\"A2\":2}";
+		start();
+		run(2100);
+		turn(3 + gx);
+		snprintf(title, sizeof(title), "title: %s", titles[gx]);
+		snprintf(dots, sizeof(dots), "dots: %d/8", 4 + gx);
+		snprintf(rule, sizeof(rule), "a vehicle of eight values with the address: three pages of its own, and the display on %s, page %d of 8", titles[gx], 4 + gx);
+		check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 8 && strcmp(app->layout.pages[2].title, "Werte 3") == 0 && strcmp(app->layout.pages[3].title, "Batterie") == 0 &&
+		      page_at(3 + gx) && has_line(title) && has_line(dots), rule);
+		wican.values = "{\"A1\":1,\"A2\":2,\"B1\":3,\"B2\":4,\"B3\":5,\"B4\":6}";
+		run_to(4100);
+		snprintf(dots, sizeof(dots), "dots: %d/9", 5 + gx);
+		snprintf(rule, sizeof(rule), "four values more make a fourth page of the vehicle: the display stays on %s, which is page %d of 9 now - no other page comes under the number it had",
+		         titles[gx], 5 + gx);
+		check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 9 && app->poll.catalog.count == 13 && strcmp(app->layout.pages[3].title, "Werte 4") == 0 &&
+		      strcmp(app->layout.pages[4].title, "Batterie") == 0 && page_at(4 + gx) && has_line(title) && has_line(dots) && text_follows(), rule);
+	}
+	// A page of the vehicle keeps its number, as app.h says: the pages before it are the pages they were
+	for(int page = 0; page < 3; page++)
+	{
+		char rule[200];
+
+		garage();
+		cerbo_there();
+		wican.config = EIGHT_CONFIG;
+		wican.values = "{\"A1\":1,\"A2\":2}";
+		start();
+		run(2100);
+		turn(page);
+		wican.values = "{\"A1\":1,\"A2\":2,\"B1\":3,\"B2\":4,\"B3\":5,\"B4\":6}";
+		run_to(4100);
+		snprintf(rule, sizeof(rule), "the same on page %d, one of the vehicle: it keeps its number when the views grow by a page", page + 1);
+		check(app->layout.page_count == 9 && page_at(page) && has_line(page == 0 ? "title: Werte 1" : page == 1 ? "title: Werte 2" : "title: Werte 3"), rule);
+	}
+	// ... also the last one, which was the page of the battery voltage and is the page of the four new values now
+	check(has_line("item: B1 | 3,0 |  | normal | number | -1") && has_line("dots: 3/9"), "the last page of the vehicle shows the values that came: its number stayed, its content is what the catalogue gives");
+
+	// The pages of the Cerbo go while one of them shows, and the views of the vehicle have a page at its number:
+	// the number stays, as app_web.h says. Nine pages made from the catalogue of the W906 give way to seven when
+	// the five are appended, and come back when these go.
+	garage();
+	cerbo_there();
+	machine.no_builtin = true;
+	start();
+	run(2100);
+	turn(7);
+	check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 12 && page_at(7) && has_line("title: Batterie") && has_line("dots: 8/12"),
+	      "a display without built-in views of the vehicle: seven of its nine generated pages, the five of the Cerbo, and Batterie shown");
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	check(browser_settings("{\"cerbo\":\"\"}") && app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 9 && page_at(7) && (run(100), has_line("title: Werte 8")),
+	      "the address is taken away: nine pages of the vehicle, and the display stays at the number that still has a page - it is not thrown to the first");
+	check(browser_settings("{\"cerbo\":\"" GX_HOST "\"}") && app->layout.page_count == 12 && page_at(7) && strcmp(app->layout.pages[7].title, "Batterie") == 0,
+	      "the address comes back: the number stays once more, and Batterie stands at it again");
+
+	// Another kind of views starts at its first page, as app.h says - also when a page of the Cerbo was shown:
+	// the built-in views of a display that does not know its vehicle yet, and then the profile of another one
+	garage();
+	cerbo_there();
+	wican.config = other_config;
+	wican.values = other_values;
+	start();
+	turn(8);
+	check(app->source == APP_LAYOUT_BUILTIN && app->layout.page_count == 12 && app->nav.page == 8 && strcmp(app->layout.pages[8].title, "Energie") == 0,
+	      "a display with the address before the catalogue is loaded: the built-in views with the five pages, and the driver turns to Energie");
+	run(100);
+	check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 7 && strcmp(app->layout.pages[3].title, "Energie") == 0 && page_at(0),
+	      "the profile of another vehicle arrives: views made from its catalogue, and they start at their first page - other views, whatever page was shown");
+
+	// The built-in views of the W906 with the pages of the Cerbo: made anew for a catalogue that grew, on every
+	// one of the twelve pages - nothing moves, not a byte of the views and not the page
+	for(int page = 0; page < 12; page++)
+	{
+		static char with_extra[sizeof(w906_values) + 16];
+		static layout_t views;
+		static char views_text[LAYOUT_TEXT_MAX + 1];
+		uint32_t sum;
+		char rule[200];
+
+		scene_camper(true);
+		turn(page);
+		memcpy(&views, &app->layout, sizeof(views));
+		strcpy(views_text, app->layout_text);
+		sum = app->catalog_sum;
+		snprintf(with_extra, sizeof(with_extra), "{\"EXTRA\":1,%s", w906_values + 1);
+		wican.values = with_extra;
+		run_to(4100);
+		snprintf(rule, sizeof(rule), "the W906 on page %d of 12 when a value its profile did not name arrives: the views are made anew and are the same bytes and the same text, and the page is "
+		         "the page it was", page + 1);
+		check(app->catalog_sum != sum && app->poll.catalog.count == 37 && app->source == APP_LAYOUT_BUILTIN && page_at(page) && memcmp(&views, &app->layout, sizeof(views)) == 0 &&
+		      strcmp(views_text, app->layout_text) == 0 && app->layout.page_count == 12 && text_follows(), rule);
+	}
+
 	// The built-in views damaged, the catalogue not loaded: one page of the battery voltage, and the five
 	garage();
 	cerbo_there();
@@ -9579,6 +9739,210 @@ static void test_gx_views(void)
 	start();
 	check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 6 && strcmp(app->layout.pages[0].title, "Werte 1") == 0 && strcmp(app->layout.pages[1].title, "Batterie") == 0 && text_follows(),
 	      "a display without built-in views of the vehicle and with the address: the page made from the catalogue it has, and the five of the Cerbo");
+}
+
+/*
+ * A walk for one rule: the same views made anew keep the page - a page of the vehicle its number, a page of the
+ * Cerbo itself. Vehicles nobody made views for, with profiles of 1 to 30 values; values their profile does not
+ * name arrive, a few at a time, and each makes the views anew; on a firmware without built-in views the adapter
+ * also restarts with another profile, larger or smaller. The address of the Cerbo comes and goes, the driver
+ * turns. At the end of every step in which the display made the same kind of views anew, the page is compared
+ * with what the number of names in the catalogue says, reckoned here: four names a page, at most seven pages of
+ * the vehicle in front of the five of the Cerbo.
+ */
+static struct
+{
+	uint32_t dice;
+	// What the step before left
+	uint32_t sum;
+	app_layout_source_t source;
+	int page, first;
+	bool there;                 // the views had a page at that number
+	char title[LAYOUT_TITLE_SIZE];
+	// What was seen
+	long anew, stayed, moved, kept, gone, wrong, renamed;
+} pages_walk;
+
+static int pages_pick(int count)
+{
+	pages_walk.dice = pages_walk.dice * 1664525u + 1013904223u;
+	return (int)((pages_walk.dice >> 8) % (uint32_t)count);
+}
+
+// The first page of the Cerbo in views the display chose itself, by the names of the catalogue: -1 without them
+static int pages_first(void)
+{
+	// Four names a page; a catalogue that is not loaded yet is the battery voltage alone
+	int vehicle = app->source == APP_LAYOUT_BUILTIN ? 7 : app->poll.catalog.count == 0 ? 1 : (app->poll.catalog.count + 3) / 4;
+
+	if(!cerbo_on(&app->cerbo) || machine.no_builtin_gx || (app->source != APP_LAYOUT_BUILTIN && app->source != APP_LAYOUT_GENERATED)) return -1;
+	return vehicle > 7 ? 7 : vehicle;
+}
+
+// The driver or the browser did something: what the next step finds
+static void pages_note(void)
+{
+	pages_walk.sum = app->catalog_sum;
+	pages_walk.source = app->source;
+	pages_walk.page = app->nav.page;
+	pages_walk.first = pages_first();
+	pages_walk.there = app->nav.page >= 0 && app->nav.page < app->layout.page_count;
+	pages_walk.title[0] = '\0';
+	if(pages_walk.there) strcpy(pages_walk.title, app->layout.pages[app->nav.page].title);
+}
+
+// The end of a step
+static void pages_step(void)
+{
+	if(app->catalog_sum != pages_walk.sum && app->source == pages_walk.source && app->source == APP_LAYOUT_GENERATED)
+	{
+		int first = pages_first();
+		bool of_cerbo = pages_walk.there && pages_walk.first >= 0 && first >= 0 && pages_walk.page >= pages_walk.first;
+
+		pages_walk.anew++;
+		// A number the views before had no page at any more: nav.h was about to find another page, and does
+		if(!pages_walk.there) pages_walk.gone++;
+		else if(of_cerbo)
+		{
+			int wanted = first + (pages_walk.page - pages_walk.first);
+
+			if(app->nav.page != wanted) pages_walk.wrong++;
+			else if(strcmp(app->layout.pages[wanted].title, pages_walk.title) != 0) pages_walk.renamed++;
+			else if(wanted != pages_walk.page) pages_walk.moved++;
+			else pages_walk.stayed++;
+		}
+		// A page of the vehicle keeps its number while the views have a page there; nav.h finds another one if not
+		else if(pages_walk.page < app->layout.page_count)
+		{
+			if(app->nav.page != pages_walk.page) pages_walk.wrong++;
+			else pages_walk.kept++;
+		}
+		else pages_walk.gone++;
+	}
+	pages_note();
+}
+
+// A profile of `count` values, P01 to P<count>
+static const char *pages_profile(int count)
+{
+	static char text[2048];
+	size_t length = 0;
+
+	for(int i = 0; i < count; i++) length += (size_t)snprintf(text + length, sizeof(text) - length, "%s\"P%02d\":{\"class\":\"none\",\"unit\":\"\"}", i == 0 ? "{" : ",", i + 1);
+	snprintf(text + length, sizeof(text) - length, "}");
+	return text;
+}
+
+// What the adapter delivers: the first value of its profile, and `extra` values the profile does not name
+static const char *pages_values(int extra)
+{
+	static char text[512];
+	size_t length = (size_t)snprintf(text, sizeof(text), "{\"P01\":1");
+
+	for(int i = 0; i < extra; i++) length += (size_t)snprintf(text + length, sizeof(text) - length, ",\"E%02d\":%d", i + 1, i);
+	snprintf(text + length, sizeof(text) - length, "}");
+	return text;
+}
+
+static void test_gx_page_walk(void)
+{
+	// A number the views have no page at is no page of the Cerbo. A firmware without built-in views: seven of
+	// the nine pages of the W906 and the five; the adapter restarts with a profile of nine values. The views
+	// for the catalogue that is not loaded yet have one page of the vehicle, six in all - the number 6 has no
+	// page there -, and those for the new catalogue have three and five, in the same step: the number stays,
+	// and Wasser stands at it.
+	garage();
+	cerbo_there();
+	machine.no_builtin = true;
+	start();
+	run(2100);
+	turn(6);
+	check(app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 12 && page_at(6) && has_line("title: Werte 7") && has_line("dots: 7/12"),
+	      "a display without built-in views on the last page of the vehicle that has room in front of the five: Werte 7");
+	adapter_restart(&wican, 4711, 100);
+	wican.config = pages_profile(9);
+	wican.values = pages_values(0);
+	run(3000);
+	check(app->source == APP_LAYOUT_GENERATED && app->poll.catalog.count == 10 && app->layout.page_count == 8 && strcmp(app->layout.pages[6].title, "Wasser") == 0 && page_at(6),
+	      "the adapter restarts with a smaller profile: the views are made anew twice at once, the number of the page stays through both, and the display shows what stands there now");
+	machine.no_builtin = false;
+
+	memset(&pages_walk, 0, sizeof(pages_walk));
+	pages_walk.dice = 20261012;
+	for(int life = 0; life < 24; life++)
+	{
+		int extra = 0;
+		bool address = life % 4 != 3;
+
+		garage();
+		if(address) cerbo_there();
+		// Every second life on a firmware without built-in views of the vehicle: its views are always made from
+		// the catalogue, also while that is loaded anew
+		machine.no_builtin = life % 2 == 1;
+		wican.config = pages_profile(1 + pages_pick(30));
+		wican.values = pages_values(0);
+		start();
+		pages_note();
+		watch_trace = pages_step;
+		run(2100);
+		app_do(app, NAV_DO_RELEASE_ON, now);
+		for(int event = 0; event < 40; event++)
+		{
+			int what = pages_pick(10);
+
+			if(what < 2)
+			{
+				turn(pages_pick(9) - 4);
+				pages_note();
+				run(100);
+			}
+			else if(what < 4)
+			{
+				// To one of the last five pages: those of the Cerbo, where the views have them
+				turn(app->layout.page_count - 1 - pages_pick(5) - app->nav.page);
+				pages_note();
+				run(100);
+			}
+			else if(what < 8 && extra < 20)
+			{
+				// One to five values more that the profile does not name
+				extra += 1 + pages_pick(5);
+				if(extra > 20) extra = 20;
+				wican.values = pages_values(extra);
+				run(2500);
+			}
+			else if(what < 9)
+			{
+				address = !address;
+				browser_settings(address ? "{\"cerbo\":\"" GX_HOST "\"}" : "{\"cerbo\":\"\"}");
+				pages_note();
+				run(500);
+			}
+			else if(machine.no_builtin)
+			{
+				// The adapter restarts with another profile, and without the values nobody named. Its answers
+				// take twenty steps: the views made for the catalogue that is not loaded yet - one page of the
+				// vehicle - are then views a step ends with, and the walk sees them
+				adapter_restart(&wican, 1000 + (uint32_t)event, 100);
+				wican.config = pages_profile(1 + pages_pick(30));
+				extra = 0;
+				wican.values = pages_values(0);
+				latency_ms = 400;
+				run(6000);
+				latency_ms = 0;
+			}
+		}
+		watch_trace = NULL;
+	}
+	machine.no_builtin = false;
+
+	printf("  walk of the pages: generated views made anew %ld times; a page of the Cerbo was shown and stayed that page %ld times at its number and %ld times at another one; "
+	       "a page of the vehicle kept its number %ld times, and %ld times the views had no page there any more\n",
+	       pages_walk.anew, pages_walk.stayed, pages_walk.moved, pages_walk.kept, pages_walk.gone);
+	check(pages_walk.wrong == 0 && pages_walk.renamed == 0, "in a walk of 24 vehicles whose catalogues grow and come anew, views made anew never put another page on the screen: a page of the Cerbo stays "
+	      "that page, a page of the vehicle keeps its number");
+	check(pages_walk.anew >= 200 && pages_walk.moved >= 40 && pages_walk.stayed >= 40 && pages_walk.kept >= 40,
+	      "the walk makes views anew in numbers: with a page of the Cerbo shown whose number has to change, with one whose number stays, and with a page of the vehicle shown");
 }
 
 // A day with the pages of the Cerbo, for the telling over two stacks: every page, the park, the long press, the
@@ -9722,6 +10086,7 @@ int main(void)
 	test_gx_camper();
 	test_gx_stored();
 	test_gx_views();
+	test_gx_page_walk();
 	test_gx_over_stacks();
 	test_random_runs();
 

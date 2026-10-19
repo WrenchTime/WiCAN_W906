@@ -9,7 +9,8 @@ listens on port 1883, takes CONNECT, SUBSCRIBE and PINGREQ as a broker does, and
 display/gx/values to whoever subscribed to that topic. And it can do everything wrong a broker or a flow can
 do wrong, one fault at a time, to show what the display makes of it.
 
-  python3 mock_flow.py                      a bundle a second, as the flow of the owner sends them
+  python3 mock_flow.py                      a bundle a second (the flow of the owner leaves about three of twenty
+                                            out: gaps of up to 5.3 s, heard on 2026-10-11 and 2026-10-12)
   python3 mock_flow.py --fault flood        ... a hundred a second
   python3 mock_flow.py --list               the faults, and what the display has to do with each
   python3 mock_flow.py --pieces 7 --pause 30    everything is written in pieces of 7 bytes, 30 ms apart
@@ -38,6 +39,16 @@ PORT = 1883
 BUNDLE_MAX = 1400       # bytes of a bundle; the flow sends none that is longer (cerbo.h: CERBO_BUNDLE_MAX)
 VALUES_MAX = 64
 KEEPALIVE_FACTOR = 1.5  # a broker ends a connection that sent nothing for this many keep-alives (MQTT 3.1.1, 3.1.2.10)
+TOKENS_MAX = 256        # tokens the JSON reader of the display has room for (cerbo.h: CERBO_TOKENS)
+# What a subscriber sends is a CONNECT, a SUBSCRIBE and a PINGREQ: 64 bytes at the most from a display
+# (mqtt_sub.h: MQTT_SUB_OUT_MAX). A packet that announces more than this is not waited for.
+PACKET_MAX = 1024
+# What may wait for a client that does not read, as the broker of a Cerbo has it (flashmq.conf of Venus OS:
+# client_max_write_buffer_size 8388608). A display that falls behind a flood ends its session long before
+# (after 30 s, with 2 MB waiting): this is for a client that never reads.
+WAITING_MAX = 8 * 1024 * 1024
+SHOWN_MAX = 64          # characters of a text a client sent that are printed
+LATE_S = 12.0           # how long the fault "late" holds a bundle back
 
 # What the flow publishes: (key, what it is around, how far it moves, decimals). "on"/"off" for the switches.
 VALUES = (
@@ -64,33 +75,56 @@ FAULTS = {
     "refuse_connect": "CONNACK with return code 5. Display: closes, tries again after 2, 5, 10, 30 s",
     "refuse_subscribe": "SUBACK with return code 0x80. Display: closes, tries again",
     "close": "the broker closes the connection every ten seconds. Display: a new session each time, the values stay",
-    "garbage": "bytes that are no MQTT. Display: closes, tries again",
-    "qos1": "a PUBLISH with QoS 1. Display: closes (it cannot acknowledge), tries again",
-    "puback": "a packet a subscriber does not get. Display: closes, tries again",
+    "garbage": "bytes that are no MQTT, behind the SUBACK. Display: closes, and tries again after 2, 5, 10 and then every "
+               "30 s - a session that brought no bundle is an attempt that failed. \"Warte auf Cerbo\" for 15 s behind each "
+               "of these sessions, \"Cerbo nicht erreichbar\" for the rest of the wait (gx_live on a PC, 2026-10-12: 5 "
+               "sessions in the first minute, where there were 29 before that day; not reachable from 32 s on)",
+    "qos1": "a PUBLISH with QoS 1. Display: closes (it cannot acknowledge), tries again as with garbage",
+    "puback": "a packet a subscriber does not get, behind the SUBACK. Display: closes, tries again as with garbage",
     "no_json": "a payload that is no JSON. Display: refused and counted, the values grow old",
     "types": "v, boot, t or values of the wrong type or out of range, in turn. Display: refused and counted",
     "deep": "a bundle nested deeper than the reader goes. Display: refused and counted",
-    "tokens": "a bundle with more tokens than the reader has room for. Display: refused and counted",
-    "long": "a bundle of more than 1400 bytes. Display: refused and counted",
-    "huge": "a message of 1 MB every 30 s, bundles in between. Display: it goes by, nothing of it is kept; the bundles "
-            "behind it are late",
+    "tokens": "a bundle of less than 1400 bytes with more tokens than the reader has room for (256). Display: refused "
+              "as invalid and counted",
+    "long": "a bundle of more than 1400 bytes. Display: refused as too long and counted",
+    "huge": "a message of 1 MB every 30 s, bundles in between. Display: the megabyte never goes by - it reads 1024 bytes "
+            "every 30 ms, so a megabyte takes 30 s, the PINGREQ behind it stays without its answer for 20 s, and the "
+            "session ends and is made anew each time (3 sessions in 75 s, no message counted as refused: gx_live on a "
+            "PC, 2026-10-12). Nothing of it is kept; the values grow old meanwhile",
     "length_only": "the head of a message of 500 bytes, and then nothing. Display: waits, ends the session when its "
                    "PINGREQ stays without an answer",
     "topic": "bundles on another topic. Display: refused and counted",
     "retained": "bundles with the RETAIN flag. Display: refused and counted",
     "version": "bundles of version 2. Display: refused, \"Cerbo-Flow ist neuer als dieses Display\"",
-    "flood": "a hundred bundles a second. Display: live; each is read, the last one counts",
+    "flood": "a hundred bundles a second, 86 KB. Display: it reads 34 KB a second and falls behind - every bundle is "
+             "read, but late: the lag grows to 17 s (values dimmed while the view says live), and after 30 s the "
+             "session ends for a PINGRESP that lies behind the backlog, and is made anew (gx_live on a PC, 2026-10-12: "
+             "1857 bundles taken in 60 s, 2 sessions). Up to 33 bundles of 1 KB a second it keeps up",
     "many": "70 values in a bundle. Display: 64 are kept, 6 counted as passed over",
     "names": "keys without GX_, in small letters, too long, among good ones. Display: those are passed over",
     "numbers": "numbers beyond every measure among good ones. Display: a dash where the number has no text",
     "missing": "half of the values are missing from every second bundle. Display: those are dashes at once, no yellow ring",
-    "late": "from second 15 of every half minute on the bundles are held back for eight seconds. Display: values as "
-            "old as their lag (dimmed), lag_ms of /api/info",
-    "clock_lost": "after 20 s the clock of the flow loses eleven seconds. Display: the values dimmed, fresh again about "
-                  "a minute later",
+    "late": "from second 15 of every half minute on the bundles are held back for twelve seconds. Display: \"Warte auf "
+            "Cerbo\" after 10 s without a bundle; then they arrive, and each is as old as its lag (lag_ms of /api/info, "
+            "10.7 s at first): live, the values dimmed until the lag is below 10 s (gx_live on a PC, 2026-10-12: quiet "
+            "for 3 s, then a lag of 10697 ms at most)",
+    "clock_lost": "after 20 s the clock of the flow loses eleven seconds. Display: live, and the values dimmed - the next "
+                  "bundle counts as 10.9 s late (lag_ms of /api/info). The lag wears off by 100 ms a second: after 10 s "
+                  "the values are fresh for a part of every second, after 20 s for good",
     "two_flows": "two runs of the flow publish in turn. Display: the values stay, boots of /api/info runs",
     "restart": "the flow starts anew every 20 s: another boot, t from 0. Display: no lag, boots counts",
+    "reset": "the broker answers CONNECT and resets the connection at once, as one that restarts. Display: the attempt "
+             "failed, the next ones follow after 2, 5, 10, 30 s. On a PC the SUBSCRIBE meets a socket that was reset: "
+             "gx_live has to live through that (make check in display/host/gx_live)",
 }
+
+
+def shown(text):
+    """A text a client sent, as it may be printed: what is no printable character - a control character, an
+    escape sequence for the terminal, a mark that turns the direction of writing - is written as its number,
+    and a long text is cut"""
+    out = "".join(character if character.isprintable() else "\\u%04x" % ord(character) for character in text[:SHOWN_MAX])
+    return out + ("... (%d characters)" % len(text) if len(text) > SHOWN_MAX else "")
 
 
 def fixed_header(first, remaining):
@@ -199,7 +233,10 @@ class Flow:
         elif fault == "deep":
             text = text[:-1] + ",\"more\":%s1%s}" % ("[" * 9, "]" * 9)
         elif fault == "tokens":
-            text = text[:-1] + ",\"more\":[%s]}" % ",".join("1" for _ in range(300))
+            # 95 tokens of the bundle, 2 for the member and its array, 170 for its numbers: 267, in 349 bytes more.
+            # (Until 2026-10-12 there were 300 numbers: a bundle of more than 1400 bytes, which the display
+            # refused for its length before it counted a token.)
+            text = text[:-1] + ",\"more\":[%s]}" % ",".join("1" for _ in range(170))
         return topic, text.encode("utf-8"), retain, qos
 
 
@@ -209,6 +246,7 @@ class Client:
         self.peer = "%s:%d" % peer
         self.received = bytearray()
         self.waiting = []       # (not before this time, bytes), in the order they are to leave
+        self.waiting_bytes = 0  # ... and how many bytes that is
         self.greeted = False
         self.subscribed = False
         self.keepalive = 0
@@ -216,6 +254,7 @@ class Client:
         self.since = now        # when it connected
         self.write_at = 0.0     # no piece leaves before this
         self.closing = False    # closed once everything that waits has left
+        self.reset = False      # ... and with a reset (RST) instead of a close
         self.stuck = False      # in the middle of a message that never ends: nothing follows, no answer either
         self.sent = 0           # bundles
 
@@ -252,6 +291,9 @@ class Broker:
 
     def queue(self, client, data, now, delay=0.0):
         client.waiting.append((now + delay, bytes(data)))
+        client.waiting_bytes += len(data)
+        if client.waiting_bytes > WAITING_MAX and client in self.clients:
+            self.drop(client, "does not read, %d bytes wait for it: closed" % client.waiting_bytes)
 
     def held(self, now):
         """Nothing is written right now: the pause of --hold, as a radio link that stands"""
@@ -269,19 +311,26 @@ class Broker:
             except OSError:
                 self.drop(client, "gone while it was written to")
                 return
+            client.waiting_bytes -= count
             if count < len(data):
                 client.waiting[0] = (due, data[count:])
             else:
                 client.waiting.pop(0)
             if self.pieces:
                 client.write_at = now + self.pause
-        if client.closing and not client.waiting:
-            self.drop(client, "closed by the broker")
+        if client.closing and not client.waiting and client in self.clients:
+            if client.reset:
+                # Linger 0: close() sends a RST, and what the client sends next meets a connection that is gone
+                # (struct linger: two numbers of the PC, on and 0 s)
+                client.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, (1).to_bytes(4, sys.byteorder) + bytes(4))
+            self.drop(client, "reset by the broker" if client.reset else "closed by the broker")
 
     # -------------------------------------------------------------------------------- what is read
 
     def packets(self, client):
-        """The whole packets in what the client sent, as (first byte, body)"""
+        """The whole packets in what the client sent, as (first byte, body). (0, b"") for a length of more than
+        four bytes, (first byte, None) for a packet that announces more than PACKET_MAX bytes: neither is
+        waited for."""
         found = []
         data = client.received
         while len(data) >= 2:
@@ -297,6 +346,8 @@ class Broker:
                     break
                 if shift > 21:
                     return found + [(0, b"")]
+            if remaining > PACKET_MAX:
+                return found + [(data[0], None)]
             if len(data) < at + remaining:
                 break
             found.append((data[0], bytes(data[at:at + remaining])))
@@ -308,6 +359,9 @@ class Broker:
         is no display, and gets nothing more."""
         kind = first >> 4
         client.heard = now
+        # Before everything else: also a broker that answers nothing must not keep what never ends
+        if body is None:
+            return self.refuse(client, "a packet of more than %d bytes" % PACKET_MAX)
         if self.fault == "mute" or client.stuck:
             return None
         if kind == 1 and not client.greeted:
@@ -321,15 +375,21 @@ class Broker:
                 self.say("%s: CONNECT with the flags 0x%02X - a display sets Clean Session and nothing else (no will, no name)"
                          % (client.peer, flags))
             client.greeted = True
-            self.say("%s: CONNECT as \"%s\", keep-alive %d s" % (client.peer, name, client.keepalive))
+            self.say("%s: CONNECT as \"%s\", keep-alive %d s" % (client.peer, shown(name), client.keepalive))
             self.queue(client, b"\x20\x02\x00" + (b"\x05" if self.fault == "refuse_connect" else b"\x00"), now)
-            if self.fault == "refuse_connect":
+            if self.fault in ("refuse_connect", "reset"):
                 client.closing = True
+                client.reset = self.fault == "reset"
         elif kind == 8 and first == 0x82 and client.greeted:
-            # 3.8: the packet identifier, then topic filters with a requested QoS each
+            # 3.8: the packet identifier, then topic filters with a requested QoS each - at least one, of at
+            # least one character ([MQTT-3.8.3-3]; a SUBSCRIBE without one is a protocol violation, and the
+            # answer to it would have no identifier to name)
+            size = int.from_bytes(body[2:4], "big")
+            if len(body) < 6 or size < 1 or len(body) < 4 + size + 1:
+                return self.refuse(client, "a SUBSCRIBE without a topic filter and its QoS")
             identifier = body[:2]
-            topic = body[4:4 + int.from_bytes(body[2:4], "big")].decode("utf-8", "replace")
-            self.say("%s: SUBSCRIBE to \"%s\"" % (client.peer, topic))
+            topic = body[4:4 + size].decode("utf-8", "replace")
+            self.say("%s: SUBSCRIBE to \"%s\"" % (client.peer, shown(topic)))
             if self.fault == "refuse_subscribe" or topic != TOPIC:
                 self.queue(client, b"\x90\x03" + identifier + b"\x80", now)
                 client.closing = self.fault == "refuse_subscribe"
@@ -374,7 +434,9 @@ class Broker:
             return
         topic, payload, retain, qos = self.flow.bundle(now)
         packet = publish(topic, payload, retain, qos)
-        delay = 8.0 if self.fault == "late" and seconds % 30 >= 15 else 0.0
+        # Longer than a value of the Cerbo is fresh (cerbo.h: CERBO_FRESH_MS, 10 s), so that the display has a lag to
+        # show: with the eight seconds of before 2026-10-12, when that limit was 5 s, nothing would be dimmed now
+        delay = LATE_S if self.fault == "late" and seconds % 30 >= 15 else 0.0
         extra = b""
         if now >= self.extra_at and self.fault in ("huge", "length_only"):
             self.extra_at = now + 30

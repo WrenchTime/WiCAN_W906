@@ -7,7 +7,8 @@
 #   build/gx_live 127.0.0.1 60          a minute against display/tools/mock_flow.py on this PC
 #   build/gx_live 192.168.88.2 300      five minutes of listening to the broker of the Cerbo
 #   make check                          the whole way on this PC: mock_flow.py as the Cerbo for ten seconds,
-#                                       gx_live as the display; port 1883 of this PC has to be free
+#                                       gx_live as the display; then eight seconds against a broker that
+#                                       resets every connection. Port 1883 of this PC has to be free
 #   make clean
 #
 # Built on demand only: "make" in display/host/platform does not come by here. The CI builds it
@@ -47,6 +48,16 @@ check: $(BUILD)/gx_live
 	@grep -q "^refused 0: " $(BUILD)/gx_live.log
 	@grep -q "^values in a bundle: 43 to 43; " $(BUILD)/gx_live.log
 	@echo "OK: one session, a bundle a second, none refused"
+	@# A broker that resets the connection behind its CONNACK (--fault reset): the SUBSCRIBE of the display meets a
+	@# socket that was reset, which raises SIGPIPE on a PC. gx_live has to go on - attempts that fail after 0, 2
+	@# and 7 s, no session - and end by its time with its summary, not by the signal (status 141).
+	@$(PYTHON) ../../tools/mock_flow.py --host 127.0.0.1 --fault reset --seconds 12 > $(BUILD)/mock_reset.log 2>&1 & \
+	sleep 1; $(BUILD)/gx_live 127.0.0.1 8 > $(BUILD)/gx_reset.log 2>&1; status=$$?; wait; \
+	tail -n 4 $(BUILD)/gx_reset.log; echo "status $$status"; test $$status -eq 0
+	@test "$$(grep -c "reset by the broker" $(BUILD)/mock_reset.log)" -ge 2
+	@test "$$(grep -c -E "I gx: (not sent|lost)" $(BUILD)/gx_reset.log)" -ge 2
+	@grep -q -E "^sessions 0, bundles taken 0, " $(BUILD)/gx_reset.log
+	@echo "OK: a broker that resets ends attempts, not the program"
 
 $(BUILD)/gx_live: gx_live.c $(MAIN)/gx.c $(SOURCES) $(HEADERS)
 	@mkdir -p $(BUILD)

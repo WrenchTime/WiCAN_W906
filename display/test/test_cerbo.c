@@ -341,8 +341,11 @@ static void test_constants(void)
 	check(CERBO_KEEPALIVE_S == 30 && CERBO_PING_MS == 10000 && CERBO_PONG_MS == 20000 && CERBO_SESSION_MS == 15000 && CERBO_GRACE_MS == 15000,
 	      "keep alive 30 s, a PINGREQ every 10 s, 20 s for its answer, 15 s to a session, 15 s of waiting before not reachable");
 	check(COUNT(waits) == 4 && waits[0] == 2000 && waits[1] == 5000 && waits[2] == 10000 && waits[3] == 30000, "the waits after a failed attempt are 2, 5, 10 and 30 s");
-	check(CERBO_FRESH_MS == 5000 && CERBO_KEPT_MS == 60000 && CERBO_LIVE_MS == 10000 && CERBO_SILENT_MS == 20000,
-	      "fresh below 5 s, kept below 60 s, live below 10 s, silent from 20 s on");
+	check(CERBO_FRESH_MS == 10000 && CERBO_KEPT_MS == 60000 && CERBO_LIVE_MS == 10000 && CERBO_SILENT_MS == 20000,
+	      "fresh below 10 s, kept below 60 s, live below 10 s, silent from 20 s on");
+	// The flow of the owner does not publish every second: gaps of up to 5.3 s, about three ticks missing every
+	// 20 s (measured 2026-10-11 and 2026-10-12). A value must not be dimmed for that again and again.
+	check(CERBO_FRESH_MS == CERBO_LIVE_MS && CERBO_FRESH_MS > 5300, "a value is shown normally for as long as the source counts as delivering, and longer than the flow pauses");
 	check(CERBO_YIELD_PER_MILLE == 100 && CERBO_LAG_MAX_MS == 45000, "the base yields 100 ms a second, a lag above 45 s is not believed");
 	check(CERBO_PING_MS + CERBO_PONG_MS <= CERBO_LAG_MAX_MS, "what arrives on a session that lives waited no longer than a lag that is believed");
 	check(2 * CERBO_PING_MS < 1500u * CERBO_KEEPALIVE_S, "the PINGREQ come often enough for the keep alive time the broker was told");
@@ -649,7 +652,7 @@ static void test_retry(void)
 	now = 112300;
 	cerbo_opened(cerbo, now);
 	check(next() == CERBO_DO_SEND && (connack(0), next()) == CERBO_DO_SEND && (suback(CERBO_PACKET_ID, 0), cerbo->phase) == CERBO_SESSION, "the seventh attempt makes a session");
-	check(waits_after_down(113000, 2000), "after a session that stood the waits start from the beginning: 2 s");
+	check(arrive(112500, 7, 1000) == 0 && waits_after_down(113000, 2000), "after a session that brought a bundle the waits start from the beginning: 2 s");
 	check(waits_after_down(115100, 5000), "... and go on with 5 s");
 
 	// A connection that stood without a session does not start them anew
@@ -676,6 +679,150 @@ static void test_retry(void)
 	now = 5000;
 	cerbo_network(cerbo, true, now);
 	check(next() == CERBO_DO_OPEN, "a report before any connection delays nothing");
+}
+
+static const char *sized(size_t size);
+
+// The display after two attempts that failed: the third one was opened at 12100. The wait behind it is 10 s,
+// and 2 s only if something starts the waits anew.
+static bool third_attempt(void)
+{
+	begin();
+	now = 5000;
+	cerbo_network(cerbo, true, now);
+	return next() == CERBO_DO_OPEN && waits_after_down(5050, 2000) && waits_after_down(7100, 5000) && now == 12100;
+}
+
+// The fresh connection that follows the order to open handed out last, as far as the SUBSCRIBE that was handed
+// out, at now
+static bool subscribed_now(void)
+{
+	cerbo_opened(cerbo, now);
+	if(next() != CERBO_DO_SEND) return false;
+	connack(0);
+	return next() == CERBO_DO_SEND && cerbo->phase == CERBO_SUBSCRIBING;
+}
+
+// The session of the fresh connection that follows the order to open handed out last, at now
+static bool session_now(void)
+{
+	cerbo_opened(cerbo, now);
+	if(next() != CERBO_DO_SEND) return false;
+	connack(0);
+	if(next() != CERBO_DO_SEND) return false;
+	suback(CERBO_PACKET_ID, 0);
+	return cerbo->phase == CERBO_SESSION;
+}
+
+// The session that stands is broken by the broker at `at`: a packet no subscriber gets. true if the display
+// closes at once and opens again `wait` ms later, not a millisecond earlier.
+static bool waits_after_garbage(uint64_t at, uint32_t wait)
+{
+	now = at;
+	feed((const uint8_t *)"\xE0\x00", 2);
+	return next() == CERBO_DO_CLOSE && next() == CERBO_DO_NOTHING && next_at(at + wait - 1) == CERBO_DO_NOTHING && next_at(at + wait) == CERBO_DO_OPEN;
+}
+
+/*
+ * The waits begin anew behind a session that brought a bundle, and behind no other connection. Before
+ * 2026-10-12 they began anew with every SUBACK: against a broker that takes the subscription and then breaks
+ * the session the display came back every 2 s for ever - 29 sessions in 60 s with mock_flow.py --fault garbage
+ * (measured by the sceptic on that day).
+ */
+static void test_barren(void)
+{
+	// The view 5, 15, ... 55 s after the display joined its network
+	static const cerbo_view_t minute[] = {CERBO_VIEW_CONNECTING, CERBO_VIEW_CONNECTING, CERBO_VIEW_CONNECTING, CERBO_VIEW_UNREACHABLE, CERBO_VIEW_UNREACHABLE, CERBO_VIEW_CONNECTING};
+	bool right = true;
+	uint32_t sessions_60 = 0, away_60 = 0, away = 0, waiting = 0, in_session = 0;
+	uint64_t ms, first_away = 0;
+
+	check(third_attempt() && session_now() && waits_after_down(12500, 10000), "a session that ends without a bundle counts as an attempt that failed: the waits go on, 10 s");
+	check(third_attempt() && session_now() && arrive(12300, 7, 1000) == 0 && waits_after_down(12500, 2000) && waits_after_down(14600, 5000),
+	      "a session that brought one bundle starts the waits anew: 2 s, then 5 s");
+	check(third_attempt() && subscribed_now() && arrive(12200, 7, 1000) == 0 && cerbo->bundles == 1 && (now = 12300, suback(CERBO_PACKET_ID, 0), cerbo->phase) == CERBO_SESSION &&
+	      waits_after_down(12500, 2000), "a bundle that came before the SUBACK is one of that session: 2 s");
+	check(third_attempt() && subscribed_now() && arrive(12200, 7, 1000) == 0 && cerbo->bundles == 1 && waits_after_down(12500, 10000),
+	      "a bundle on a connection that made no session does not start the waits anew: 10 s");
+	check(third_attempt() && subscribed_now() && arrive(12200, 7, 1000) == 0 && next_at(27099) == CERBO_DO_NOTHING && next_at(27100) == CERBO_DO_CLOSE && next_at(37099) == CERBO_DO_NOTHING &&
+	      next_at(37100) == CERBO_DO_OPEN, "... also when it is closed by an order, 15 s after it was opened");
+
+	// What is no bundle
+	check(third_attempt() && session_now(), "a session for messages that are refused");
+	now = 12300;
+	say("{\"v\":2}");
+	publish("display/gx/other", false, bundle_text(7, 1000, ONE));
+	publish(CERBO_TOPIC, true, bundle_text(7, 1000, ONE));
+	say("{\"v\":1,\"boot\":0}");
+	say(sized(1401));
+	check(refused() == 5 && cerbo->refused_version == 1 && cerbo->refused_topic == 1 && cerbo->refused_retained == 1 && cerbo->refused_invalid == 1 && cerbo->refused_long == 1 &&
+	      cerbo->bundles == 0 && waits_after_down(12500, 10000), "messages that were refused, for each of the five reasons, are no bundle: the waits go on");
+	check(third_attempt() && session_now() && next_at(22100) == CERBO_DO_SEND && (now = 22110, pingresp(), cerbo->pong_ms) == 22110 && waits_after_down(23000, 10000),
+	      "a broker that answers a PINGREQ and brings no bundle: the waits go on");
+
+	// The bundle has to be one of this connection
+	check(setup() && arrive(6000, 7, 1000) == 0 && waits_after_down(7000, 2000) && session_now() && waits_after_down(10000, 5000),
+	      "a bundle of the session before does not count for the next one: 2 s behind the first, 5 s behind the second");
+	check(session_now() && waits_after_down(16000, 10000) && session_now() && arrive(26500, 7, 2000) == 0 && waits_after_down(27000, 2000),
+	      "... 10 s behind the third, and 2 s again behind one that brought a bundle");
+
+	// However the session ends
+	check(third_attempt() && session_now() && waits_after_garbage(12500, 10000), "a session without a bundle that the broker breaks, closed by an order: the waits go on");
+	check(session_now() && arrive(22600, 7, 1000) == 0 && waits_after_garbage(22700, 2000), "a session with a bundle that the broker breaks: 2 s");
+	check(third_attempt() && session_now() && next_at(22100) == CERBO_DO_SEND && next_at(42100) == CERBO_DO_CLOSE && next_at(52099) == CERBO_DO_NOTHING && next_at(52100) == CERBO_DO_OPEN,
+	      "a session without a bundle that ends for a PINGREQ without its answer: the waits go on");
+	check(third_attempt() && session_now() && arrive(12300, 7, 1000) == 0 && next_at(22100) == CERBO_DO_SEND && next_at(42100) == CERBO_DO_CLOSE && next_at(44099) == CERBO_DO_NOTHING &&
+	      next_at(44100) == CERBO_DO_OPEN, "a session with a bundle that ends for a PINGREQ without its answer: 2 s");
+	check(third_attempt() && session_now() && (cerbo_network(cerbo, false, 12400), next_at(12400)) == CERBO_DO_CLOSE && (cerbo_network(cerbo, true, 12500), next_at(12500)) == CERBO_DO_OPEN &&
+	      session_now() && waits_after_down(12600, 2000), "a network that comes back starts the waits anew, as ever: 2 s behind a session without a bundle");
+
+	/*
+	 * A broker that takes the subscription and breaks every session, for ten minutes. The display joins its
+	 * network at 0, the platform asks every 10 ms, the broker answers at once and lets a session stand for one
+	 * of these rounds. reckon/barren_broker.py of 2026-10-12 reckons the numbers a second way, from the waits
+	 * and the grace time alone - and for the rule before: 30 sessions in the first minute, 299 in ten, and
+	 * never "not reachable".
+	 */
+	begin_at(0, HOST, false, NAME);
+	cerbo_network(cerbo, true, 0);
+	for(ms = 0; ms < 600000; ms += 10)
+	{
+		cerbo_do_t order = next_at(ms);
+		cerbo_view_t shown;
+
+		if(order == CERBO_DO_NOTHING && cerbo->phase == CERBO_SESSION)
+		{
+			feed((const uint8_t *)"\xE0\x00", 2);
+			if(next() != CERBO_DO_CLOSE) right = false;
+		}
+		else if(order == CERBO_DO_OPEN)
+		{
+			if(!session_now()) right = false;
+		}
+		else if(order != CERBO_DO_NOTHING) right = false;
+
+		shown = view();
+		if(shown == CERBO_VIEW_UNREACHABLE)
+		{
+			if(away == 0) first_away = ms;
+			away++;
+		}
+		else if(shown == CERBO_VIEW_CONNECTING) waiting++;
+		else if(shown == CERBO_VIEW_QUIET) in_session++;
+		else right = false;
+		if(ms % 10000 == 5000 && ms < 60000 && shown != minute[ms / 10000]) right = false;
+		if(ms == 59990)
+		{
+			sessions_60 = cerbo->sessions;
+			away_60 = away;
+		}
+	}
+	check(right && sessions_60 == 5 && cerbo->sessions == 23 && cerbo->bundles == 0,
+	      "a broker that breaks every session gets 5 connections in the first minute and 23 in ten: after 2, 5 and 10 s, then every 30 s");
+	check(right && first_away == 32040 && away_60 == 1500 && away == 28500 && waiting == 31477 && in_session == 23,
+	      "over such a broker the view is waiting for 15 s behind every session and not reachable for the rest of the wait: not reachable from 32 s on, for 15 s of the first minute and "
+	      "285 s of ten");
+	check(guards_intact() && written, "sessions without a bundle write nothing outside the source");
 }
 
 static void test_network(void)
@@ -717,17 +864,6 @@ static void test_network(void)
 	check((cerbo_down(cerbo, 7000), next_at(8999)) == CERBO_DO_NOTHING && next_at(9000) == CERBO_DO_OPEN, "... and is opened anew after the wait");
 }
 
-// The session of the fresh connection that follows the order to open handed out last, at now
-static bool session_now(void)
-{
-	cerbo_opened(cerbo, now);
-	if(next() != CERBO_DO_SEND) return false;
-	connack(0);
-	if(next() != CERBO_DO_SEND) return false;
-	suback(CERBO_PACKET_ID, 0);
-	return cerbo->phase == CERBO_SESSION;
-}
-
 static void test_ping(void)
 {
 	check(setup() && next_at(15299) == CERBO_DO_NOTHING && next_at(15300) == CERBO_DO_SEND && out_is("fixtures/mqtt_pingreq.txt"),
@@ -740,11 +876,11 @@ static void test_ping(void)
 	      "the next PINGREQ goes out 10 s after the one before, not after its answer");
 	check(next_at(35299) == CERBO_DO_NOTHING && next_at(35300) == CERBO_DO_SEND && cerbo->pings_open == 2, "a PINGREQ goes out every 10 s, also while the one before waits for its answer");
 	check(next_at(45299) == CERBO_DO_NOTHING && next_at(45300) == CERBO_DO_CLOSE && cerbo->phase == CERBO_IDLE, "a PINGREQ without its answer for 20 s closes the session");
-	check(next_at(47299) == CERBO_DO_NOTHING && next_at(47300) == CERBO_DO_OPEN, "the session stood: the next attempt follows after 2 s");
+	check(next_at(47299) == CERBO_DO_NOTHING && next_at(47300) == CERBO_DO_OPEN, "the next attempt follows after 2 s, the first of the waits");
 	check(session_now() && next() == CERBO_DO_NOTHING && next_at(57299) == CERBO_DO_NOTHING && next_at(57300) == CERBO_DO_SEND && cerbo->pings_open == 1 && cerbo->phase == CERBO_SESSION,
 	      "the next session knows nothing of the PINGREQ of the one before: it lives, and its first PINGREQ goes out after 10 s");
 	cerbo_down(cerbo, 58000);
-	check(next_at(60000) == CERBO_DO_OPEN && (cerbo_opened(cerbo, now), next()) == CERBO_DO_SEND && (pingresp(), next()) == CERBO_DO_CLOSE,
+	check(next_at(62999) == CERBO_DO_NOTHING && next_at(63000) == CERBO_DO_OPEN && (cerbo_opened(cerbo, now), next()) == CERBO_DO_SEND && (pingresp(), next()) == CERBO_DO_CLOSE,
 	      "a PINGRESP while greeting closes, also when a PINGREQ of the session before stayed without its answer");
 
 	// The first of two is answered: the second has its own 20 s
@@ -1358,7 +1494,9 @@ static void test_refused(void)
 
 static void test_lag(void)
 {
+	// reckon/lag_numbers.py of 2026-10-12 gives both rows, with d and base as cerbo.h writes the rule down
 	static const uint32_t burst[] = {6200, 5200, 4200, 3200, 2200, 1200, 200, 0};
+	static const uint32_t long_burst[] = {11600, 10600, 9600, 8600, 7600, 6600, 5600, 4600, 3600, 2600, 1600, 600, 0, 0};
 	bool right = true, fresh = true;
 	uint32_t lag = 0;
 	size_t i;
@@ -1369,8 +1507,8 @@ static void test_lag(void)
 	      "a display that is younger than the flow (the bundle is older than the display): the first bundle has no lag");
 	check(arrive(7000, 7, 101000) == 0 && arrive(8000, 7, 102000) == 0 && seen("GX_A") == 8000, "bundles that arrive as they were sent have no lag");
 	check(arrive(11000, 7, 103000) == 1700 && seen("GX_A") == 9300, "a bundle that arrives 2 s late has a lag of 1700 ms: 2000 less what the base yielded in 3 s");
-	check(age_at("GX_A", 11000) == VALUE_AGE_FRESH && age_at("GX_A", 14299) == VALUE_AGE_FRESH && age_at("GX_A", 14300) == VALUE_AGE_OLD,
-	      "a bundle that is late is as old as its lag: it is dimmed 5 s after the time it should have arrived");
+	check(age_at("GX_A", 11000) == VALUE_AGE_FRESH && age_at("GX_A", 19299) == VALUE_AGE_FRESH && age_at("GX_A", 19300) == VALUE_AGE_OLD,
+	      "a bundle that is late is as old as its lag: it is dimmed 10 s after the time it should have arrived");
 	check(arrive(11000, 7, 104000) == 700 && seen("GX_A") == 10300 && arrive(11000, 7, 105000) == 0 && seen("GX_A") == 11000, "the bundles behind it in the same moment catch up: the lag is never below 0");
 
 	// A burst
@@ -1378,15 +1516,22 @@ static void test_lag(void)
 	for(i = 0; i < COUNT(burst); i++)
 	{
 		if(arrive(14000, 7, 51000 + 1000 * (int64_t)i) != burst[i] || seen("GX_A") != 14000 - burst[i]) right = false;
-		if(i == 1 && age_at("GX_A", 14000) != VALUE_AGE_OLD) right = false;
-		if(i == 2 && age_at("GX_A", 14000) != VALUE_AGE_FRESH) right = false;
+		if(age_at("GX_A", 14000) != VALUE_AGE_FRESH) right = false;
 	}
-	check(right && age_at("GX_A", 14000) == VALUE_AGE_FRESH && seen("GX_A") == 14000, "in a burst the bundles that piled up are old, and the last one is fresh");
+	check(right && seen("GX_A") == 14000, "in a burst after a pause of 8 s every bundle has its lag, and none of them is old: the first one is 6.2 s late");
+	check(setup() && arrive(6000, 7, 50000) == 0, "a session, and then the radio link pauses for 14 s");
+	for(i = 0; i < COUNT(long_burst); i++)
+	{
+		if(arrive(20000, 7, 51000 + 1000 * (int64_t)i) != long_burst[i] || seen("GX_A") != 20000 - long_burst[i]) right = false;
+		if(i == 1 && age_at("GX_A", 20000) != VALUE_AGE_OLD) right = false;
+		if(i == 2 && age_at("GX_A", 20000) != VALUE_AGE_FRESH) right = false;
+	}
+	check(right && age_at("GX_A", 20000) == VALUE_AGE_FRESH && seen("GX_A") == 20000, "in a burst after a pause of 14 s the bundles that piled up are old, and the last one is fresh");
 
 	// Another boot, another session
-	check(arrive(15000, 8, 5) == 0 && cerbo->boots == 2 && seen("GX_A") == 15000, "the first bundle of another boot has no lag, whatever its t is");
-	check(arrive(18000, 8, 1005) == 1700 && cerbo->boots == 2, "the lag is measured within the boot");
-	check(arrive(18500, 7, 60000) == 0 && cerbo->boots == 3, "the boot before once more is another boot");
+	check(arrive(21000, 8, 5) == 0 && cerbo->boots == 2 && seen("GX_A") == 21000, "the first bundle of another boot has no lag, whatever its t is");
+	check(arrive(24000, 8, 1005) == 1700 && cerbo->boots == 2, "the lag is measured within the boot");
+	check(arrive(24500, 7, 60000) == 0 && cerbo->boots == 3, "the boot before once more is another boot");
 	check(setup() && arrive(6000, 7, 50000) == 0 && arrive(7000, 7, 51000) == 0, "a session with two bundles");
 	cerbo_down(cerbo, 7500);
 	check(connect_at(9500) && arrive(30000, 7, 52000) == 0 && seen("GX_A") == 30000 && cerbo->boots == 1 && cerbo->distrusted == 0,
@@ -1399,10 +1544,22 @@ static void test_lag(void)
 	{
 		lag = arrive(8000 + 1000 * (uint64_t)k, 7, 91000 + 1000 * (int64_t)k);
 		if(lag != 10900 - 100 * (uint32_t)k) right = false;
-		if(k == 59 && (lag != 5000 || age_at("GX_A", now) != VALUE_AGE_OLD)) right = false;
-		if(k >= 60 && age_at("GX_A", now) != VALUE_AGE_FRESH) fresh = false;
+		if(k == 9 && (lag != 10000 || age_at("GX_A", now) != VALUE_AGE_OLD)) right = false;
+		if(k >= 10 && age_at("GX_A", now) != VALUE_AGE_FRESH) fresh = false;
 	}
-	check(right && fresh && lag == 3900 && cerbo->distrusted == 0, "a clock that lost 11 s is fresh again after 60 s, and stays so: the base yields 100 ms with every second");
+	check(right && fresh && lag == 3900 && cerbo->distrusted == 0, "a clock that lost 11 s is fresh again after 10 s, and stays so: the base yields 100 ms with every second");
+	// The largest loss that is believed: its first lag is 44.9 s. Later than the examples before, so that the
+	// values were not seen before the display started.
+	check(setup() && arrive(106000, 7, 100000) == 0 && arrive(107000, 7, 101000) == 0 && arrive(108000, 7, 57000) == 44900 && seen("GX_A") == 63100,
+	      "the clock of the flow lost 45 s: a lag of 44.9 s");
+	for(k = 1; k <= 350; k++)
+	{
+		lag = arrive(108000 + 1000 * (uint64_t)k, 7, 57000 + 1000 * (int64_t)k);
+		if(lag != 44900 - 100 * (uint32_t)k) right = false;
+		if(k <= 349 && age_at("GX_A", now) != VALUE_AGE_OLD) right = false;
+	}
+	check(right && lag == 9900 && age_at("GX_A", now) == VALUE_AGE_FRESH && cerbo->distrusted == 0,
+	      "a clock that lost 45 s, the most that is believed, leaves the values dimmed for 350 s: that is what the yield costs");
 
 	// Two clocks that drift apart
 	check(setup() && arrive(6000, 7, 0) == 0, "a session for two clocks");
@@ -1482,8 +1639,9 @@ static void test_ages(void)
 
 	memset(&one, 0, sizeof(one));
 	one.seen_ms = 100000;
-	check(cerbo_age(&one, 100000) == VALUE_AGE_FRESH && cerbo_age(&one, 104999) == VALUE_AGE_FRESH, "a value seen less than 5 s ago is fresh");
-	check(cerbo_age(&one, 105000) == VALUE_AGE_OLD && cerbo_age(&one, 159999) == VALUE_AGE_OLD, "from 5 s to 60 s it is old: shown dimmed");
+	check(cerbo_age(&one, 100000) == VALUE_AGE_FRESH && cerbo_age(&one, 109999) == VALUE_AGE_FRESH, "a value seen less than 10 s ago is fresh");
+	check(cerbo_age(&one, 105300) == VALUE_AGE_FRESH, "a value seen 5.3 s ago is fresh: the longest pause of the flow that was measured dims nothing");
+	check(cerbo_age(&one, 110000) == VALUE_AGE_OLD && cerbo_age(&one, 159999) == VALUE_AGE_OLD, "from 10 s to 60 s it is old: shown dimmed");
 	check(cerbo_age(&one, 160000) == VALUE_AGE_GONE && cerbo_age(&one, UINT64_MAX) == VALUE_AGE_GONE, "from 60 s on it is gone");
 	check(cerbo_age(&one, 99999) == VALUE_AGE_FRESH && cerbo_age(&one, 0) == VALUE_AGE_FRESH, "a time before the value was seen counts as no time passed");
 	check(cerbo_age(NULL, 0) == VALUE_AGE_GONE && cerbo_age(NULL, 100000) == VALUE_AGE_GONE, "no value is gone");
@@ -1862,10 +2020,11 @@ static void test_cut(void)
 	check(guards_intact() && written, "the cut streams write nothing outside the source");
 }
 
-// A message of `size` bytes on the topic of the source arrives from 6100 on, as fast as the platform reads:
-// CERBO_READ_MAX bytes every CERBO_TURN_MS, and the platform asks for its orders in every turn. Returns the
-// bytes of it that arrived when the session ended, or all of them; *sends: the packets sent meanwhile.
-static size_t flood(size_t size, int *sends, bool *quiet)
+// A message of `size` bytes on the topic of the source arrives from 6100 on, as fast as a platform reads that
+// lets `turn_ms` pass between two reads: CERBO_READ_MAX bytes each time, and it asks for its orders in every
+// turn. Returns the bytes of it that arrived when the session ended, or all of them; *sends: the packets sent
+// meanwhile.
+static size_t flood(size_t size, uint32_t turn_ms, int *sends, bool *quiet)
 {
 	static uint8_t piece[CERBO_READ_MAX];
 	uint8_t head[32];
@@ -1880,7 +2039,7 @@ static size_t flood(size_t size, int *sends, bool *quiet)
 	{
 		cerbo_do_t order;
 
-		now += CERBO_TURN_MS;
+		now += turn_ms;
 		feed(piece, sizeof(piece));
 		if(cerbo->failed || cerbo->bundles != 1) *quiet = false;
 		order = next();
@@ -1895,11 +2054,13 @@ static void test_megabyte(void)
 	bool quiet = true;
 	int sends = 0;
 
-	// 51 KB a second: a megabyte takes 20.5 s
+	// At the bound cerbo.h names, CERBO_READ_MAX bytes every CERBO_TURN_MS (51 KB a second), a megabyte takes
+	// 20.5 s. No display reads that fast: main/gx.c makes a round of 30 ms of it, 34 KB a second (reckon/pace.py
+	// of 2026-10-12; seen on a PC that day) - the example behind this one.
 	check(setup() && arrive(6000, 7, 1000) == 0, "a session with a value, and then a message of a megabyte comes");
 	remember();
-	check(flood(1048576, &sends, &quiet) == 1048576 && quiet && sends == 2 && now == 26580 && cerbo->phase == CERBO_SESSION && cerbo->refused_long == 1 && refused() == 1,
-	      "a message of a megabyte goes by in 20.5 s: nothing of it is taken, it is counted as too long");
+	check(flood(1048576, CERBO_TURN_MS, &sends, &quiet) == 1048576 && quiet && sends == 2 && now == 26580 && cerbo->phase == CERBO_SESSION && cerbo->refused_long == 1 && refused() == 1,
+	      "read at the bound of cerbo.h a message of a megabyte goes by in 20.5 s: nothing of it is taken, it is counted as too long");
 	check(memcmp(&snapshot.cerbo.values, &cerbo->values, sizeof(values_t)) == 0 && number_is("GX_A", 1) && age_at("GX_A", now) == VALUE_AGE_OLD && view() == CERBO_VIEW_QUIET,
 	      "the values of the bundle before it are untouched: they grew old meanwhile");
 	now = 26600;
@@ -1909,8 +2070,13 @@ static void test_megabyte(void)
 	      "the PINGRESP behind the megabyte come 11 s after the first PINGREQ: in time, the session goes on");
 
 	check(setup() && arrive(6000, 7, 1000) == 0, "a session with a value, and then a message of two megabytes comes");
-	check(flood(2097152, &sends, &quiet) < 2097152 && quiet && sends == 2 && now == 35300 && cerbo->phase == CERBO_IDLE && cerbo->refused_long == 0,
+	check(flood(2097152, CERBO_TURN_MS, &sends, &quiet) < 2097152 && quiet && sends == 2 && now == 35300 && cerbo->phase == CERBO_IDLE && cerbo->refused_long == 0,
 	      "a message that takes longer than a PINGREQ may wait ends the session: the PINGRESP lies behind it");
+	// The megabyte at the pace of the firmware: 1024 reads of 30 ms are 30.72 s, from 6100 to 36820. The first
+	// PINGREQ goes out in the turn of 15310, and 973 of the 1024 reads are done when it is 20 s old.
+	check(setup() && arrive(6000, 7, 1000) == 0, "a session with a value, and then a message of a megabyte comes to a display that reads every 30 ms");
+	check(flood(1048576, 30, &sends, &quiet) == 996352 && quiet && sends == 2 && now == 35320 && cerbo->phase == CERBO_IDLE && cerbo->refused_long == 0 && refused() == 0,
+	      "at the pace of the firmware a megabyte does not go by: the session ends when the first PINGREQ is 20 s without its answer, and the message is never counted");
 	check(number_is("GX_A", 1) && age_at("GX_A", now) == VALUE_AGE_OLD && cerbo_showing(cerbo, now) && guards_intact(), "the values are untouched and old");
 }
 
@@ -1963,9 +2129,10 @@ typedef struct
 	int said;                   // handed out on it: 0 nothing, 1 CONNECT, 2 SUBSCRIBE
 	int heard;                  // 0 nothing, 1 the CONNACK, 2 the SUBACK: a session
 	bool doomed, moved;
+	bool fed;                   // a bundle was taken on this connection
 	uint64_t session_due;       // a session has to stand before this time
 	uint64_t attempt_due;       // the next attempt may begin at this time
-	int ended;                  // connections that ended since the last session, or since the last new start
+	int ended;                  // connections that ended since the last session that brought a bundle, or since the last new start
 	uint64_t patience_until;    // "waiting" before this time, "not reachable" from it on
 	uint64_t pings[4];          // when the PINGREQ without an answer were handed out, the oldest first
 	int ping_count;
@@ -2002,6 +2169,9 @@ typedef struct
 	uint64_t rest, yield_from;
 	uint32_t lag;
 	uint32_t bundles, sessions, boots, invalid, version, retained, topic, too_long, skipped, distrusted;
+	// For the walk, not of cerbo.h: sessions that ended without a bundle, and those of them behind which the
+	// wait was a longer one than the first - where the rule before 2026-10-12 waited 2 s
+	uint32_t barren, barren_waits;
 } model_t;
 
 static const uint32_t MODEL_WAITS[] = CERBO_RETRY_MS;
@@ -2065,6 +2235,11 @@ static void model_network(model_t *m, bool up, uint64_t at)
 static void model_gone(model_t *m)
 {
 	if(m->heard == 2) m->patience_until = m->time + CERBO_GRACE_MS;
+	if(m->heard == 2 && !m->fed && !m->moved)
+	{
+		m->barren++;
+		if(m->ended > 0) m->barren_waits++;
+	}
 	m->socket = false;
 	m->heard = 0;
 	m->ping_count = 0;
@@ -2090,6 +2265,7 @@ static cerbo_do_t model_next(model_t *m, uint64_t at, char *sends)
 		m->said = 0;
 		m->heard = 0;
 		m->doomed = false;
+		m->fed = false;
 		m->session_due = m->time + CERBO_SESSION_MS;
 		return CERBO_DO_OPEN;
 	}
@@ -2157,7 +2333,8 @@ static void model_suback(model_t *m, uint16_t id, uint8_t code)
 	}
 	m->heard = 2;
 	m->sessions++;
-	m->ended = 0;
+	// A bundle that came before the SUBACK is one of this session
+	if(m->fed) m->ended = 0;
 	m->ping_count = 0;
 	m->ping_due = m->time + CERBO_PING_MS;
 	m->hush_from = m->time;
@@ -2300,6 +2477,9 @@ static void model_take(model_t *m, const message_t *message)
 	m->hush_from = m->time;
 	m->proven = false;
 	m->bundles++;
+	// The waits begin anew once a session has brought a bundle, not with the session
+	m->fed = true;
+	if(m->heard == 2) m->ended = 0;
 }
 
 static void model_message(model_t *m, const message_t *message)
@@ -2410,6 +2590,7 @@ typedef struct
 	long sessions, downs, pauses, naps, hosts, networks, stale;
 	long lagged, old, distrusted, boots, full, over, empty, cuts, bursts, before_suback, two_pings, out_of_place, broken_bytes, refusals, ignored;
 	long endless;                       // bundles taken that brought a number without end: a value in the store that is not counted
+	long barren, barren_waits;          // sessions that ended without a bundle, and those of them behind a wait that had grown
 	long healed, healed_off;
 } walk_result_t;
 
@@ -3485,6 +3666,8 @@ static bool walk(uint32_t seed, walk_result_t *result)
 	result->given_way += (long)model.given_way;
 	result->distrusted += (long)cerbo->distrusted;
 	result->boots += (long)cerbo->boots;
+	result->barren += (long)model.barren;
+	result->barren_waits += (long)model.barren_waits;
 	promise(guards_intact(), PROMISE_STORE, result);
 	return true;
 }
@@ -3547,6 +3730,7 @@ static void test_walk(void)
 	       "%ld before the SUBACK; %ld deliveries of three bundles and more, %ld that ended inside a packet; %ld calls with two PINGREQ under way\n",
 	       result.lagged, result.old, result.distrusted, result.boots, result.full, result.over, result.empty, result.before_suback, result.bursts, result.cuts, result.two_pings);
 	printf("  walk: %ld bundles taken with a number without end among their values\n", result.endless);
+	printf("  walk: %ld sessions ended without a bundle, %ld of them where the wait had grown beyond the first\n", result.barren, result.barren_waits);
 	printf("  walk: %ld walks healed, %ld stayed off in safe mode; promises broken: orders %ld, sent packets %ld, PINGREQ %ld, store %ld, off %ld, healing %ld, the walk itself %ld\n",
 	       result.healed, result.healed_off, result.broken[PROMISE_ORDERS], result.broken[PROMISE_SENT], result.broken[PROMISE_PINGS], result.broken[PROMISE_STORE],
 	       result.broken[PROMISE_OFF], result.broken[PROMISE_HEALS], result.broken[PROMISE_HARNESS]);
@@ -3588,6 +3772,10 @@ static void test_walk(void)
 	      result.before_suback > 100 && result.bursts > 200 && result.cuts > 20000 && result.two_pings > 500,
 	      "the walk reaches bundles that are late and old, lags not believed, new boots, full and empty stores, bundles before the SUBACK, bursts, cut packets and two PINGREQ under way in numbers");
 	check(complete && result.endless > 1000, "the walk takes bundles with a number without end among their values, which the count of the values to show leaves out, in numbers");
+	// Where the rule of 2026-10-12 and the one before part: behind a session without a bundle the wait is the
+	// next one, and the first one only if no connection ended before - the rule before waited 2 s behind each
+	check(complete && result.barren > 500 && result.barren_waits > 400,
+	      "the walk ends sessions that brought no bundle in numbers, most of them behind a connection that had ended before: there the wait is a longer one than the first");
 }
 
 int main(void)
@@ -3600,6 +3788,7 @@ int main(void)
 	test_packets();
 	test_session_time();
 	test_retry();
+	test_barren();
 	test_network();
 	test_ping();
 	test_host();

@@ -160,6 +160,8 @@ typedef struct
 	cerbo_t cerbo;                  // the second source: the Cerbo GX (see "The second source" below)
 
 	layout_t layout;                // the views in use
+	bool gx_appended;               // ... end with the pages of builtin_gx: app_choose_layout() put them there. Says
+	                                // nothing while `source` is STORED or PREVIEW.
 	app_layout_source_t source;
 	layout_t builtin;               // parsed once at the start
 	bool has_builtin;
@@ -259,6 +261,12 @@ typedef struct
  * pages start at the first page of the new layout; when it does not, the page shown stays (nav_tick() finds
  * the nearest if it is not shown any more). A layout the browser sends keeps the page shown where it has one
  * at that position (app_web.h).
+ * "The page shown stays" means its number for a page of the vehicle, and the page itself for one of the
+ * second source (below): when the same views are made anew and end with the pages of the Cerbo before and
+ * after, a page of the Cerbo that is shown is shown afterwards, at the same place among those pages. They
+ * stand behind the pages of the vehicle, and views made from a catalogue that grew have more of these - with
+ * the number kept, "Batterie" became "Werte 4" without an input (found 2026-10-12). The built-in views of the
+ * W906 have seven pages every time: there the page and its number are the same thing, and nothing moves.
  * While the second source is on (cerbo_on(): its address is set, and it is not the safe mode) the choice goes
  * on: the built-in pages of the Cerbo are appended to what was chosen (layout_append(): behind the pages of
  * the vehicle, of which the last give way where the two are more than LAYOUT_PAGES_MAX), and layout_text is
