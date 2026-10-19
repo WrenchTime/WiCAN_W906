@@ -312,6 +312,70 @@ int web_values_cerbo_json(const values_t *wican, const char *wican_view, const v
 	return finish(&writer);
 }
 
+// One of the sixteen digits a control character is written with, in small letters
+static char digit_of(unsigned value)
+{
+	return (char)(value < 10 ? '0' + value : 'a' + value - 10);
+}
+
+// A text of the catalogue between quotes, as catalog_to_json() writes it (catalog.h): what lies below 0x20 with
+// its number, a quote and a backslash behind a backslash, every other byte as it is - 0x7F among them
+static void put_listed(writer_t *writer, const char *listed)
+{
+	const char *quote = "\"";
+
+	put(writer, quote);
+	for(; *listed != '\0'; listed++)
+	{
+		unsigned char byte = (unsigned char)*listed;
+
+		if(byte >= 0x20)
+		{
+			if(byte == '"' || byte == '\\') put_char(writer, '\\');
+			put_char(writer, *listed);
+			continue;
+		}
+		put(writer, "\\u00");
+		put_char(writer, digit_of(byte / 16u));
+		put_char(writer, digit_of(byte % 16u));
+	}
+	put(writer, quote);
+}
+
+// One entry of the catalogue as a member of the answer. *behind: an entry was written before this one.
+static void put_entry(writer_t *writer, const char *name, const char *unit, const char *value_class, bool in_profile, bool delivered, bool *behind)
+{
+	if(*behind) put_char(writer, ',');
+	*behind = true;
+	put_listed(writer, name);
+	put(writer, ":{\"unit\":");
+	put_listed(writer, unit);
+	put(writer, ",\"class\":");
+	put_listed(writer, value_class);
+	put(writer, in_profile ? ",\"profile\":true" : ",\"profile\":false");
+	put(writer, delivered ? ",\"delivered\":true}" : ",\"delivered\":false}");
+}
+
+int web_catalog_cerbo_json(const catalog_t *catalog, const cerbo_t *cerbo, char *out, size_t size)
+{
+	const catalog_entry_t *entry = catalog->entries;
+	writer_t writer = {out, size, 0};
+	bool behind = false;
+
+	put_char(&writer, '{');
+	for(int listed = 0; listed < catalog->count; listed++, entry++)
+	{
+		// The prefix of the Cerbo belongs to the Cerbo, as in the values: no key stands twice in this object,
+		// and a page shows a key with the prefix from the store of the Cerbo whatever the adapter delivers
+		if(cerbo_key(entry->name)) continue;
+		put_entry(&writer, entry->name, entry->unit, entry->value_class, entry->in_profile, entry->delivered, &behind);
+	}
+	// A key of the Cerbo is in no vehicle profile: no unit and no class - and delivered, or its name were not here
+	for(int named = 0; named < cerbo->name_count; named++) put_entry(&writer, cerbo->names[named], "", "", false, true, &behind);
+	put_char(&writer, '}');
+	return finish(&writer);
+}
+
 int web_wifi_json(const net_profile_t *profiles, int profile_count, const char *current,
                   const web_seen_t *seen, int seen_count, char *out, size_t size)
 {

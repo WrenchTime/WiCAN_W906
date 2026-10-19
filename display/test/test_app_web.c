@@ -1060,7 +1060,7 @@ static void test_tickets(void)
 
 // Every route a function does not serve, and two numbers that are no route
 static const int ROUTES[] = {
-	WEB_ROUTE_NONE, WEB_ROUTE_PAGE, WEB_ROUTE_INFO, WEB_ROUTE_CATALOG, WEB_ROUTE_VALUES, WEB_ROUTE_LAYOUT, WEB_ROUTE_LAYOUT_CHECK, WEB_ROUTE_LAYOUT_APPLY, WEB_ROUTE_LAYOUT_SAVE,
+	WEB_ROUTE_NONE, WEB_ROUTE_PAGE, WEB_ROUTE_INFO, WEB_ROUTE_CATALOG, WEB_ROUTE_VALUES, WEB_ROUTE_LAYOUT, WEB_ROUTE_LAYOUT_GX, WEB_ROUTE_LAYOUT_CHECK, WEB_ROUTE_LAYOUT_APPLY, WEB_ROUTE_LAYOUT_SAVE,
 	WEB_ROUTE_LAYOUT_RESET, WEB_ROUTE_DTC_LAST, WEB_ROUTE_WIFI, WEB_ROUTE_WIFI_STORE, WEB_ROUTE_WIFI_FORGET, WEB_ROUTE_SETTINGS, WEB_ROUTE_REBOOT, WEB_ROUTE_RESET, WEB_ROUTE_OTA,
 	WEB_ROUTE_TICKET, WEB_ROUTE_TICKET + 1, -1,
 };
@@ -1076,8 +1076,8 @@ static void test_other_routes(void)
 	for(int i = 0; i < COUNT(ROUTES); i++)
 	{
 		web_route_t route = (web_route_t)ROUTES[i];
-		bool reads = route == WEB_ROUTE_INFO || route == WEB_ROUTE_CATALOG || route == WEB_ROUTE_VALUES || route == WEB_ROUTE_LAYOUT || route == WEB_ROUTE_DTC_LAST ||
-		             route == WEB_ROUTE_WIFI || route == WEB_ROUTE_TICKET;
+		bool reads = route == WEB_ROUTE_INFO || route == WEB_ROUTE_CATALOG || route == WEB_ROUTE_VALUES || route == WEB_ROUTE_LAYOUT || route == WEB_ROUTE_LAYOUT_GX ||
+		             route == WEB_ROUTE_DTC_LAST || route == WEB_ROUTE_WIFI || route == WEB_ROUTE_TICKET;
 		bool layouts = route == WEB_ROUTE_LAYOUT_CHECK || route == WEB_ROUTE_LAYOUT_APPLY || route == WEB_ROUTE_LAYOUT_SAVE || route == WEB_ROUTE_LAYOUT_RESET;
 		bool wifis = route == WEB_ROUTE_WIFI_STORE || route == WEB_ROUTE_WIFI_FORGET;
 		bool actions = route == WEB_ROUTE_REBOOT || route == WEB_ROUTE_RESET;
@@ -1112,9 +1112,9 @@ static void test_other_routes(void)
 		}
 	}
 	check(get_right && get_refused == 14, "app_web_not_found.json: app_web_get() answers 404 for each of the 12 other routes and for two numbers that are no route, and changes nothing");
-	check(layout_right && layout_refused == 17, "app_web_layout() answers 404 for each of the 15 other routes and for two numbers that are no route, and changes nothing, not even the time");
-	check(wifi_right && wifi_refused == 19, "app_web_wifi() answers 404 for each of the 17 other routes and for two numbers that are no route, and changes nothing, not even the time");
-	check(action_right && action_refused == 19, "app_web_action() answers 404 for each of the 17 other routes and for two numbers that are no route, and changes nothing, not even the time");
+	check(layout_right && layout_refused == 18, "app_web_layout() answers 404 for each of the 16 other routes and for two numbers that are no route, and changes nothing, not even the time");
+	check(wifi_right && wifi_refused == 20, "app_web_wifi() answers 404 for each of the 18 other routes and for two numbers that are no route, and changes nothing, not even the time");
+	check(action_right && action_refused == 20, "app_web_action() answers 404 for each of the 18 other routes and for two numbers that are no route, and changes nothing, not even the time");
 	check(app_take_events(app) == 0 && access_asking(&app->access, now) == ACCESS_ASK_NONE, "no function raises an event or asks a question for a route it does not serve");
 
 	get("/");
@@ -4033,6 +4033,262 @@ static void test_cerbo_views(void)
 	check(code == 200 && app->source == APP_LAYOUT_GENERATED && app->layout.page_count == 2 && app->nav.page == 1, "taken away: the two pages of the vehicle, and the page stays");
 }
 
+// The text of fixtures/app_web_<name>.json with one member more behind its last one
+static const char *fixture_and(const char *name, const char *more)
+{
+	static char whole[4096];
+	const char *text = fixture(name);
+	int length = snprintf(whole, sizeof(whole), "%.*s,%s}", (int)strlen(text) - 1, text, more);
+
+	if(length < 0 || (size_t)length >= sizeof(whole)) strcpy(whole, "no room for the fixture");
+	return whole;
+}
+
+// The entry GET /api/catalog has for a key of the Cerbo
+#define OF_CERBO(key)   "\"" key "\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}"
+
+// 64 keys of the Cerbo of 32 bytes each, of which the source keeps the names of the first `count`
+static void name_keys(int count)
+{
+	for(int i = 0; i < CERBO_NAMES_MAX; i++)
+	{
+		char key[VALUE_NAME_SIZE];
+
+		snprintf(key, sizeof(key), "GX_KEY_OF_32_BYTES_%02d_ABCDEFGHIJ", i);
+		strcpy(app->cerbo.names[i], key);
+	}
+	app->cerbo.name_count = count;
+}
+
+// GET /api/catalog of a display with a Cerbo, for the editor in the browser
+static void test_cerbo_catalog(void)
+{
+	catalog_t *catalog;
+
+	// The other vehicle with a Cerbo, two seconds after its start
+	garage();
+	cerbo_there();
+	wican.config = other_config;
+	wican.values = other_values;
+	start();
+	run(2100);
+	remember();
+	get("/api/catalog");
+	check(answered(200, "catalog_cerbo") && app->cerbo.name_count == 6,
+	      "app_web_catalog_cerbo.json: GET /api/catalog of the other vehicle with a Cerbo at 2100: the six entries of the adapter as they are, and behind them the six keys the Cerbo "
+	      "delivered, in the order of its bundle, each without unit and class");
+	check(untouched(), "GET /api/catalog of a display with a Cerbo changes nothing of the app");
+
+	// A key the Cerbo does not name any more stays; a new one comes behind
+	gx.values = "\"GX_T_BOILER\":61.1,\"GX_BATT_SOC\":87.4,\"GX_T_WATER\":1e999";
+	run(2000);
+	get("/api/values");
+	check(answered_with(200, "\"INTAKE_TEMP\":{\"v\":19,\"age\":\"fresh\"},\"GX_T_BOILER\":{\"v\":61.1,\"age\":\"fresh\"},\"GX_BATT_SOC\":{\"v\":87.4,\"age\":\"fresh\"}}}") &&
+	      app->cerbo.values.count == 3, "the flow publishes two other values and a number without end now: the values name those two of the Cerbo, the five of before are gone at once");
+	get("/api/catalog");
+	check(answered_text(200, fixture_and("catalog_cerbo", OF_CERBO("GX_T_BOILER"))),
+	      "the catalogue goes on naming the keys the Cerbo delivered before - a device that is off is missing in the bundle, and its value can still be put on a page -, "
+	      "names the new key behind them, and not the key of the number without end");
+
+	// The Cerbo is gone and none of its values is left: its keys are
+	gx.there = false;
+	run(70000);
+	get("/api/values");
+	check(code == 200 && strstr(reply, "GX_") == NULL && cerbo_view(&app->cerbo, now) == CERBO_VIEW_UNREACHABLE, "the Cerbo is out of reach for 70 s: no value of it is left in the values");
+	get("/api/catalog");
+	check(answered_text(200, fixture_and("catalog_cerbo", OF_CERBO("GX_T_BOILER"))), "... and the catalogue names its seven keys all the same: the editor offers them while the Cerbo is away");
+
+	// Another address: the keys of the broker before are not the keys of this one
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	post("/api/settings", "{\"cerbo\":\"" GX_ELSE "\"}");
+	get("/api/catalog");
+	check(answered(200, "catalog") && app->cerbo.name_count == 0, "another address: the keys are forgotten with the values - the catalogue of the adapter alone, which is app_web_catalog.json byte for byte");
+	gx.there = true;
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	run(1500);
+	get("/api/catalog");
+	check(answered_text(200, fixture_and("catalog", OF_CERBO("GX_T_BOILER") "," OF_CERBO("GX_BATT_SOC"))),
+	      "the address of the Cerbo again: its keys are noted anew, from the first bundle on and in its order");
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	get("/api/catalog");
+	check(answered(200, "catalog"), "no address: the catalogue of a display without a second source again");
+
+	// Without the address the answer is the one of before, whatever the source holds
+	other_vehicle();
+	name_keys(2);
+	gx.there = true;
+	gx.flow = true;
+	run(3000);
+	get("/api/catalog");
+	check(answered(200, "catalog") && strstr(reply, "GX_") == NULL, "without the address of a Cerbo GET /api/catalog is app_web_catalog.json, byte for byte - whatever a broker would send, "
+	                                                             "and whatever names the source holds");
+
+	// The prefix of the Cerbo is the Cerbo's. The other vehicle with a value named GX_BATT_SOC, which the adapter
+	// delivers outside its profile
+	garage();
+	wican.config = other_config;
+	wican.values = PREFIXED_VALUES;
+	start();
+	run(2100);
+	catalog = &app->poll.catalog;
+	get("/api/catalog");
+	check(answered_text(200, fixture_and("catalog", OF_CERBO("GX_BATT_SOC"))) && catalog->count == 7 && catalog_find(catalog, "GX_BATT_SOC") == 6,
+	      "without the address a value of the adapter named GX_BATT_SOC is an entry like every other: written, at its place behind the profile");
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	post("/api/settings", "{\"cerbo\":\"" GX_HOST "\"}");
+	get("/api/catalog");
+	check(answered(200, "catalog") && catalog_find(catalog, "GX_BATT_SOC") == 6 && app->cerbo.name_count == 0,
+	      "the address is set: from the next answer on the prefix is the Cerbo's, and the entry of the adapter is left out - before any bundle has come, without exception");
+	gx.there = true;
+	gx.flow = true;
+	run(1500);
+	get("/api/catalog");
+	check(answered(200, "catalog_cerbo") && catalog->count == 7 && catalog_find(catalog, "GX_BATT_SOC") == 6,
+	      "the Cerbo delivers a key of that name: GET /api/catalog is app_web_catalog_cerbo.json, byte for byte - the key stands once, as the key of the Cerbo, "
+	      "and the entry stays in the catalogue of the adapter");
+	post("/api/settings", "{\"cerbo\":\"\"}");
+	get("/api/catalog");
+	check(answered_text(200, fixture_and("catalog", OF_CERBO("GX_BATT_SOC"))), "the address is taken away: the answer of before, with the entry of the adapter");
+
+	// Safe mode with the address stored: the source is off and delivers no key, and the prefix is its own all the same
+	garage();
+	cerbo_there();
+	machine.safe_mode = true;
+	wican.config = other_config;
+	wican.values = PREFIXED_VALUES;
+	start();
+	run(2100);
+	get("/api/catalog");
+	check(answered(200, "catalog") && app->poll.catalog.count == 7 && app->cerbo.name_count == 0,
+	      "in safe mode with the address stored GET /api/catalog names no key of the Cerbo, and leaves the entry of the adapter under its prefix out as every display with the address does");
+
+	// The room. 96 entries of the longest texts that need no escape, and 64 keys of 32 bytes
+	released_with_cerbo();
+	catalog = &app->poll.catalog;
+	memset(catalog, 0, sizeof(*catalog));
+	catalog->count = CATALOG_MAX;
+	for(int i = 0; i < CATALOG_MAX; i++)
+	{
+		memset(catalog->entries[i].name, 'N', VALUE_NAME_SIZE - 1);
+		memset(catalog->entries[i].unit, 'u', CATALOG_UNIT_SIZE - 1);
+		memset(catalog->entries[i].value_class, 'c', CATALOG_CLASS_SIZE - 1);
+	}
+	name_keys(CERBO_NAMES_MAX);
+	get("/api/catalog");
+	check(code == 200 && sound() && reply_length == 12097 + WEB_CATALOG_CERBO_SIZE && reply_length == 17921 && reply_length < APP_WEB_OUT_SIZE &&
+	      strncmp(reply, "{\"NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN\":{\"unit\":\"uuuuuuuuuuu\",\"class\":\"ccccccccccccccccccccccc\",\"profile\":false,\"delivered\":false},", 126) == 0 &&
+	      strcmp(reply + reply_length - 92, "," OF_CERBO("GX_KEY_OF_32_BYTES_63_ABCDEFGHIJ") "}") == 0,
+	      "the largest catalogue of texts that need no escape with 64 keys of the Cerbo of 32 bytes behind it has the 17921 bytes app_web.h names: 200");
+	// ... and one whose texts are quotes and backslashes, 18433 bytes by itself
+	for(int i = 0; i < CATALOG_MAX; i++)
+	{
+		memset(catalog->entries[i].name, '"', VALUE_NAME_SIZE - 1);
+		memset(catalog->entries[i].unit, '\\', CATALOG_UNIT_SIZE - 1);
+		memset(catalog->entries[i].value_class, '"', CATALOG_CLASS_SIZE - 1);
+	}
+	name_keys(22);
+	get("/api/catalog");
+	check(code == 200 && sound() && reply_length == 18433 + 22 * 91 && reply_length == 20435, "the largest catalogue of quotes and backslashes has room with 22 keys of the Cerbo of 32 bytes: 20435 bytes, 200");
+	name_keys(23);
+	get("/api/catalog");
+	check(answered(500, "too_large") && 18433 + 23 * 91 == 20526 && 20526 >= APP_WEB_OUT_SIZE, "... and none with 23, which would be 20526 bytes: 500 too_large, as for every catalogue that has no room");
+	// To the last byte of the room
+	fill_catalog(76, 10, 3);
+	name_keys(0);
+	get("/api/catalog");
+	check(code == 200 && sound() && reply_length == 20416, "the scene of a catalogue of 20416 bytes on a display with the address");
+	strcpy(app->cerbo.names[0], "GX_A");
+	app->cerbo.name_count = 1;
+	get("/api/catalog");
+	check(code == 200 && sound() && reply_length == 20479 && strcmp(reply + 20479 - 64, "," OF_CERBO("GX_A") "}") == 0 && all_bytes(room.behind, sizeof(room.behind), FILL),
+	      "with one key of the Cerbo of four bytes behind it the text has 20479 bytes and fills the room to its last byte: 200");
+	strcpy(app->cerbo.names[0], "GX_AB");
+	get("/api/catalog");
+	check(answered(500, "too_large") && all_bytes(room.behind, sizeof(room.behind), FILL), "with a key of five bytes it has 20480 bytes and no room for its zero: 500");
+}
+
+// GET /api/layout/gx: the built-in pages of the Cerbo for the editor in the browser
+static void test_cerbo_pages(void)
+{
+	static char pages[LAYOUT_TEXT_MAX + 1];
+	static char long_pages[APP_WEB_OUT_SIZE + 1];
+
+	// A display with the address, whose views end with these pages
+	released_with_cerbo();
+	remember();
+	get("/api/layout/gx");
+	check(routed == WEB_ROUTE_LAYOUT_GX && answered_text(200, builtin_gx_text) && reply_length == 2472,
+	      "GET /api/layout/gx: the built-in pages of the Cerbo, the text of layouts/gx_default.json byte for byte - 2472 bytes here, where a fixture is read without the line end of its file");
+	check(untouched(), "GET /api/layout/gx changes nothing of the app");
+	strcpy(pages, reply);
+	put("/api/layout?mode=check", pages);
+	check(answered_text(200, "{\"ok\":true,\"name\":\"Cerbo\",\"pages\":5,\"items\":30,\"warnings\":0,\"warning_path\":\"\",\"warning\":\"\",\"unknown\":[]}"),
+	      "what it answers is a text the display takes: five pages, 30 values, no warning, nothing unknown");
+	get("/api/layout");
+	check(answered(200, "layout_cerbo") && strcmp(reply, builtin_gx_text) != 0, "GET /api/layout of that display is another text: the views in use, twelve pages");
+
+	// Whatever views are in use: those of the user, which the display never appends to
+	put("/api/layout?mode=save", stored_layout);
+	check(code == 200 && app->source == APP_LAYOUT_STORED && app->layout.page_count == 2, "the scene of views of the user in use: two pages, none of the Cerbo");
+	get("/api/layout/gx");
+	check(answered_text(200, builtin_gx_text), "under stored views GET /api/layout/gx is the same text: the pages the editor can append to them");
+
+	// Without the address, without the release, in safe mode: the pages are those of the firmware
+	drive();
+	remember();
+	get("/api/layout/gx");
+	check(!by_route && answered_text(200, builtin_gx_text) && untouched() && !access_is_open(&app->access, now),
+	      "a display without the address of a Cerbo and without the release hands them out as well: they are a file of the firmware, and reading needs no release");
+	garage();
+	machine.safe_mode = true;
+	start();
+	run(2100);
+	get("/api/layout/gx");
+	check(answered_text(200, builtin_gx_text), "in safe mode as well");
+	// The time of the request does not matter, and neither does a ticket
+	fresh_room();
+	code = app_web_get(app, WEB_ROUTE_LAYOUT_GX, 7, reply, &reply_length, 0);
+	check(answered_text(200, builtin_gx_text), "asked with a time before the one of the app and a ticket nobody gave: the same text");
+
+	// A firmware without these pages has none to hand out
+	garage();
+	cerbo_there();
+	machine.no_builtin_gx = true;
+	start();
+	run(2100);
+	remember();
+	get("/api/layout/gx");
+	check(!by_route && routed == WEB_ROUTE_LAYOUT_GX && answered(404, "not_found") && untouched(),
+	      "a firmware without the built-in pages of the Cerbo: GET /api/layout/gx is 404 not_found, with the address set as well, and nothing changes");
+	get("/api/layout");
+	check(answered_text(200, builtin_text), "... while GET /api/layout goes on answering the views in use");
+
+	// The room: a text as long as the room has none, as for the views in use. The text is one of the test, as
+	// long as it is said to be: no text of the app is that long.
+	drive();
+	memset(long_pages, 'p', sizeof(long_pages) - 1);
+	long_pages[sizeof(long_pages) - 1] = '\0';
+	app->builtin_gx_length = APP_WEB_OUT_SIZE - 1;
+	app->builtin_gx_text = long_pages;
+	get("/api/layout/gx");
+	check(code == 200 && reply_length == APP_WEB_OUT_SIZE - 1 && all_bytes(reply, APP_WEB_OUT_SIZE - 1, 'p') && reply[APP_WEB_OUT_SIZE - 1] == '\0' &&
+	      all_bytes(room.behind, sizeof(room.behind), FILL), "pages said to be 20479 bytes long fill the room to its last byte");
+	app->builtin_gx_length = APP_WEB_OUT_SIZE;
+	get("/api/layout/gx");
+	check(answered(500, "too_large") && all_bytes(room.behind, sizeof(room.behind), FILL), "pages said to be 20480 bytes long have no room: 500, nothing behind the room is written");
+
+	// Only a GET, and only this path
+	drive();
+	app_do(app, NAV_DO_RELEASE_ON, now);
+	remember();
+	post("/api/layout/gx", "");
+	check(by_route && code == 405 && untouched(), "POST /api/layout/gx is refused by web_route(): 405");
+	put("/api/layout/gx?mode=save", stored_layout);
+	check(by_route && code == 405 && untouched() && app->source == APP_LAYOUT_BUILTIN, "PUT /api/layout/gx as well: the built-in pages are not written through the web");
+	get("/api/layout/gx?mode=check");
+	check(by_route && code == 400, "GET /api/layout/gx with a query: 400");
+}
+
 /* ---------------------------------------------------------------------------------------------------
  * Random sequences of requests and of inputs at the device
  *
@@ -4142,6 +4398,17 @@ typedef struct
 	long gx_rounds;             // rounds of the task of the source that were watched
 	long gx_bundles, gx_refused, gx_sessions, gx_closed;    // what the source did (gx_seen)
 	long gx_restarts;           // restarts and factory resets the browser asked for while a session with the Cerbo stood
+	// The editor
+	long catalogs[2];           // answers to GET /api/catalog of a display without the address of the Cerbo, and with it
+	long catalog_keys;          // keys of the Cerbo in those answers
+	long catalog_kept;          // ... of them keys the store did not hold a value for that an answer with values would name
+	long catalog_claimed[2];    // catalogues asked for while the adapter had an entry under a key of the Cerbo: on a display
+	                            // without the address, which names it, and on one with it, which leaves it out
+	long catalog_forgotten;     // settings accepted that made the display forget keys of the Cerbo it had noted
+	long catalog_noted;         // keys the test noted from the store of a bundle that was taken
+	long catalog_bursts;        // rounds of the task that took more than one bundle ...
+	long catalog_taken_over;    // ... and keys the test took over from the display behind one of them
+	long gx_pages[2];           // the built-in pages of the Cerbo asked for on a display without the address, and with it
 	// The release for good
 	long web_starts[2];         // starts with the switch "Dauerhaft frei" off, and on
 	long web_switched[2];       // times it was switched off, and on, at the display
@@ -4252,6 +4519,11 @@ typedef struct
 	// they said nothing -, turned at the display alone
 	bool for_good;
 	uint64_t for_good_since;    // the time of the app at which the release for good was given: the start, or the turn
+	// The keys of the Cerbo the display has to name in its catalogue, as the test saw them come: each from the
+	// first bundle on that was taken with a value of it that has a text, in the order they came, until the
+	// address is another one or the display starts anew
+	char names[CERBO_NAMES_MAX][VALUE_NAME_SIZE];
+	int name_count;
 } told_t;
 
 static told_t told;
@@ -4322,6 +4594,77 @@ static int gx_pick(int count)
 	return (int)((gx_dice >> 8) % (uint32_t)count);
 }
 
+// The editor that asks for the built-in pages of the Cerbo has a die of its own, too: the browser, the driver,
+// the Cerbo and the owner roll the numbers they always rolled
+static uint32_t pages_dice;
+
+static int pages_pick(int count)
+{
+	pages_dice = pages_dice * 22695477u + 1u;
+	return (int)((pages_dice >> 8) % (uint32_t)count);
+}
+
+// A value of a store that GET /api/values has a text for, by the rule of the headers written once more
+static bool written_value(const value_t *item)
+{
+	return item->kind == VALUE_ON || item->kind == VALUE_OFF || (item->kind == VALUE_NUMBER && fabs(item->number) <= DBL_MAX);
+}
+
+static bool told_name(const char *name)
+{
+	for(int i = 0; i < told.name_count; i++)
+	{
+		if(strcmp(told.names[i], name) == 0) return true;
+	}
+	return false;
+}
+
+// A bundle was taken: the store of the source is that bundle, and the test notes its keys
+static void told_bundle(void)
+{
+	const values_t *store = &app->cerbo.values;
+
+	for(int i = 0; i < store->count; i++)
+	{
+		if(!written_value(&store->items[i]) || told_name(store->items[i].name)) continue;
+
+		// The flow of these runs has far fewer keys than the display has room for
+		if(told.name_count == CERBO_NAMES_MAX)
+		{
+			broke(PROMISE_SOURCE, "the walk itself: its Cerbo published more keys than the display keeps names of");
+			return;
+		}
+		strcpy(told.names[told.name_count++], store->items[i].name);
+	}
+}
+
+// The keys the Cerbo of these runs ever publishes with a value that has a text: the six of the harness, and
+// the one of the bundle its script sends between rubbish. GX_T_BOILER is none of them: a number without end.
+static const char *const RUN_KEYS[] = {"GX_BATT_SOC", "GX_BATT_V", "GX_BATT_I", "GX_SW_B2B", "GX_SW_VALVE", "GX_TANK_FRESH", "GX_ENGINE_RPM"};
+
+// A round of the task took more than one bundle - behind a jump of the clock the Cerbo of the harness
+// publishes what it missed -, and the test saw the store of the last one alone. What the display noted of the
+// bundles before it is taken over from the display, in its order, as far as it is a key the Cerbo of the run
+// can have published: the order of those keys is not judged in such a round, everything else is.
+static void told_burst(void)
+{
+	for(int i = 0; i < app->cerbo.name_count && i < CERBO_NAMES_MAX; i++)
+	{
+		const char *name = app->cerbo.names[i];
+		bool published = false;
+
+		if(told_name(name)) continue;
+		for(int k = 0; k < COUNT(RUN_KEYS); k++) published = published || strcmp(name, RUN_KEYS[k]) == 0;
+		if(!published || told.name_count == CERBO_NAMES_MAX)
+		{
+			broke(PROMISE_SOURCE, "the display noted a key of the Cerbo that its flow never published with a value that has a text");
+			continue;
+		}
+		strcpy(told.names[told.name_count++], name);
+		tally->catalog_taken_over++;
+	}
+}
+
 // Around every round of the task of the second source: the release, the fault memory, the requests to the
 // adapter and the events are not its business
 static void walk_gx(bool round_over)
@@ -4332,10 +4675,12 @@ static void walk_gx(bool round_over)
 	static uint32_t events;
 	static int asked[POLL_DTC_CLEAR + 1];
 	static uint64_t input, clock;
+	static uint32_t bundles;
 	static bool busy;
 
 	if(!round_over)
 	{
+		bundles = app->cerbo.bundles;
 		release = app->access;
 		flow = app->poll.flow.phase;
 		to_send = app->poll.flow.to_send;
@@ -4354,6 +4699,21 @@ static void walk_gx(bool round_over)
 	{
 		broke(PROMISE_SOURCE, "the second source sent what is no CONNECT, SUBSCRIBE or PINGREQ, sent without a connection, or opened a second one");
 		gx.strange = 0;
+	}
+	// The keys of the Cerbo, for the catalogue: the test notes them with every bundle that is taken, from the
+	// store it finds behind the round - and behind a round that took more than one, what the display noted
+	// of the bundles it did not see
+	if(app->cerbo.bundles - bundles > 1)
+	{
+		told_burst();
+		tally->catalog_bursts++;
+	}
+	if(app->cerbo.bundles != bundles)
+	{
+		int noted = told.name_count;
+
+		told_bundle();
+		tally->catalog_noted += told.name_count - noted;
 	}
 }
 
@@ -4495,6 +4855,61 @@ static void source_in_answer(kind_t kind, uint64_t time)
 	}
 }
 
+// The catalogue in an answer to GET /api/catalog that was read by sound() just now. Without the address it is
+// the catalogue of the adapter as catalog.h writes it; with it, the entries of the adapter that do not bear the
+// prefix of the Cerbo, as catalog.h writes those, and behind them the keys the test saw the Cerbo deliver.
+static void catalog_in_answer(uint64_t time)
+{
+	static catalog_t plain;
+	static char wanted[APP_WEB_OUT_SIZE + 8192];
+	const catalog_t *catalog = &app->poll.catalog;
+	bool has = told.settings.cerbo[0] != '\0';
+	int claimed = 0;
+	int length;
+	size_t at;
+
+	memset(&plain, 0, sizeof(plain));
+	for(int i = 0; i < catalog->count; i++)
+	{
+		const char *name = catalog->entries[i].name;
+
+		if(name[0] == 'G' && name[1] == 'X' && name[2] == '_') claimed++;
+		else plain.entries[plain.count++] = catalog->entries[i];
+	}
+	tally->catalogs[has]++;
+	if(claimed > 0) tally->catalog_claimed[has]++;
+
+	length = catalog_to_json(has ? &plain : catalog, wanted, sizeof(wanted));
+	if(length < 2)
+	{
+		broke(PROMISE_SOURCE, "the walk itself: the catalogue of the adapter has no text");
+		return;
+	}
+	if(!has)
+	{
+		if(strcmp(reply, wanted) != 0) broke(PROMISE_SOURCE, "the catalogue of a display without the address of the Cerbo is not the catalogue of the adapter as it is, entry for entry");
+		return;
+	}
+
+	at = (size_t)length - 1;
+	for(int i = 0; i < told.name_count; i++)
+	{
+		const value_t *held = values_find(&app->cerbo.values, told.names[i]);
+
+		at += (size_t)snprintf(wanted + at, sizeof(wanted) - at, "%s\"%s\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}", at > 1 ? "," : "", told.names[i]);
+		tally->catalog_keys++;
+		// A key the catalogue goes on naming while no answer with values would
+		if(held == NULL || !written_value(held) || (time > held->seen_ms ? time - held->seen_ms : 0) >= 60000) tally->catalog_kept++;
+	}
+	snprintf(wanted + at, sizeof(wanted) - at, "}");
+	if(strcmp(reply, wanted) != 0)
+	{
+		printf("  wanted %.900s\n  got    %.900s\n", wanted, reply);
+		broke(PROMISE_SOURCE, "the catalogue of a display with the address of the Cerbo is not the entries of the adapter without its prefix and, behind them, the keys the Cerbo delivered since "
+		                      "the start or since it was given that address, in the order they came");
+	}
+}
+
 static seen_t look(uint64_t at_ms)
 {
 	// The release as it would be after a change that renews it: tried on a copy
@@ -4581,6 +4996,8 @@ static void told_start(void)
 	told.for_good = told.settings.web_open;
 	told.for_good_since = 0;
 	tally->web_starts[told.for_good]++;
+	// The second source begins anew: it has seen no key yet
+	told.name_count = 0;
 }
 
 // The very first start of a run: the test takes over what the flash was given
@@ -4898,6 +5315,7 @@ static void request_deed(void)
 	const char *forget_name;
 	earlier_t was = earlier();
 	bool forgot = false;
+	bool gx_pages = false;
 	bool leftover, ended;
 	access_t release;
 	unsigned may = MAY_CLOCK;
@@ -4914,7 +5332,18 @@ static void request_deed(void)
 		case K_INFO:        method = WEB_GET; target = "/api/info"; route = WEB_ROUTE_INFO; break;
 		case K_CATALOG:     method = WEB_GET; target = "/api/catalog"; route = WEB_ROUTE_CATALOG; break;
 		case K_VALUES:      method = WEB_GET; target = "/api/values"; route = WEB_ROUTE_VALUES; break;
-		case K_LAYOUT:      method = WEB_GET; target = "/api/layout"; route = WEB_ROUTE_LAYOUT; break;
+		case K_LAYOUT:
+			method = WEB_GET;
+			target = "/api/layout";
+			route = WEB_ROUTE_LAYOUT;
+			// One time in three the editor asks for the built-in pages of the Cerbo instead
+			if(pages_pick(3) == 0)
+			{
+				target = "/api/layout/gx";
+				route = WEB_ROUTE_LAYOUT_GX;
+				gx_pages = true;
+			}
+			break;
 		case K_DTC_LAST:    method = WEB_GET; target = "/api/dtc/last"; route = WEB_ROUTE_DTC_LAST; break;
 		case K_WIFI_LIST:   method = WEB_GET; target = "/api/wifi"; route = WEB_ROUTE_WIFI; break;
 		case K_TICKET:
@@ -5088,6 +5517,7 @@ static void request_deed(void)
 	}
 	if(!discreet()) broke(PROMISE_PASSWORD, "an answer holds a password that is stored or asked for");
 	if((kind == K_INFO || kind == K_VALUES) && code == 200 && sound()) source_in_answer(kind, seen.time);
+	if(kind == K_CATALOG && code == 200 && sound()) catalog_in_answer(seen.time);
 	// GET /api/info tells which release it is: the one for good with nothing left to count, or not
 	if(kind == K_INFO && code == 200)
 	{
@@ -5185,6 +5615,15 @@ static void request_deed(void)
 		case K_END:
 			if(!good || !seen.uploading) answer = foretell(500, B_UPLOAD);
 			else if(!unasked(&seen, false, &answer)) answer = foretell(202, NULL);
+			break;
+		case K_LAYOUT:
+			// The pages of the Cerbo are a file of the firmware: the same text whatever the display holds, with
+			// the address and without it
+			if(gx_pages)
+			{
+				answer = foretell(200, builtin_gx_text);
+				tally->gx_pages[told.settings.cerbo[0] != '\0']++;
+			}
 			break;
 		default:
 			break;
@@ -5322,6 +5761,9 @@ static void request_deed(void)
 					else tally->gx_moved++;
 					// Nothing of the old address is left to show
 					if(app->cerbo.values.count != 0 || cerbo_view(&app->cerbo, seen.time) == CERBO_VIEW_LIVE) broke(PROMISE_SOURCE, "the address changed and the source still holds values of the old one, or counts as delivering");
+					// ... and its keys are not the keys of the new one
+					if(told.name_count > 0) tally->catalog_forgotten++;
+					told.name_count = 0;
 				}
 				memset(told.settings.cerbo, 0, sizeof(told.settings.cerbo));
 				strcpy(told.settings.cerbo, address);
@@ -5585,6 +6027,7 @@ static void walk_run(uint32_t number)
 	dice = number * 2654435761u + 40503u;
 	gx_dice = number * 2246822519u + 977u;
 	web_dice = number * 40503u + 2654435761u;
+	pages_dice = number * 2246822519u + 40503u;
 	doing = "start";
 
 	if(chance(12)) factory();
@@ -5691,7 +6134,8 @@ static void test_random_walk(void)
 		"in every random run a request that is accepted changes exactly the parts of the app that app_web.h names for it, and leaves the release as one change or one question at its time does",
 		"in every random run GET /api/info and GET /api/values name the Cerbo exactly on a display that has its address - with the address, the view at the time of the request, the "
 		"numbers of the source and the values it has to show, behind those of the adapter -, the source has the address that was sent last and is on with one outside the safe mode, "
-		"and it sends nothing but CONNECT, SUBSCRIBE and PINGREQ",
+		"and it sends nothing but CONNECT, SUBSCRIBE and PINGREQ; GET /api/catalog is the catalogue of the adapter as it is on a display without the address, and on one with it the "
+		"entries of the adapter without the prefix of the Cerbo and behind them the keys the Cerbo delivered since the start or since that address was given, in the order they came",
 		"in every random run no round of the task of the second source changes the release, moves the fault memory flow, sends a request to the adapter, raises an event, counts as an "
 		"input, moves the time of the app or makes it busy",
 		"in every random run the web interface is released for good exactly while the switch Dauerhaft frei is on - as the stored settings left it at the start, on behind a factory "
@@ -5843,6 +6287,19 @@ static void test_random_walk(void)
 	      "the random runs start with the web interface released for good and not, switch Dauerhaft frei on and off at the display, change things under both releases - also long after "
 	      "a release of ten minutes would have ended -, ask for the info under both, send settings that name web_open as it is and the other way round, and begin uploads and ask "
 	      "questions under the release for good");
+	printf("  random runs, the editor: GET /api/catalog without the address of the Cerbo %ld times and with it %ld times, %ld keys of the Cerbo in those answers, %ld of them keys no answer "
+	       "with values would have named then; the adapter had an entry under a key of the Cerbo under %ld catalogues of a display without the address and %ld of one with it; "
+	       "%ld settings made the display forget keys it had noted; GET /api/layout/gx without the address %ld times and with it %ld times\n",
+	       result.catalogs[0], result.catalogs[1], result.catalog_keys, result.catalog_kept, result.catalog_claimed[0], result.catalog_claimed[1], result.catalog_forgotten,
+	       result.gx_pages[0], result.gx_pages[1]);
+	printf("  random runs, the editor: the test noted %ld keys of the Cerbo from the store of a bundle that was taken; %ld rounds of the task took more than one bundle, and behind them the "
+	       "test took %ld keys over from the display\n", result.catalog_noted, result.catalog_bursts, result.catalog_taken_over);
+	// Counted on 2026-10-12: 422 and 354 catalogues, 554 keys, 168 of them kept, 68 and 79 catalogues with a claimed entry, 9 settings that
+	// forgot keys, the pages 133 and 109 times. The limits lie well below: another pace of the source moves these numbers.
+	check(complete && result.catalogs[0] >= 100 && result.catalogs[1] >= 100 && result.catalog_keys >= 250 && result.catalog_kept >= 60 && result.catalog_claimed[0] >= 10 &&
+	      result.catalog_claimed[1] >= 10 && result.catalog_forgotten >= 3 && result.gx_pages[0] >= 30 && result.gx_pages[1] >= 30,
+	      "the random runs ask for the catalogue of displays with and without the address of the Cerbo - with keys of the Cerbo in it, among them keys the Cerbo does not deliver at that "
+	      "moment, and for a vehicle with an entry under a key of the Cerbo -, make displays forget the keys with their address, and ask both kinds for the built-in pages of the Cerbo");
 	check(complete && result.gx_endless[0] >= 20 && result.gx_endless[1] >= 20 && result.gx_claimed[0] >= 10 && result.gx_claimed[1] >= 10,
 	      "the random runs ask for the info and the values while the store of the Cerbo holds a number without end, and for the values of a vehicle that has a value under a key of the "
 	      "Cerbo, on displays without the address and with it");
@@ -5891,6 +6348,8 @@ int main(void)
 	test_for_good();
 	test_cerbo();
 	test_cerbo_views();
+	test_cerbo_catalog();
+	test_cerbo_pages();
 	test_random_walk();
 
 	return test_end();

@@ -97,7 +97,7 @@
  *   what lwIP has received and the task has not read yet            up to the window of 11520 bytes
  *                                                                   (CONFIG_LWIP_TCP_WND_DEFAULT; eight
  *                                                                   frames of the WiFi driver), for moments
- * and of the external RAM: the room below, 5200 bytes, and cerbo_t in app_t (5456 bytes as a PC compiles it).
+ * and of the external RAM: the room below, 5200 bytes, and cerbo_t in app_t (7568 bytes as a PC compiles it).
  * Measured WITHOUT this source on the device (2026-10-10 and 2026-10-11, commit df427d0 and the build before
  * it, GET /api/info): heap_malloc about 70 KB after the start and whenever nobody asks the web server;
  * heap_block never below 53 KB then; heap_malloc_min 50 KB after 25 minutes of driving.

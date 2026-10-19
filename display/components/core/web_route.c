@@ -29,6 +29,7 @@ static const entry_t ROUTES[] = {
 	{WEB_GET,  "/api/layout",       WEB_ROUTE_LAYOUT,       false, false},
 	// Stands for check, apply and save: the mode in the query names the route
 	{WEB_PUT,  "/api/layout",       WEB_ROUTE_LAYOUT_SAVE,  false, false},
+	{WEB_GET,  "/api/layout/gx",    WEB_ROUTE_LAYOUT_GX,    false, false},
 	{WEB_POST, "/api/layout/reset", WEB_ROUTE_LAYOUT_RESET, false, false},
 	{WEB_GET,  "/api/dtc/last",     WEB_ROUTE_DTC_LAST,     false, false},
 	{WEB_GET,  "/api/wifi",         WEB_ROUTE_WIFI,         false, false},

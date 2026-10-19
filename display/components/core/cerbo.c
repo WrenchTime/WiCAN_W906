@@ -17,6 +17,11 @@ static const uint32_t RETRY_WAITS[] = CERBO_RETRY_MS;
 #define PREFIX_LENGTH       (sizeof(CERBO_PREFIX) - 1)
 #define TOPIC_LENGTH        (sizeof(CERBO_TOPIC) - 1)
 
+// Whoever makes room among the names counts on it: one bundle never brings more keys than there are names
+_Static_assert(CERBO_NAMES_MAX >= VALUES_MAX, "every key of the store has room among the names");
+
+static bool has_text(const value_t *item);
+
 // The calls come from more than one task, each with its own reading of the time: one that lies before the
 // latest seen lets no time pass.
 static void advance(cerbo_t *cerbo, uint64_t now_ms)
@@ -108,6 +113,8 @@ void cerbo_set_host(cerbo_t *cerbo, const char *host, uint64_t now_ms)
 	cerbo->newer = false;
 	cerbo->has_boot = false;
 	cerbo->lag_ms = 0;
+	// ... and its keys are not the keys of this one
+	cerbo->name_count = 0;
 	if(cerbo->phase != CERBO_IDLE) cerbo->moved = true;
 	at_once(cerbo);
 }
@@ -354,6 +361,39 @@ static void fill(cerbo_t *cerbo, const char *json, const json_token_t *work, int
 	}
 }
 
+// The keys of the store for the editor (cerbo.h, "The names"): each that has a text and is not among the names
+// yet comes behind them. Called with the store a bundle has just filled.
+static void note_names(cerbo_t *cerbo)
+{
+	for(int i = 0; i < cerbo->values.count; i++)
+	{
+		const value_t *item = &cerbo->values.items[i];
+		int tried = 0;
+
+		// A number without end stands in no answer, and neither does its key
+		if(!has_text(item)) continue;
+		// Among all the names, beginning with the one at the place the key has in the store: a flow sends its
+		// keys in the same order every second, and then that one is it
+		while(tried < cerbo->name_count && strcmp(cerbo->names[(i + tried) % cerbo->name_count], item->name) != 0) tried++;
+		if(tried < cerbo->name_count) continue;
+
+		if(cerbo->name_count == CERBO_NAMES_MAX)
+		{
+			// No room: the oldest name this bundle did not bring gives way, and the names behind it move up. There
+			// is one - the store holds no more keys than there are names, and this key of it is none of them -, so
+			// the search never reaches the last name without having to take it.
+			char (*old)[VALUE_NAME_SIZE] = cerbo->names;
+			char (*last)[VALUE_NAME_SIZE] = cerbo->names + CERBO_NAMES_MAX - 1;
+
+			while(old < last && find(&cerbo->values, *old) != NULL) old++;
+			memmove(old, old + 1, (size_t)(last - old) * sizeof(*old));
+			cerbo->name_count--;
+		}
+		strcpy(cerbo->names[cerbo->name_count], item->name);
+		cerbo->name_count++;
+	}
+}
+
 // The member `name` of the bundle as a whole number from `least` to `most`. false if there is none, if it is
 // anything else, or if it lies outside.
 static bool whole(const char *json, const json_token_t *work, const char *name, int64_t least, int64_t most, int64_t *number)
@@ -407,6 +447,7 @@ static void bundle(cerbo_t *cerbo, const mqtt_sub_packet_t *packet, json_token_t
 
 	reckon(cerbo, (uint32_t)boot, t_ms);
 	fill(cerbo, json, work, values, cerbo->clock_ms > cerbo->lag_ms ? cerbo->clock_ms - cerbo->lag_ms : 0);
+	note_names(cerbo);
 	cerbo->newer = false;
 	cerbo->has_bundle = true;
 	cerbo->bundle_ms = cerbo->clock_ms;

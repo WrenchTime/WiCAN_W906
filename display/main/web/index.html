@@ -102,6 +102,7 @@ progress{width:100%}
 			<h2 data-path="pages">Seiten</h2>
 			<div id="pages"></div>
 			<button id="newpage">Neue Seite</button>
+			<button id="gxadd" hidden>Cerbo-Seiten anhängen</button>
 			<h2 id="ihead">Werte</h2>
 			<div id="items"></div>
 		</div>
@@ -248,6 +249,7 @@ const S = {
 	catalogText: "",
 	values: {},
 	view: "",
+	gx: null, // the built-in pages of the Cerbo, see loadGx()
 	layout: null, // what the editor holds, see adopt()
 	loaded: null, // the text the editor started from: "Verwerfen" brings it back
 	base: "", // layoutText() of it: the editor is changed if its text is another
@@ -437,8 +439,11 @@ async function refresh()
 	}
 	if(!S.layout) await loadLayout();
 	else if(before && info.up < before.up) await restarted();
+	// Only a display that names a Cerbo is asked for its pages
+	if(isObject(info.cerbo) && !S.gx) await loadGx();
 	if(S.layout) head();
-	if(!before || part(info, "wican").view !== part(before, "wican").view) loadCatalog();
+	// The catalogue names the keys of the Cerbo: read anew when it has more or fewer values to show
+	if(!before || part(info, "wican").view !== part(before, "wican").view || part(info, "cerbo").values !== part(before, "cerbo").values) loadCatalog();
 }
 
 async function poll()
@@ -694,6 +699,7 @@ function head()
 		+ (S.shown !== null ? ", als Vorschau am Display" : "") + ". " + bytes(json) + " von " + LAYOUT_BYTES + " Bytes.";
 	$("discard").disabled = S.loaded === null || (json === S.base && S.shown === null);
 	$("newpage").disabled = S.layout.pages.length >= PAGES_MAX;
+	$("gxadd").hidden = !isObject(part(S, "info").cerbo) || !S.gx || !S.gx.pages.length;
 }
 
 function draw()
@@ -993,7 +999,7 @@ function drawCatalog()
 	{
 		const add = button("", "", () =>
 		{
-			S.item = {key: name, map: []};
+			S.item = gxItem(name) || {key: name, map: []};
 			page.items.push(S.item);
 			draw();
 			changed();
@@ -1025,6 +1031,42 @@ function live()
 	});
 	$("chead").textContent = (!page ? "Erst eine Seite anlegen." : page.items.length >= ITEMS_MAX ? "Die Seite ist voll (" + ITEMS_MAX + " Werte)." : "Antippen setzt den Wert auf Seite " + (S.page + 1) + ".")
 		+ " ✓ = schon auf einer Seite. Adapter: " + (word(VIEWS, S.view) || "–") + ".";
+}
+
+// The built-in pages of the Cerbo; a display without them has none to append
+async function loadGx()
+{
+	const r = await api("GET", "/api/layout/gx");
+
+	if(r.status) S.gx = r.status === 200 && adopt(r.text) || {pages: []};
+}
+
+// A copy of what those pages say of a key: label, unit, decimals, widget
+function gxItem(key)
+{
+	const found = [].concat(...(S.gx ? S.gx.pages : []).map(page => page.items)).find(item => item.key === key);
+
+	return found ? JSON.parse(JSON.stringify(found)) : null;
+}
+
+// "Cerbo-Seiten anhängen": copies of those pages behind the ones of the editor, if all of them fit
+function gxAppend()
+{
+	const pages = S.layout.pages;
+	const more = JSON.parse(JSON.stringify(S.gx.pages));
+	const over = pages.length + more.length - PAGES_MAX;
+
+	if(over > 0)
+	{
+		tell("vmsg", "Die " + more.length + " Cerbo-Seiten passen nicht mehr: höchstens " + PAGES_MAX + " Seiten. Erst " + over + " löschen.", "bad");
+		return;
+	}
+	S.page = pages.length;
+	S.item = null;
+	more.forEach(page => pages.push(page));
+	draw();
+	changed();
+	tell("vmsg", more.length + " Cerbo-Seiten angehängt – noch nicht am Display.", "ok");
 }
 
 async function loadCatalog()
@@ -1582,6 +1624,7 @@ const CLICKS = {
 		draw();
 		changed();
 	},
+	gxadd: () => S.layout && S.gx && gxAppend(),
 	wload: loadWifi,
 	wstore: storeWifi,
 	dload: loadLists,

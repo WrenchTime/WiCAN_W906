@@ -1026,3 +1026,19 @@ MUTATIONS += [
     ("app_gx_standby_kept_off_by_the_cerbo", T, F, SHOWN_VIEW, "\tif(view == CONN_VIEW_LIVE || view == CONN_VIEW_SCAN || cerbo_showing(&app->cerbo, now)) return true;"),
     ("app_gx_display_goes_home_by_itself", T, F, TICK_NAV, TICK_NAV + "\n\tif(app->nav.screen == NAV_PAGES && world.home >= 0) app->nav.page = world.home;"),
 ]
+
+# The text of the built-in pages of the second source, kept for GET /api/layout/gx (stage 4, 2026-10-12)
+GX_TEXT_IF = "\tif(app->has_builtin_gx)\n\t{\n\t\tapp->builtin_gx_text = boot->builtin_gx;\n"
+GX_TEXT = "\t\tapp->builtin_gx_text = boot->builtin_gx;\n"
+GX_TEXT_LENGTH = "\t\tapp->builtin_gx_length = boot->builtin_gx_length;\n"
+
+MUTATIONS += [
+    ("app_gx_pages_text_kept_whatever_was_read", T, F, GX_TEXT_IF, GX_TEXT_IF.replace("\tif(app->has_builtin_gx)\n", "\tif(boot->builtin_gx != NULL)\n")),
+    ("app_gx_pages_text_kept_always", T, F, GX_TEXT_IF, GX_TEXT_IF.replace("\tif(app->has_builtin_gx)\n", "\tif(app->has_builtin_gx || boot->builtin_gx_length > 0)\n")),
+    ("app_gx_pages_text_never_kept", T, F, GX_TEXT_IF, GX_TEXT_IF.replace("\tif(app->has_builtin_gx)\n", "\tif(app->has_builtin_gx && app->safe_mode)\n")),
+    ("app_gx_pages_text_not_kept", T, F, GX_TEXT, ""),
+    ("app_gx_pages_text_of_the_views_of_the_vehicle", T, F, GX_TEXT, "\t\tapp->builtin_gx_text = boot->builtin_layout;\n"),
+    ("app_gx_pages_text_without_its_length", T, F, GX_TEXT_LENGTH, ""),
+    ("app_gx_pages_text_one_byte_short", T, F, GX_TEXT_LENGTH, "\t\tapp->builtin_gx_length = boot->builtin_gx_length - 1;\n"),
+    ("app_gx_pages_text_length_of_the_views_of_the_vehicle", T, F, GX_TEXT_LENGTH, "\t\tapp->builtin_gx_length = boot->builtin_length;\n"),
+]

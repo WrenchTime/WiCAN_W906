@@ -350,8 +350,15 @@ MUTATIONS = [
     ("app_web_get_takes_time_over", T, F, GET_TIME, "\tuint64_t now = advance(app, now_ms);\n\tconst poll_t *poll = &app->poll;"),
     ("app_web_get_info_not_served", T, F, "\t\tcase WEB_ROUTE_INFO:\n\t\t\twritten = info_json(app, out, now);\n\t\t\tbreak;\n",
      "\t\tcase WEB_ROUTE_INFO:\n\t\t\tinfo_json(app, out, now);\n\t\t\treturn refuse(404, \"not_found\", out, length);\n"),
-    ("app_web_get_catalog_is_values", T, F, "\t\t\twritten = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE);\n\t\t\tbreak;\n\n\t\tcase WEB_ROUTE_VALUES:\n",
-     "\t\tcase WEB_ROUTE_VALUES:\n"),
+    # The anchor reaches from the label of the catalogue to the one of the values since 2026-10-12: the branch for
+    # the keys of the Cerbo stands between them, and what is left of the case must not fall through into the next
+    ("app_web_get_catalog_is_values", T, F,
+     "\t\tcase WEB_ROUTE_CATALOG:\n"
+     "\t\t\t// A display with a second source: the keys the Cerbo delivered behind the entries of the adapter\n"
+     "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0')\n\t\t\t{\n"
+     "\t\t\t\twritten = web_catalog_cerbo_json(&poll->catalog, &app->cerbo, out, APP_WEB_OUT_SIZE);\n\t\t\t\tbreak;\n\t\t\t}\n"
+     "\t\t\twritten = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE);\n\t\t\tbreak;\n\n\t\tcase WEB_ROUTE_VALUES:\n",
+     "\t\tcase WEB_ROUTE_CATALOG:\n\t\tcase WEB_ROUTE_VALUES:\n"),
     ("app_web_get_catalog_room_smaller", T, F, "\t\t\twritten = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE);", "\t\t\twritten = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE - 1);"),
     ("app_web_get_catalog_room_larger", T, F, "\t\t\twritten = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE);", "\t\t\twritten = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE + 1);"),
     ("app_web_get_catalog_room_double", T, F, "\t\t\twritten = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE);", "\t\t\twritten = catalog_to_json(&poll->catalog, out, 2 * APP_WEB_OUT_SIZE);"),
@@ -824,6 +831,8 @@ C_CONNECTS = "\tinfo.cerbo_connects = app->cerbo.sessions;"
 C_BOOTS = "\tinfo.cerbo_boots = app->cerbo.boots;"
 C_LAG = "\tinfo.cerbo_lag_ms = app->cerbo.lag_ms;"
 C_BRANCH = "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0')\n"
+# GET /api/catalog asks the same question since 2026-10-12: the anchor of the one of GET /api/values reaches to its call
+C_BEHIND = "\t\t\t{\n\t\t\t\twritten = web_values_cerbo_json("
 C_BOTH = ("\t\t\t\twritten = web_values_cerbo_json(&poll->values, text_view_word(conn_view(&poll->conn, now)), &app->cerbo.values,\n"
           "\t\t\t\t                                text_cerbo_word(cerbo_view(&app->cerbo, now)), now, out, APP_WEB_OUT_SIZE);")
 C_FOLLOW = "\tif(strcmp(app->settings.cerbo, cerbo_host(&app->cerbo)) != 0) cerbo_set_host(&app->cerbo, app->settings.cerbo, app->clock_ms);"
@@ -857,12 +866,12 @@ MUTATIONS += [
     ("app_web_info_cerbo_lag_in_seconds", T, F, C_LAG, "\tinfo.cerbo_lag_ms = app->cerbo.lag_ms / 1000;"),
 
     # GET /api/values
-    ("app_web_values_cerbo_always", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo) != NULL)\n"),
-    ("app_web_values_cerbo_never", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo)[0] == '\\1')\n"),
-    ("app_web_values_cerbo_not_in_safe_mode", T, F, C_BRANCH, "\t\t\tif(cerbo_on(&app->cerbo))\n"),
-    ("app_web_values_cerbo_only_while_it_holds_values", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.values.count > 0)\n"),
-    ("app_web_values_cerbo_whenever_it_holds_values", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' || app->cerbo.values.count > 0)\n"),
-    ("app_web_values_cerbo_only_in_a_session", T, F, C_BRANCH, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.phase == CERBO_SESSION)\n"),
+    ("app_web_values_cerbo_always", T, F, C_BRANCH + C_BEHIND, "\t\t\tif(cerbo_host(&app->cerbo) != NULL)\n" + C_BEHIND),
+    ("app_web_values_cerbo_never", T, F, C_BRANCH + C_BEHIND, "\t\t\tif(cerbo_host(&app->cerbo)[0] == '\\1')\n" + C_BEHIND),
+    ("app_web_values_cerbo_not_in_safe_mode", T, F, C_BRANCH + C_BEHIND, "\t\t\tif(cerbo_on(&app->cerbo))\n" + C_BEHIND),
+    ("app_web_values_cerbo_only_while_it_holds_values", T, F, C_BRANCH + C_BEHIND, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.values.count > 0)\n" + C_BEHIND),
+    ("app_web_values_cerbo_whenever_it_holds_values", T, F, C_BRANCH + C_BEHIND, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' || app->cerbo.values.count > 0)\n" + C_BEHIND),
+    ("app_web_values_cerbo_only_in_a_session", T, F, C_BRANCH + C_BEHIND, "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.phase == CERBO_SESSION)\n" + C_BEHIND),
     ("app_web_values_cerbo_the_adapter_twice", T, F, C_BOTH, C_BOTH.replace("&app->cerbo.values,", "&poll->values,")),
     ("app_web_values_cerbo_without_the_adapter", T, F, C_BOTH, C_BOTH.replace("web_values_cerbo_json(&poll->values,", "web_values_cerbo_json(&app->cerbo.values,")),
     ("app_web_values_cerbo_view_of_the_adapter", T, F, C_BOTH, C_BOTH.replace("text_cerbo_word(cerbo_view(&app->cerbo, now))", "text_view_word(conn_view(&poll->conn, now))")),
@@ -947,4 +956,55 @@ MUTATIONS += [
      "\t\tif(!layout_page_shown(&app->layout, app->nav.page, &app->poll.catalog)) app->nav.page = layout_first_page(&app->layout, &app->poll.catalog);\n"),
     ("app_web_settings_chosen_views_stored", T, F, GX_CHOSEN, GX_CHOSEN + "\t\tapp->events |= APP_EVENT_STORE_LAYOUT;\n"),
     ("app_web_settings_chosen_views_erase_the_stored", T, F, GX_CHOSEN, GX_CHOSEN + "\t\tapp->events |= APP_EVENT_ERASE_LAYOUT;\n"),
+]
+
+# The editor of the web interface and the second source (stage 4, 2026-10-12): GET /api/catalog with the keys the
+# Cerbo delivered, and GET /api/layout/gx
+K_IF = "\t\t\tif(cerbo_host(&app->cerbo)[0] != '\\0')\n\t\t\t{\n\t\t\t\twritten = web_catalog_cerbo_json("
+K_CALL = "\t\t\t\twritten = web_catalog_cerbo_json(&poll->catalog, &app->cerbo, out, APP_WEB_OUT_SIZE);\n"
+G_CASE = "\t\tcase WEB_ROUTE_LAYOUT_GX:\n"
+G_NONE = "\t\t\tif(!app->has_builtin_gx) return refuse(404, \"not_found\", out, length);\n"
+G_TEXT = "\t\t\treturn answer_text(app->builtin_gx_text, app->builtin_gx_length, out, length);\n"
+
+
+def k_if(condition):
+    return K_IF.replace("if(cerbo_host(&app->cerbo)[0] != '\\0')", "if(%s)" % condition)
+
+
+MUTATIONS += [
+    # GET /api/catalog
+    ("app_web_catalog_cerbo_always", T, F, K_IF, k_if("cerbo_host(&app->cerbo) != NULL")),
+    ("app_web_catalog_cerbo_never", T, F, K_IF, k_if("cerbo_host(&app->cerbo)[0] == '\\1'")),
+    ("app_web_catalog_cerbo_not_in_safe_mode", T, F, K_IF, k_if("cerbo_on(&app->cerbo)")),
+    ("app_web_catalog_cerbo_only_while_it_holds_values", T, F, K_IF, k_if("cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.values.count > 0")),
+    ("app_web_catalog_cerbo_only_while_it_holds_names", T, F, K_IF, k_if("cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.name_count > 0")),
+    ("app_web_catalog_cerbo_whenever_it_holds_names", T, F, K_IF, k_if("cerbo_host(&app->cerbo)[0] != '\\0' || app->cerbo.name_count > 0")),
+    ("app_web_catalog_cerbo_only_in_a_session", T, F, K_IF, k_if("cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.phase == CERBO_SESSION")),
+    ("app_web_catalog_cerbo_only_while_it_delivers", T, F, K_IF, k_if("cerbo_host(&app->cerbo)[0] != '\\0' && cerbo_view(&app->cerbo, now) == CERBO_VIEW_LIVE")),
+    ("app_web_catalog_cerbo_only_in_a_network", T, F, K_IF, k_if("cerbo_host(&app->cerbo)[0] != '\\0' && app->cerbo.network")),
+    ("app_web_catalog_cerbo_is_the_catalogue_of_the_adapter", T, F, K_CALL, "\t\t\t\twritten = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE);\n"),
+    ("app_web_catalog_cerbo_room_one_byte_smaller", T, F, K_CALL, K_CALL.replace("APP_WEB_OUT_SIZE", "APP_WEB_OUT_SIZE - 1")),
+    ("app_web_catalog_cerbo_room_one_byte_larger", T, F, K_CALL, K_CALL.replace("APP_WEB_OUT_SIZE", "APP_WEB_OUT_SIZE + 1")),
+    ("app_web_catalog_cerbo_room_of_4096_bytes", T, F, K_CALL, K_CALL.replace("APP_WEB_OUT_SIZE", "4096")),
+    ("app_web_catalog_cerbo_written_over_by_the_catalogue_of_the_adapter", T, F, K_CALL + "\t\t\t\tbreak;\n", K_CALL),
+
+    # GET /api/layout/gx
+    ("app_web_gx_pages_served_for_another_route", T, F, G_CASE, G_CASE.replace("WEB_ROUTE_LAYOUT_GX", "WEB_ROUTE_PAGE")),
+    ("app_web_gx_pages_handed_out_although_not_read", T, F, G_NONE, ""),
+    ("app_web_gx_pages_never_handed_out", T, F, G_NONE, G_NONE.replace("!app->has_builtin_gx", "app->has_builtin_gx")),
+    ("app_web_gx_pages_missing_is_500", T, F, G_NONE, G_NONE.replace("404", "500")),
+    ("app_web_gx_pages_missing_is_too_large", T, F, G_NONE, G_NONE.replace("\"not_found\"", "\"too_large\"")),
+    ("app_web_gx_pages_missing_is_an_empty_200", T, F, G_NONE, G_NONE.replace("return refuse(404, \"not_found\", out, length);", "return answer(200, snprintf(out, APP_WEB_OUT_SIZE, \"{}\"), out, length);")),
+    ("app_web_gx_pages_only_with_the_address", T, F, G_NONE, G_NONE.replace("!app->has_builtin_gx", "!app->has_builtin_gx || cerbo_host(&app->cerbo)[0] == '\\0'")),
+    ("app_web_gx_pages_not_in_safe_mode", T, F, G_NONE, G_NONE.replace("!app->has_builtin_gx", "!app->has_builtin_gx || app->safe_mode")),
+    ("app_web_gx_pages_not_under_stored_views", T, F, G_NONE, G_NONE.replace("!app->has_builtin_gx", "!app->has_builtin_gx || app->source == APP_LAYOUT_STORED")),
+    ("app_web_gx_pages_only_while_the_views_end_with_them", T, F, G_NONE, G_NONE.replace("!app->has_builtin_gx", "!app->has_builtin_gx || app->layout.page_count < 12")),
+    ("app_web_gx_pages_need_the_release", T, F, G_NONE, G_NONE.replace("!app->has_builtin_gx", "!app->has_builtin_gx || !access_is_open(&app->access, now)")),
+    ("app_web_gx_pages_are_the_views_in_use", T, F, G_TEXT, G_TEXT.replace("app->builtin_gx_text, app->builtin_gx_length", "app->layout_text, app->layout_length")),
+    ("app_web_gx_pages_are_the_views_of_the_vehicle", T, F, G_TEXT, G_TEXT.replace("app->builtin_gx_text, app->builtin_gx_length", "app->builtin_text, app->builtin_length")),
+    ("app_web_gx_pages_one_byte_short", T, F, G_TEXT, G_TEXT.replace("app->builtin_gx_length", "app->builtin_gx_length - 1")),
+    ("app_web_gx_pages_written_anew", T, F, G_TEXT, "\t\t\treturn answer(200, layout_to_json(&app->builtin_gx, out, APP_WEB_OUT_SIZE), out, length);\n"),
+    ("app_web_layout_is_the_gx_pages", T, F, "\t\t\treturn answer_text(app->layout_text, app->layout_length, out, length);\n\n" + G_CASE,
+     "\t\t\tif(app->has_builtin_gx) return answer_text(app->builtin_gx_text, app->builtin_gx_length, out, length);\n"
+     "\t\t\treturn answer_text(app->layout_text, app->layout_length, out, length);\n\n" + G_CASE),
 ]

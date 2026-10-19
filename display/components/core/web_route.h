@@ -21,9 +21,10 @@
  *
  *   GET  /                          the page
  *   GET  /api/info                  version, memory, network, adapter, release
- *   GET  /api/catalog               the values the adapter can deliver
+ *   GET  /api/catalog               the values the adapter can deliver, and the keys the Cerbo GX delivered
  *   GET  /api/values                the current values (from the memory of the display, the adapter is not asked)
  *   GET  /api/layout                the views in use, as the layout text
+ *   GET  /api/layout/gx             the built-in pages of the second source, the Cerbo GX, as a layout text
  *   PUT  /api/layout?mode=check     checks a layout, changes nothing
  *   PUT  /api/layout?mode=apply     shows it on the display without storing it
  *   PUT  /api/layout?mode=save      stores it
@@ -64,6 +65,7 @@ typedef enum
 	WEB_ROUTE_CATALOG,
 	WEB_ROUTE_VALUES,
 	WEB_ROUTE_LAYOUT,
+	WEB_ROUTE_LAYOUT_GX,
 	WEB_ROUTE_LAYOUT_CHECK,
 	WEB_ROUTE_LAYOUT_APPLY,
 	WEB_ROUTE_LAYOUT_SAVE,

@@ -81,6 +81,10 @@
 // The values of a display with a second source have at most 19511 bytes: those of the adapter as above,
 // VALUES_MAX of the Cerbo with the longest keys and numbers there are (web_json.h; cerbo.h takes no key that
 // needs an escape), and the longest words for the two views.
+// Its catalogue has the keys of the Cerbo behind the entries of the adapter, up to 5824 bytes more
+// (WEB_CATALOG_CERBO_SIZE): at most 17921 bytes while the texts of the adapter need no escape at all, which has
+// room. The 18433 bytes of a catalogue whose texts are quotes and backslashes alone leave room for 22 keys of
+// 32 bytes and not for 23: such a catalogue is answered 500 "too_large" as well.
 #define APP_WEB_OUT_SIZE    20480
 #define APP_WEB_UPLOAD_LEFT_S 300   // a firmware upload only begins while the release lasts at least this long
 
@@ -104,7 +108,12 @@ void app_web_request(const app_t *app, web_request_t *request, uint64_t now_ms);
  *                       the counters cerbo.bundles, cerbo_refused(), cerbo.sessions and cerbo.boots, and
  *                       cerbo.lag_ms. Without an address the answer is the one of a display without a
  *                       second source, byte for byte.
- *   WEB_ROUTE_CATALOG   catalog_to_json()
+ *   WEB_ROUTE_CATALOG   catalog_to_json(). While an address of the Cerbo is set (also in safe mode):
+ *                       web_catalog_cerbo_json() with the keys the Cerbo has delivered (cerbo.names) behind the
+ *                       entries of the adapter - and without the entries of the adapter whose names begin with
+ *                       CERBO_PREFIX, as in the values. The editor in the browser offers what this answer
+ *                       names; without an address it is the answer of a display without a second source,
+ *                       byte for byte.
  *   WEB_ROUTE_VALUES    web_values_json() with text_view_word() of the connection. While an address of the
  *                       Cerbo is set: web_values_cerbo_json() with the values of the Cerbo (cerbo.values)
  *                       and text_cerbo_word() of cerbo_view() as well - and without the values of the adapter
@@ -114,6 +123,11 @@ void app_web_request(const app_t *app, web_request_t *request, uint64_t now_ms);
  *                       see APP_WEB_OUT_SIZE.
  *   WEB_ROUTE_LAYOUT    the text of the layout in use (app->layout_text) as it is. An empty one (app.h: a
  *                       text that could not be written) is no answer: 500 "too_large"
+ *   WEB_ROUTE_LAYOUT_GX the text of the built-in pages of the second source (app->builtin_gx_text, the file
+ *                       display/layouts/gx_default.json) as it is, whatever views are in use, with or without
+ *                       an address of the Cerbo and in safe mode as well: the editor in the browser appends
+ *                       these pages to views of the user, which the display itself never appends to (app.h).
+ *                       A firmware without such pages (app->has_builtin_gx is false): 404 "not_found"
  *   WEB_ROUTE_DTC_LAST  web_dtc_last_json(): the list of the own read if there is one (poll.has_list; its
  *                       age in whole seconds counted from app->poll.flow.list_end_ms, at most 2^32-1), and
  *                       the list before the last clear (poll.has_old)

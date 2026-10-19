@@ -52,6 +52,7 @@
 #define CERBO_PACKET_ID         1           // of the one SUBSCRIBE of a connection
 #define CERBO_TOKENS            256         // tokens the caller provides: a bundle of 64 values needs 137
 #define CERBO_BUNDLE_MAX        1400        // bytes of a bundle; with its topic and header it is one TCP segment
+#define CERBO_NAMES_MAX         VALUES_MAX  // keys the source keeps the names of: as many as one bundle can bring
 #define CERBO_BOOT_MAX          2147483647          // 2^31-1
 #define CERBO_T_MAX             9007199254740991    // 2^53-1: up to here JavaScript counts in whole numbers
 #define CERBO_READ_MAX          1024        // for the caller: bytes of one report
@@ -125,6 +126,10 @@ typedef struct
 
 	mqtt_sub_reader_t reader;
 	values_t values;                // of the last bundle taken; seen_ms is its arrival less its lag
+	// The keys the broker at `host` has delivered, the first name_count of them in the order they were first
+	// seen: see "The names" at cerbo_bytes()
+	char names[CERBO_NAMES_MAX][VALUE_NAME_SIZE];
+	int name_count;
 
 	bool has_bundle;                // a bundle of the broker at `host` was taken, the last one at bundle_ms
 	uint64_t bundle_ms;
@@ -164,9 +169,9 @@ bool cerbo_on(const cerbo_t *cerbo);
 // no address (an address cut short would be the address of something else); whether the text is an address
 // is the business of settings.h. The same address again changes nothing. Another one, also none: the values
 // are forgotten, and with them what was known of the bundles of the other broker - the last bundle, its
-// boot, its lag, a newer contract; the counters stay. The next attempt is due at once and the waits start
-// from the beginning; if there is a connection, cerbo_next() orders it closed first, and its bytes are not
-// read any more.
+// boot, its lag, a newer contract - and the names of its keys; the counters stay. The next attempt is due at
+// once and the waits start from the beginning; if there is a connection, cerbo_next() orders it closed
+// first, and its bytes are not read any more.
 void cerbo_set_host(cerbo_t *cerbo, const char *host, uint64_t now_ms);
 
 // The display is in a network or not (link.h). The same value again changes nothing. With the network an
@@ -240,6 +245,23 @@ void cerbo_opened(cerbo_t *cerbo, uint64_t now_ms);
  * - every other member is passed over and counted in `skipped`
  * - of two members with the same key the last counts
  * - the 65th key finds no room (VALUES_MAX): counted in `skipped`, not kept
+ *
+ * The names. The editor of the web interface offers the keys of this source (GET /api/catalog, app_web.h), and
+ * a bundle does not name a value its device does not deliver right now - the charger of a parked camper. So
+ * the keys are kept beyond the bundle that brought them, in `names`, since cerbo_init() and for the broker at
+ * `host`: another address forgets them with the values (cerbo_set_host()).
+ * - with every bundle that is taken, each key of the store whose value GET /api/values has a text for - a
+ *   finite number, "on" or "off" - and that is not among the names yet is put behind them, in the order of the
+ *   store. A key whose value is a number beyond the range of a double is not noted by that bundle: no answer
+ *   names it (cerbo_shown())
+ * - up to CERBO_NAMES_MAX names. A new one that finds no room takes the place of the oldest name the bundle
+ *   that is being taken did not bring: the names behind that one move up, the new one is the last. So every
+ *   key GET /api/values names is among the names at every moment, whatever came before
+ * - a name stays when its key is missing in a bundle, when its value grows old or is gone, when the session
+ *   ends, and when a bundle is refused
+ * What that costs while the caller holds its lock: one comparison of two names for each key of a bundle
+ * whose keys come in the order they were first seen - a flow sends them so every second -, and up to
+ * CERBO_NAMES_MAX for a key that stands elsewhere or is new. Not measured on the device.
  *
  * The lag. The display must not show a value as newer than it arrived, and after a pause of the radio link
  * TCP delivers everything that piled up at once: `t` tells the bundles apart, as the counter `pass` does for

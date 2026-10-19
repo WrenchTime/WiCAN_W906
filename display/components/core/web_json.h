@@ -133,6 +133,29 @@ int web_values_json(const values_t *values, const char *view, uint64_t now_ms, c
 int web_values_cerbo_json(const values_t *wican, const char *wican_view, const values_t *cerbo, const char *cerbo_view,
                           uint64_t now_ms, char *out, size_t size);
 
+// GET /api/catalog of a display with a second source: the catalogue of the adapter as catalog_to_json() writes
+// it (catalog.h) - {"NAME":{"unit":"°C","class":"temperature","profile":true,"delivered":false},...} - and,
+// behind its entries in the same object, one entry for each key the Cerbo has delivered (cerbo.h: the first
+// `name_count` of `names`, in their order):
+//  "GX_BATT_SOC":{"unit":"","class":"","profile":false,"delivered":true}
+// A key of the Cerbo is in no vehicle profile: it has no unit and no class - a page says how its value is
+// called and in which unit - and "profile" is false; "delivered" is true, for that is how the display learned
+// the key. So the editor in the browser offers the values of both sources from one list.
+// An entry of the adapter is written byte for byte as catalog_to_json() writes it. That is another rule than
+// the one for every other writer here in one byte: 0x7F is passed on, not written as \u007f. A name of the
+// Cerbo is written by the same rule - cerbo.h takes none that needs an escape.
+// The prefix of the Cerbo (cerbo_key()) belongs to the Cerbo here as in the values: an entry of the adapter
+// whose name begins with it is left out, whether the Cerbo delivered a key of that name or not, so that no
+// key stands twice. A page shows such a key from the store of the Cerbo in every case (scene.h): the entry of
+// the adapter would offer a value no page can show.
+// With no name of the Cerbo the answer is catalog_to_json() of the catalogue without such entries.
+// WEB_CATALOG_CERBO_SIZE is the room the names of the Cerbo need on top of the catalogue of the adapter:
+// CERBO_NAMES_MAX entries with keys of 32 bytes, 90 bytes each and a comma. A catalogue of CATALOG_MAX entries
+// whose texts need no escape has at most 12097 bytes: the longest text of both is then 17921 bytes, 17922
+// with the zero.
+#define WEB_CATALOG_CERBO_SIZE  5824
+int web_catalog_cerbo_json(const catalog_t *catalog, const cerbo_t *cerbo, char *out, size_t size);
+
 // One network seen in a scan
 typedef struct
 {

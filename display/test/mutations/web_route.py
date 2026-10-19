@@ -16,6 +16,7 @@ CATALOG = row("WEB_GET", "/api/catalog", "WEB_ROUTE_CATALOG")
 VALUES = row("WEB_GET", "/api/values", "WEB_ROUTE_VALUES")
 LAYOUT = row("WEB_GET", "/api/layout", "WEB_ROUTE_LAYOUT")
 LAYOUT_PUT = row("WEB_PUT", "/api/layout", "WEB_ROUTE_LAYOUT_SAVE")
+LAYOUT_GX = row("WEB_GET", "/api/layout/gx", "WEB_ROUTE_LAYOUT_GX")
 LAYOUT_RESET = row("WEB_POST", "/api/layout/reset", "WEB_ROUTE_LAYOUT_RESET")
 DTC_LAST = row("WEB_GET", "/api/dtc/last", "WEB_ROUTE_DTC_LAST")
 WIFI = row("WEB_GET", "/api/wifi", "WEB_ROUTE_WIFI")
@@ -109,6 +110,7 @@ MUTATIONS = [
     ("web_route_values_missing", T, F, VALUES, ""),
     ("web_route_layout_missing", T, F, LAYOUT, ""),
     ("web_route_layout_put_missing", T, F, LAYOUT_PUT, ""),
+    ("web_route_layout_gx_missing", T, F, LAYOUT_GX, ""),
     ("web_route_layout_reset_missing", T, F, LAYOUT_RESET, ""),
     ("web_route_dtc_last_missing", T, F, DTC_LAST, ""),
     ("web_route_wifi_missing", T, F, WIFI, ""),
@@ -127,6 +129,16 @@ MUTATIONS = [
     ("web_route_settings_by_put", T, F, SETTINGS, row("WEB_PUT", "/api/settings", "WEB_ROUTE_SETTINGS")),
     ("web_route_layout_by_post", T, F, LAYOUT_PUT, row("WEB_POST", "/api/layout", "WEB_ROUTE_LAYOUT_SAVE")),
     ("web_route_ticket_by_post", T, F, TICKET, row("WEB_POST", "/api/ticket", "WEB_ROUTE_TICKET")),
+    ("web_route_layout_gx_by_post", T, F, LAYOUT_GX, row("WEB_POST", "/api/layout/gx", "WEB_ROUTE_LAYOUT_GX")),
+    ("web_route_layout_gx_by_put", T, F, LAYOUT_GX, row("WEB_PUT", "/api/layout/gx", "WEB_ROUTE_LAYOUT_GX")),
+    ("web_route_layout_gx_is_the_layout", T, F, LAYOUT_GX, row("WEB_GET", "/api/layout/gx", "WEB_ROUTE_LAYOUT")),
+    ("web_route_layout_gx_is_the_catalog", T, F, LAYOUT_GX, row("WEB_GET", "/api/layout/gx", "WEB_ROUTE_CATALOG")),
+    ("web_route_layout_is_the_layout_gx", T, F, LAYOUT, row("WEB_GET", "/api/layout", "WEB_ROUTE_LAYOUT_GX")),
+    ("web_route_layout_gx_at_layout_g", T, F, LAYOUT_GX, row("WEB_GET", "/api/layout/g", "WEB_ROUTE_LAYOUT_GX")),
+    ("web_route_layout_gx_at_layout_cerbo", T, F, LAYOUT_GX, row("WEB_GET", "/api/layout/cerbo", "WEB_ROUTE_LAYOUT_GX")),
+    ("web_route_layout_gx_in_capitals", T, F, LAYOUT_GX, row("WEB_GET", "/api/layout/GX", "WEB_ROUTE_LAYOUT_GX")),
+    ("web_route_layout_gx_and_reset_swapped", T, F, LAYOUT_GX + LAYOUT_RESET,
+     row("WEB_GET", "/api/layout/reset", "WEB_ROUTE_LAYOUT_GX") + row("WEB_POST", "/api/layout/gx", "WEB_ROUTE_LAYOUT_RESET")),
     ("web_route_info_is_the_catalog", T, F, INFO, row("WEB_GET", "/api/info", "WEB_ROUTE_CATALOG")),
     ("web_route_values_are_the_layout", T, F, VALUES, row("WEB_GET", "/api/values", "WEB_ROUTE_LAYOUT")),
     ("web_route_page_is_the_info", T, F, PAGE, row("WEB_GET", "/", "WEB_ROUTE_INFO")),
@@ -149,6 +161,8 @@ MUTATIONS = [
     ("web_route_reboot_also_by_get", T, F, REBOOT, REBOOT + row("WEB_GET", "/api/reboot", "WEB_ROUTE_REBOOT", "false", "true")),
     ("web_route_page_also_by_any_other_method", T, F, PAGE, PAGE + row("WEB_OTHER", "/", "WEB_ROUTE_PAGE")),
     ("web_route_wifi_store_also_by_put", T, F, WIFI_STORE, WIFI_STORE + row("WEB_PUT", "/api/wifi", "WEB_ROUTE_WIFI_STORE", "true")),
+    ("web_route_layout_gx_also_by_put", T, F, LAYOUT_GX, LAYOUT_GX + row("WEB_PUT", "/api/layout/gx", "WEB_ROUTE_LAYOUT_SAVE")),
+    ("web_route_layout_gx_also_with_a_slash", T, F, LAYOUT_GX, LAYOUT_GX + row("WEB_GET", "/api/layout/gx/", "WEB_ROUTE_LAYOUT_GX")),
     ("web_route_fault_memory_read_through_the_web", T, F, DTC_LAST, DTC_LAST + row("WEB_GET", "/api/dtc/read", "WEB_ROUTE_DTC_LAST")),
     ("web_route_fault_memory_cleared_through_the_web", T, F, DTC_LAST, DTC_LAST + row("WEB_POST", "/api/dtc/clear", "WEB_ROUTE_DTC_LAST")),
 
@@ -167,6 +181,8 @@ MUTATIONS = [
     ("web_route_settings_refused_while_busy", T, F, SETTINGS, row("WEB_POST", "/api/settings", "WEB_ROUTE_SETTINGS", "false", "true")),
     ("web_route_wifi_store_refused_while_busy", T, F, WIFI_STORE, row("WEB_POST", "/api/wifi", "WEB_ROUTE_WIFI_STORE", "true", "true")),
     ("web_route_info_refused_while_busy", T, F, INFO, row("WEB_GET", "/api/info", "WEB_ROUTE_INFO", "false", "true")),
+    ("web_route_layout_gx_refused_while_busy", T, F, LAYOUT_GX, row("WEB_GET", "/api/layout/gx", "WEB_ROUTE_LAYOUT_GX", "false", "true")),
+    ("web_route_layout_gx_with_knob", T, F, LAYOUT_GX, row("WEB_GET", "/api/layout/gx", "WEB_ROUTE_LAYOUT_GX", "true")),
     ("web_route_busy_not_refused", T, F, BUSY, ""),
     ("web_route_busy_refuses_every_route", T, F, BUSY, BUSY.replace("entry->rests && ", "")),
     ("web_route_busy_status_changed", T, F, BUSY, BUSY.replace("409", "503")),

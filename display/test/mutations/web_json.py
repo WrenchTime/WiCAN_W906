@@ -799,3 +799,116 @@ MUTATIONS += [
     ("web_json_report_cerbo_prefix_anywhere", T, F, UNKNOWN_GX, "\t\t\t\tif(strstr(key, CERBO_PREFIX) != NULL) continue;\n"),
     ("web_json_report_cerbo_keys_only_on_shown_pages", T, F, UNKNOWN_GX, "\t\t\t\tif(cerbo_key(key) && !layout->pages[p].hidden) continue;\n"),
 ]
+
+# GET /api/catalog of a display with a second source: the entries of the adapter as catalog.c writes them, and
+# behind them the keys the Cerbo delivered (stage 4, 2026-10-12)
+K_DIGIT = "\treturn (char)(value < 10 ? '0' + value : 'a' + value - 10);\n"
+K_OPEN = "\tput(writer, quote);\n\tfor(; *listed != '\\0'; listed++)\n"
+K_CLOSE = "\t\tput_char(writer, digit_of(byte % 16u));\n\t}\n\tput(writer, quote);\n"
+K_PLAIN = "\t\tif(byte >= 0x20)\n"
+K_ESCAPED = "\t\t\tif(byte == '\"' || byte == '\\\\') put_char(writer, '\\\\');\n\t\t\tput_char(writer, *listed);\n\t\t\tcontinue;\n"
+K_NUMBER = "\t\tput(writer, \"\\\\u00\");\n\t\tput_char(writer, digit_of(byte / 16u));\n\t\tput_char(writer, digit_of(byte % 16u));\n"
+K_COMMA = "\tif(*behind) put_char(writer, ',');\n\t*behind = true;\n"
+K_NAME = "\tput_listed(writer, name);\n\tput(writer, \":{\\\"unit\\\":\");\n"
+K_UNIT = "\tput_listed(writer, unit);\n\tput(writer, \",\\\"class\\\":\");\n"
+K_CLASS = "\tput_listed(writer, value_class);\n"
+K_PROFILE = "\tput(writer, in_profile ? \",\\\"profile\\\":true\" : \",\\\"profile\\\":false\");\n"
+K_DELIVERED = "\tput(writer, delivered ? \",\\\"delivered\\\":true}\" : \",\\\"delivered\\\":false}\");\n"
+K_LOOP = "\tfor(int listed = 0; listed < catalog->count; listed++, entry++)\n"
+K_PREFIX = "\t\tif(cerbo_key(entry->name)) continue;\n"
+K_ENTRY = "\t\tput_entry(&writer, entry->name, entry->unit, entry->value_class, entry->in_profile, entry->delivered, &behind);\n"
+K_NAMES = "\tfor(int named = 0; named < cerbo->name_count; named++) put_entry(&writer, cerbo->names[named], \"\", \"\", false, true, &behind);\n"
+K_BRACE = "\tput_char(&writer, '{');\n\tfor(int listed = 0;"
+K_END = K_NAMES + "\tput_char(&writer, '}');\n"
+
+MUTATIONS += [
+    # the texts, as catalog_to_json() writes them
+    ("web_json_listed_digits_in_capitals", T, F, K_DIGIT, K_DIGIT.replace("'a' + value - 10", "'A' + value - 10")),
+    ("web_json_listed_digit_nine_is_a_letter", T, F, K_DIGIT, K_DIGIT.replace("value < 10", "value < 9")),
+    ("web_json_listed_digit_ten_is_a_colon", T, F, K_DIGIT, K_DIGIT.replace("value < 10", "value < 11")),
+    ("web_json_listed_without_opening_quote", T, F, K_OPEN, K_OPEN.replace("\tput(writer, quote);\n", "")),
+    ("web_json_listed_without_closing_quote", T, F, K_CLOSE, K_CLOSE.replace("\tput(writer, quote);\n", "")),
+    ("web_json_listed_blank_is_escaped", T, F, K_PLAIN, "\t\tif(byte > 0x20)\n"),
+    ("web_json_listed_0x1f_is_passed_on", T, F, K_PLAIN, "\t\tif(byte >= 0x1F)\n"),
+    ("web_json_listed_control_characters_passed_on", T, F, K_PLAIN, "\t\tif(byte >= 0x01)\n"),
+    ("web_json_listed_0x7f_is_escaped", T, F, K_PLAIN, "\t\tif(byte >= 0x20 && byte != 0x7F)\n"),
+    ("web_json_listed_bytes_above_0x7f_are_escaped", T, F, K_PLAIN, "\t\tif(byte >= 0x20 && byte < 0x80)\n"),
+    ("web_json_listed_quote_not_escaped", T, F, K_ESCAPED, K_ESCAPED.replace("byte == '\"' || byte == '\\\\'", "byte == '\\\\'")),
+    ("web_json_listed_backslash_not_escaped", T, F, K_ESCAPED, K_ESCAPED.replace("byte == '\"' || byte == '\\\\'", "byte == '\"'")),
+    ("web_json_listed_escaped_with_a_slash", T, F, K_ESCAPED, K_ESCAPED.replace("put_char(writer, '\\\\');", "put_char(writer, '/');")),
+    ("web_json_listed_escaped_byte_left_out", T, F, K_ESCAPED, K_ESCAPED.replace("put_char(writer, '\\\\');", "continue;")),
+    ("web_json_listed_bytes_not_copied", T, F, K_ESCAPED, K_ESCAPED.replace("\t\t\tput_char(writer, *listed);\n", "")),
+    ("web_json_listed_plain_bytes_also_as_numbers", T, F, K_ESCAPED, K_ESCAPED.replace("\t\t\tcontinue;\n", "")),
+    ("web_json_listed_number_without_its_head", T, F, K_NUMBER, K_NUMBER.replace("\t\tput(writer, \"\\\\u00\");\n", "")),
+    ("web_json_listed_number_as_x", T, F, K_NUMBER, K_NUMBER.replace("\"\\\\u00\"", "\"\\\\x\"")),
+    ("web_json_listed_number_digits_swapped", T, F, K_NUMBER,
+     "\t\tput(writer, \"\\\\u00\");\n\t\tput_char(writer, digit_of(byte % 16u));\n\t\tput_char(writer, digit_of(byte / 16u));\n"),
+    ("web_json_listed_number_high_digit_always_0", T, F, K_NUMBER, K_NUMBER.replace("digit_of(byte / 16u)", "digit_of(0u)")),
+    ("web_json_listed_number_low_digit_missing", T, F, K_NUMBER, K_NUMBER.replace("\t\tput_char(writer, digit_of(byte % 16u));\n", "")),
+
+    # one entry
+    ("web_json_listed_entries_without_comma", T, F, K_COMMA, "\t*behind = true;\n"),
+    ("web_json_listed_comma_before_the_first_entry", T, F, K_COMMA, "\tput_char(writer, ',');\n\t*behind = true;\n"),
+    ("web_json_listed_comma_never_due", T, F, K_COMMA, "\tif(*behind) put_char(writer, ',');\n"),
+    ("web_json_listed_comma_behind_the_entry", T, F, K_COMMA + K_NAME, "\t*behind = true;\n" + K_NAME.replace("\":{\\\"unit\\\":\"", "\",:{\\\"unit\\\":\"")),
+    ("web_json_listed_name_left_out", T, F, K_NAME, K_NAME.replace("\tput_listed(writer, name);\n", "\tput_listed(writer, \"\");\n\t(void)name;\n")),
+    ("web_json_listed_unit_member_renamed", T, F, K_NAME, K_NAME.replace("unit", "units")),
+    ("web_json_listed_unit_is_the_class", T, F, K_UNIT, K_UNIT.replace("put_listed(writer, unit);", "put_listed(writer, value_class);\n\t(void)unit;")),
+    ("web_json_listed_unit_is_the_name", T, F, K_UNIT, K_UNIT.replace("put_listed(writer, unit);", "put_listed(writer, name);\n\t(void)unit;")),
+    ("web_json_listed_unit_always_empty", T, F, K_UNIT, K_UNIT.replace("put_listed(writer, unit);", "put_listed(writer, \"\");\n\t(void)unit;")),
+    ("web_json_listed_class_member_renamed", T, F, K_UNIT, K_UNIT.replace("class", "value_class")),
+    ("web_json_listed_class_is_the_unit", T, F, K_CLASS, "\tput_listed(writer, unit);\n\t(void)value_class;\n"),
+    ("web_json_listed_class_always_empty", T, F, K_CLASS, "\tput_listed(writer, \"\");\n\t(void)value_class;\n"),
+    ("web_json_listed_profile_inverted", T, F, K_PROFILE, K_PROFILE.replace("in_profile ?", "!in_profile ?")),
+    ("web_json_listed_profile_is_delivered", T, F, K_PROFILE, K_PROFILE.replace("in_profile ?", "delivered ?").replace("\n", "\n\t(void)in_profile;\n")),
+    ("web_json_listed_profile_always_false", T, F, K_PROFILE, "\tput(writer, \",\\\"profile\\\":false\");\n\t(void)in_profile;\n"),
+    ("web_json_listed_profile_member_renamed", T, F, K_PROFILE, K_PROFILE.replace("profile\\\"", "in_profile\\\"")),
+    ("web_json_listed_delivered_inverted", T, F, K_DELIVERED, K_DELIVERED.replace("delivered ?", "!delivered ?")),
+    ("web_json_listed_delivered_is_profile", T, F, K_DELIVERED, K_DELIVERED.replace("delivered ?", "in_profile ?").replace("\n", "\n\t(void)delivered;\n")),
+    ("web_json_listed_delivered_always_true", T, F, K_DELIVERED, "\tput(writer, \",\\\"delivered\\\":true}\");\n\t(void)delivered;\n"),
+    ("web_json_listed_entry_not_closed", T, F, K_DELIVERED, K_DELIVERED.replace("true}", "true").replace("false}", "false")),
+
+    # the catalogue of the adapter
+    ("web_json_catalog_cerbo_first_entry_not_looked_at", T, F, K_LOOP, "\tentry++;\n\tfor(int listed = 1; listed < catalog->count; listed++, entry++)\n"),
+    ("web_json_catalog_cerbo_last_entry_not_looked_at", T, F, K_LOOP, "\tfor(int listed = 0; listed < catalog->count - 1; listed++, entry++)\n"),
+    ("web_json_catalog_cerbo_first_entry_again_and_again", T, F, K_LOOP, "\tfor(int listed = 0; listed < catalog->count; listed++)\n"),
+    ("web_json_catalog_cerbo_only_the_first_entry", T, F, K_LOOP, "\tfor(int listed = 0; listed < catalog->count && listed < 1; listed++, entry++)\n"),
+    ("web_json_catalog_cerbo_prefix_of_the_adapter_written", T, F, K_PREFIX, ""),
+    ("web_json_catalog_cerbo_only_the_prefix_written", T, F, K_PREFIX, "\t\tif(!cerbo_key(entry->name)) continue;\n"),
+    ("web_json_catalog_cerbo_prefix_left_out_only_with_names", T, F, K_PREFIX, "\t\tif(cerbo_key(entry->name) && cerbo->name_count > 0) continue;\n"),
+    ("web_json_catalog_cerbo_prefix_left_out_only_where_the_cerbo_has_the_key", T, F, K_PREFIX,
+     "\t\tif(cerbo_key(entry->name) && cerbo->name_count > 0 && strcmp(cerbo->names[0], entry->name) == 0) continue;\n"),
+    ("web_json_catalog_cerbo_prefix_of_two_letters", T, F, K_PREFIX, "\t\tif(strncmp(entry->name, CERBO_PREFIX, 2) == 0) continue;\n"),
+    ("web_json_catalog_cerbo_prefix_without_case", T, F, K_PREFIX, "\t\tif((entry->name[0] | 0x20) == 'g' && (entry->name[1] | 0x20) == 'x' && entry->name[2] == '_') continue;\n"),
+    ("web_json_catalog_cerbo_prefix_anywhere", T, F, K_PREFIX, "\t\tif(strstr(entry->name, CERBO_PREFIX) != NULL) continue;\n"),
+    ("web_json_catalog_cerbo_prefix_ends_the_catalogue", T, F, K_PREFIX, "\t\tif(cerbo_key(entry->name)) break;\n"),
+    ("web_json_catalog_cerbo_battery_left_out", T, F, K_PREFIX, "\t\tif(cerbo_key(entry->name) || entry->name[0] == '@') continue;\n"),
+    ("web_json_catalog_cerbo_entries_not_of_the_profile_left_out", T, F, K_PREFIX, "\t\tif(cerbo_key(entry->name) || !entry->in_profile) continue;\n"),
+    ("web_json_catalog_cerbo_unit_and_class_swapped", T, F, K_ENTRY, K_ENTRY.replace("entry->unit, entry->value_class", "entry->value_class, entry->unit")),
+    ("web_json_catalog_cerbo_profile_and_delivered_swapped", T, F, K_ENTRY, K_ENTRY.replace("entry->in_profile, entry->delivered", "entry->delivered, entry->in_profile")),
+    ("web_json_catalog_cerbo_adapter_entries_all_delivered", T, F, K_ENTRY, K_ENTRY.replace("entry->delivered", "true")),
+    ("web_json_catalog_cerbo_adapter_entries_without_unit", T, F, K_ENTRY, K_ENTRY.replace("entry->unit", "\"\"")),
+
+    # the keys of the Cerbo
+    ("web_json_catalog_cerbo_no_names", T, F, K_NAMES, "\t(void)cerbo;\n"),
+    ("web_json_catalog_cerbo_first_name_left_out", T, F, K_NAMES, K_NAMES.replace("int named = 0", "int named = 1")),
+    ("web_json_catalog_cerbo_last_name_left_out", T, F, K_NAMES, K_NAMES.replace("named < cerbo->name_count;", "named < cerbo->name_count - 1;")),
+    ("web_json_catalog_cerbo_one_name_behind_the_count", T, F, K_NAMES, K_NAMES.replace("named < cerbo->name_count;", "named <= cerbo->name_count && named < CERBO_NAMES_MAX;")),
+    ("web_json_catalog_cerbo_every_name_whatever_the_count", T, F, K_NAMES, K_NAMES.replace("named < cerbo->name_count;", "named < CERBO_NAMES_MAX;")),
+    ("web_json_catalog_cerbo_only_the_first_name", T, F, K_NAMES, K_NAMES.replace("named < cerbo->name_count;", "named < cerbo->name_count && named < 1;")),
+    ("web_json_catalog_cerbo_first_name_again_and_again", T, F, K_NAMES, K_NAMES.replace("cerbo->names[named]", "cerbo->names[0]")),
+    ("web_json_catalog_cerbo_names_in_reverse", T, F, K_NAMES, K_NAMES.replace("cerbo->names[named]", "cerbo->names[cerbo->name_count - 1 - named]")),
+    ("web_json_catalog_cerbo_names_not_delivered", T, F, K_NAMES, K_NAMES.replace("false, true, &behind", "false, false, &behind")),
+    ("web_json_catalog_cerbo_names_of_the_profile", T, F, K_NAMES, K_NAMES.replace("false, true, &behind", "true, true, &behind")),
+    ("web_json_catalog_cerbo_names_with_a_unit", T, F, K_NAMES, K_NAMES.replace("cerbo->names[named], \"\", \"\",", "cerbo->names[named], \"?\", \"\",")),
+    ("web_json_catalog_cerbo_names_with_a_class", T, F, K_NAMES, K_NAMES.replace("cerbo->names[named], \"\", \"\",", "cerbo->names[named], \"\", \"cerbo\",")),
+    ("web_json_catalog_cerbo_names_before_the_adapter", T, F, K_BRACE, K_BRACE.replace("\tfor(int listed = 0;", K_NAMES.replace("int named", "int early").replace("named", "early") + "\tfor(int listed = 0;")),
+    ("web_json_catalog_cerbo_names_with_a_comma_of_their_own", T, F, K_NAMES, "\tbehind = true;\n" + K_NAMES),
+    ("web_json_catalog_cerbo_names_without_a_comma_to_the_adapter", T, F, K_NAMES, "\tbehind = false;\n" + K_NAMES),
+    ("web_json_catalog_cerbo_not_opened", T, F, K_BRACE, K_BRACE.replace("\tput_char(&writer, '{');\n", "")),
+    ("web_json_catalog_cerbo_not_closed", T, F, K_END, K_NAMES),
+    ("web_json_catalog_cerbo_closed_twice", T, F, K_END, K_END + "\tput_char(&writer, '}');\n"),
+    ("web_json_catalog_cerbo_as_an_array", T, F, K_END, K_END.replace("'}'", "']'")),
+    ("web_json_catalog_cerbo_size_one_byte_larger", T, H, "#define WEB_CATALOG_CERBO_SIZE  5824", "#define WEB_CATALOG_CERBO_SIZE  5825"),
+    ("web_json_catalog_cerbo_size_one_byte_smaller", T, H, "#define WEB_CATALOG_CERBO_SIZE  5824", "#define WEB_CATALOG_CERBO_SIZE  5823"),
+]

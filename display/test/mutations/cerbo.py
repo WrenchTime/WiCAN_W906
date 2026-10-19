@@ -472,3 +472,66 @@ MUTATIONS += [
     ("cerbo_shown_switch_needs_a_finite_number", T, F, TEXT_SWITCH, "\treturn (item->kind == VALUE_ON || item->kind == VALUE_OFF) && isfinite(item->number);"),
 ]
 
+
+# The names of the keys the source keeps for the editor of the web interface (stage 4, 2026-10-12). A mutation
+# here keeps name_count within the names: one that let it run on would write behind them, and a crash names
+# no rule.
+N_EACH = "\tfor(int i = 0; i < cerbo->values.count; i++)\n\t{\n\t\tconst value_t *item = &cerbo->values.items[i];\n\t\tint tried = 0;\n"
+N_TEXT = "\t\tif(!has_text(item)) continue;\n"
+N_SEARCH = "\t\twhile(tried < cerbo->name_count && strcmp(cerbo->names[(i + tried) % cerbo->name_count], item->name) != 0) tried++;\n"
+N_KNOWN = "\t\tif(tried < cerbo->name_count) continue;\n"
+N_FULL = "\t\tif(cerbo->name_count == CERBO_NAMES_MAX)\n"
+N_OLD = "\t\t\twhile(old < last && find(&cerbo->values, *old) != NULL) old++;\n"
+N_MOVE = "\t\t\tmemmove(old, old + 1, (size_t)(last - old) * sizeof(*old));\n"
+N_COPY = "\t\tstrcpy(cerbo->names[cerbo->name_count], item->name);\n\t\tcerbo->name_count++;\n"
+N_CALL = "\tnote_names(cerbo);\n"
+N_FORGET = "\tcerbo->name_count = 0;\n\tif(cerbo->phase != CERBO_IDLE) cerbo->moved = true;\n"
+N_NONE = "\tcerbo->name_count = 0;\n"
+
+MUTATIONS += [
+    # which keys are noted
+    ("cerbo_names_never_noted", T, F, N_CALL, "\t(void)note_names;\n"),
+    ("cerbo_names_noted_before_the_store_is_filled", T, F, SEEN + "\n" + N_CALL, N_CALL + SEEN + "\n"),
+    ("cerbo_names_of_numbers_without_end_noted", T, F, N_TEXT, ""),
+    ("cerbo_names_only_of_numbers_without_end", T, F, N_TEXT, "\t\tif(has_text(item)) continue;\n"),
+    ("cerbo_names_only_of_numbers", T, F, N_TEXT, "\t\tif(!has_text(item) || item->kind != VALUE_NUMBER) continue;\n"),
+    ("cerbo_names_only_of_switches", T, F, N_TEXT, "\t\tif(!has_text(item) || item->kind == VALUE_NUMBER) continue;\n"),
+    ("cerbo_names_first_key_not_noted", T, F, N_EACH, N_EACH.replace("int i = 0;", "int i = 1;")),
+    ("cerbo_names_last_key_not_noted", T, F, N_EACH, N_EACH.replace("i < cerbo->values.count;", "i < cerbo->values.count - 1;")),
+    ("cerbo_names_only_the_first_key_noted", T, F, N_EACH, N_EACH.replace("i < cerbo->values.count;", "i < cerbo->values.count && i < 1;")),
+    ("cerbo_names_forgotten_with_every_bundle", T, F, N_EACH, N_NONE + N_EACH),
+    ("cerbo_names_known_ones_noted_again", T, F, N_KNOWN, ""),
+    ("cerbo_names_none_is_new", T, F, N_KNOWN, "\t\tif(tried <= cerbo->name_count) continue;\n"),
+    ("cerbo_names_only_the_first_one_compared", T, F, N_SEARCH, N_SEARCH.replace("cerbo->names[(i + tried) % cerbo->name_count]", "cerbo->names[0]")),
+    ("cerbo_names_only_the_one_at_the_place_of_the_key_compared", T, F, N_SEARCH, N_SEARCH.replace("(i + tried) % cerbo->name_count", "i % cerbo->name_count")),
+    ("cerbo_names_last_one_not_compared", T, F, N_SEARCH, N_SEARCH.replace("while(tried < cerbo->name_count &&", "while(tried < cerbo->name_count - 1 &&").replace("\n", "\n\t\tif(tried == cerbo->name_count - 1) tried++;\n")),
+    ("cerbo_names_compared_in_their_first_five_bytes", T, F, N_SEARCH, N_SEARCH.replace("strcmp(cerbo->names[(i + tried) % cerbo->name_count], item->name) != 0", "strncmp(cerbo->names[(i + tried) % cerbo->name_count], item->name, 5) != 0")),
+    ("cerbo_names_new_one_not_copied", T, F, N_COPY, "\t\tcerbo->name_count++;\n"),
+    ("cerbo_names_new_one_not_counted", T, F, N_COPY, "\t\tstrcpy(cerbo->names[cerbo->name_count], item->name);\n"),
+    ("cerbo_names_new_one_in_the_first_place", T, F, N_COPY,
+     "\t\tfor(int moved = cerbo->name_count; moved > 0; moved--) strcpy(cerbo->names[moved], cerbo->names[moved - 1]);\n\t\tstrcpy(cerbo->names[0], item->name);\n\t\tcerbo->name_count++;\n"),
+    ("cerbo_names_new_one_cut_at_31_bytes", T, F, N_COPY, N_COPY.replace("strcpy(cerbo->names[cerbo->name_count], item->name);", "strcpy(cerbo->names[cerbo->name_count], item->name);\n\t\tcerbo->names[cerbo->name_count][VALUE_NAME_SIZE - 2] = '\\0';")),
+
+    # the room
+    ("cerbo_names_room_for_63", T, F, N_FULL, "\t\tif(cerbo->name_count >= CERBO_NAMES_MAX - 1)\n"),
+    ("cerbo_names_no_room_no_name", T, F, N_FULL, "\t\tif(cerbo->name_count == CERBO_NAMES_MAX) continue;\n\t\tif(cerbo->name_count > CERBO_NAMES_MAX)\n"),
+    ("cerbo_names_no_room_all_forgotten", T, F, N_FULL, "\t\tif(cerbo->name_count == CERBO_NAMES_MAX) cerbo->name_count = 0;\n\t\tif(cerbo->name_count > CERBO_NAMES_MAX)\n"),
+    ("cerbo_names_the_first_gives_way", T, F, N_OLD, ""),
+    ("cerbo_names_the_last_gives_way", T, F, N_OLD, "\t\t\twhile(old < last) old++;\n"),
+    ("cerbo_names_the_oldest_of_the_bundle_gives_way", T, F, N_OLD, "\t\t\twhile(old < last && find(&cerbo->values, *old) == NULL) old++;\n"),
+    ("cerbo_names_the_second_without_a_value_gives_way", T, F, N_OLD, N_OLD + "\t\t\tif(old < last) old++;\n" + N_OLD.replace("\t\t\twhile", "\t\t\twhile")),
+    ("cerbo_names_a_key_without_text_gives_way", T, F, N_OLD,
+     "\t\t\twhile(old < last && find(&cerbo->values, *old) != NULL && has_text(find(&cerbo->values, *old))) old++;\n"),
+    ("cerbo_names_do_not_move_up", T, F, N_MOVE, ""),
+    ("cerbo_names_one_too_few_moves_up", T, F, N_MOVE, "\t\t\tmemmove(old, old + 1, (size_t)(last - old > 0 ? last - old - 1 : 0) * sizeof(*old));\n"),
+    ("cerbo_names_move_up_from_the_first", T, F, N_MOVE, "\t\t\tmemmove(cerbo->names, cerbo->names + 1, (size_t)(last - cerbo->names) * sizeof(*old));\n\t\t\t(void)old;\n"),
+
+    # what forgets them
+    ("cerbo_new_address_keeps_the_names", T, F, N_FORGET, N_FORGET.replace(N_NONE, "")),
+    ("cerbo_new_address_forgets_one_name", T, F, N_FORGET, N_FORGET.replace(N_NONE, "\tif(cerbo->name_count > 0) cerbo->name_count--;\n")),
+    ("cerbo_same_address_forgets_the_names", T, F, SAME_HOST, N_NONE + SAME_HOST),
+    ("cerbo_names_only_forgotten_without_an_address", T, F, N_FORGET, N_FORGET.replace(N_NONE, "\tif(cerbo->host[0] == '\\0') cerbo->name_count = 0;\n")),
+    ("cerbo_names_only_forgotten_with_an_address", T, F, N_FORGET, N_FORGET.replace(N_NONE, "\tif(cerbo->host[0] != '\\0') cerbo->name_count = 0;\n")),
+    ("cerbo_names_forgotten_when_the_connection_ends", T, F, DOWN, N_NONE + DOWN),
+    ("cerbo_names_forgotten_without_a_network", T, F, SAME_NETWORK, SAME_NETWORK + N_NONE),
+]

@@ -57,6 +57,7 @@ PAGE_GZ = "\t\t\tbody = page_gz_start;\n\t\t\tsize = (size_t)(page_gz_end - page
 PAGE = "\t\treturn answer(req, 200, WEB_TYPE_PAGE, body, size);\n"
 WHOLE_BODY = "!receive(req, room->body, request.length, false)))"
 CALL_TIME = "\tnow = platform_now_ms();\n\tplatform_lock();\n\tswitch(decision.route)"
+READING = "\t\t\tstatus = app_web_get(platform_app, decision.route, decision.ticket, room->out, &length, now);\n"
 EVENTS = "\tplatform_events();\n\tplatform_unlock();\n\treturn answer(req, status, WEB_TYPE_JSON, room->out, length);\n}\n\n" \
          "// What the server cannot read"
 
@@ -164,6 +165,11 @@ MUTATIONS = [
     ("web_time_ahead", S, F, CALL_TIME,
      "\tnow = platform_now_ms() + 600000;\n\tplatform_lock();\n\tswitch(decision.route)"),
     ("web_time_of_before_the_body", S, F, CALL_TIME, "\tplatform_lock();\n\tswitch(decision.route)"),
+    # a reading route is handed on as web_route() named it: GET /api/layout/gx answers the embedded pages of the
+    # second source and no other text (2026-10-12)
+    ("web_reading_routes_all_answer_the_info", S, F, READING, READING.replace("decision.route, decision.ticket", "WEB_ROUTE_INFO, decision.ticket")),
+    ("web_pages_of_the_cerbo_are_the_views_in_use", S, F, READING,
+     READING.replace("decision.route, decision.ticket", "(decision.route == WEB_ROUTE_LAYOUT_GX ? WEB_ROUTE_LAYOUT : decision.route), decision.ticket")),
     ("web_events_not_taken_after_a_request", S, F, EVENTS,
      "\tplatform_unlock();\n\treturn answer(req, status, WEB_TYPE_JSON, room->out, length);\n}\n\n"
      "// What the server cannot read"),

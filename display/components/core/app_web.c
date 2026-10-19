@@ -204,6 +204,12 @@ int app_web_get(app_t *app, web_route_t route, uint32_t ticket, char *out, size_
 			break;
 
 		case WEB_ROUTE_CATALOG:
+			// A display with a second source: the keys the Cerbo delivered behind the entries of the adapter
+			if(cerbo_host(&app->cerbo)[0] != '\0')
+			{
+				written = web_catalog_cerbo_json(&poll->catalog, &app->cerbo, out, APP_WEB_OUT_SIZE);
+				break;
+			}
 			written = catalog_to_json(&poll->catalog, out, APP_WEB_OUT_SIZE);
 			break;
 
@@ -220,6 +226,12 @@ int app_web_get(app_t *app, web_route_t route, uint32_t ticket, char *out, size_
 
 		case WEB_ROUTE_LAYOUT:
 			return answer_text(app->layout_text, app->layout_length, out, length);
+
+		case WEB_ROUTE_LAYOUT_GX:
+			// The pages of the second source as the firmware holds them, whatever views are in use. A firmware
+			// without them has none to hand out.
+			if(!app->has_builtin_gx) return refuse(404, "not_found", out, length);
+			return answer_text(app->builtin_gx_text, app->builtin_gx_length, out, length);
 
 		case WEB_ROUTE_DTC_LAST:
 			// The texts mean something only while the poll holds their lists

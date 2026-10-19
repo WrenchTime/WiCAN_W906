@@ -4186,6 +4186,346 @@ static void test_random_report_cerbo(void)
 	check(invalid == 0, "report: every one of these 3000 answers is JSON for the reader of the project");
 }
 
+/*
+ * GET /api/catalog of a display with a second source
+ */
+
+// Of the source the writer reads the names it counts and their number alone: every other byte of it is 0xEE
+// here, and every name behind the count is one no answer may hold
+static cerbo_t named_source;
+static struct
+{
+	const catalog_t *catalog;
+	const cerbo_t *cerbo;
+} listed_now;
+
+static int call_listed(char *out, size_t size)
+{
+	return web_catalog_cerbo_json(listed_now.catalog, listed_now.cerbo, out, size);
+}
+
+static void no_names(void)
+{
+	int i;
+
+	memset(&named_source, 0xEE, sizeof(named_source));
+	for(i = 0; i < CERBO_NAMES_MAX; i++) strcpy(named_source.names[i], "GX_BEHIND_THE_COUNT");
+	named_source.name_count = 0;
+}
+
+static void add_name(const char *name)
+{
+	strcpy(named_source.names[named_source.name_count++], name);
+}
+
+// An entry of the catalogue with every field: the bytes behind the texts are rubbish
+static void listed(const char *name, const char *unit, const char *value_class, bool in_profile, bool delivered)
+{
+	catalog_entry_t *added = &catalog.entries[catalog.count++];
+
+	memset(added, 'z', sizeof(*added));
+	strcpy(added->name, name);
+	strcpy(added->unit, unit);
+	strcpy(added->value_class, value_class);
+	added->in_profile = in_profile;
+	added->delivered = delivered;
+}
+
+static bool listed_gives(const char *wanted)
+{
+	listed_now.catalog = &catalog;
+	listed_now.cerbo = &named_source;
+	return every_room(call_listed, wanted);
+}
+
+// What catalog_to_json() writes for the catalogue of the test, in `text`
+static bool catalogue_written(void)
+{
+	return catalog_to_json(&catalog, text, sizeof(text)) >= 0;
+}
+
+// The format of the header written a second time: the text of catalog_to_json() for the entries without the
+// prefix of the Cerbo - found by taking them out into a catalogue of their own -, its closing brace taken
+// away, and behind it the names with printf
+static catalog_t plain_catalog;
+
+static void model_listed(const catalog_t *from, const cerbo_t *cerbo)
+{
+	size_t at;
+	int i;
+
+	memset(&plain_catalog, 0, sizeof(plain_catalog));
+	for(i = 0; i < from->count; i++)
+	{
+		if(!bears_prefix(from->entries[i].name)) plain_catalog.entries[plain_catalog.count++] = from->entries[i];
+	}
+	if(catalog_to_json(&plain_catalog, expected, sizeof(expected)) < 0)
+	{
+		strcpy(expected, "the model has no room");
+		return;
+	}
+	at = strlen(expected) - 1;
+	for(i = 0; i < cerbo->name_count; i++)
+	{
+		at += (size_t)snprintf(expected + at, sizeof(expected) - at, "%s\"%s\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}", at > 1 ? "," : "",
+		                       cerbo->names[i]);
+	}
+	snprintf(expected + at, sizeof(expected) - at, "}");
+}
+
+static void test_catalog_cerbo(void)
+{
+	static const char one_key[] = "\"GX_BATT_SOC\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}";
+	char wanted[2048];
+	char name[VALUE_NAME_SIZE];
+	int i;
+
+	check(WEB_CATALOG_CERBO_SIZE == 5824 && CERBO_NAMES_MAX * (2 + (VALUE_NAME_SIZE - 1) + strlen(one_key) - strlen("\"GX_BATT_SOC\"") + 1) == WEB_CATALOG_CERBO_SIZE,
+	      "WEB_CATALOG_CERBO_SIZE is 5824: 64 entries with keys of 32 bytes between quotes, 56 bytes of members and a comma each");
+
+	// The fixture: the catalogue of the other vehicle and six keys of the Cerbo
+	no_catalog();
+	listed("@BATT_V", "V", "", false, true);
+	listed("SPEED", "km/h", "speed", true, true);
+	listed("RPM", "rpm", "frequency", true, true);
+	listed("COOLANT", "\xC2\xB0" "C", "temperature", true, true);
+	listed("FUEL", "%", "none", true, true);
+	listed("INTAKE_TEMP", "\xC2\xB0" "C", "temperature", true, true);
+	no_names();
+	add_name("GX_BATT_SOC");
+	add_name("GX_BATT_V");
+	add_name("GX_BATT_I");
+	add_name("GX_SW_B2B");
+	add_name("GX_SW_VALVE");
+	add_name("GX_TANK_FRESH");
+	listed_now.catalog = &catalog;
+	listed_now.cerbo = &named_source;
+	check(gives_fixture(call_listed, "fixtures/app_web_catalog_cerbo.json"), "app_web_catalog_cerbo.json: the catalogue of a display with a Cerbo: six entries of the adapter as they are, "
+	                                                                          "and behind them the six keys of the Cerbo, each without unit and class, not of the profile, delivered");
+	no_names();
+	check(read_fixture("fixtures/app_web_catalog.json", fixture, sizeof(fixture)) && listed_gives(fixture) && catalogue_written() && strcmp(text, fixture) == 0,
+	      "app_web_catalog.json: with no name of the Cerbo the answer is the one of catalog_to_json(), byte for byte");
+
+	// The entries of the Cerbo
+	no_catalog();
+	no_names();
+	check(listed_gives("{}"), "catalogue with a Cerbo: no entry and no name: an empty object");
+	add_name("GX_BATT_SOC");
+	snprintf(wanted, sizeof(wanted), "{%s}", one_key);
+	check(listed_gives(wanted), "catalogue with a Cerbo: no entry and one name: its entry without a comma in front");
+	add_name("GX_A");
+	add_name("GX_12345678901234567890123456789");
+	snprintf(wanted, sizeof(wanted), "{%s,\"GX_A\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true},"
+	         "\"GX_12345678901234567890123456789\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}}", one_key);
+	check(listed_gives(wanted), "catalogue with a Cerbo: three names in their order, one of 32 bytes among them, a comma between two");
+	named_source.name_count = 1;
+	snprintf(wanted, sizeof(wanted), "{%s}", one_key);
+	check(listed_gives(wanted), "catalogue with a Cerbo: of the names the first name_count are written, not what lies behind them");
+	named_source.name_count = 0;
+	check(listed_gives("{}"), "catalogue with a Cerbo: with a count of 0 no name is read");
+
+	// The entries of the adapter
+	no_catalog();
+	listed("@BATT_V", "V", "", false, false);
+	no_names();
+	check(listed_gives("{\"@BATT_V\":{\"unit\":\"V\",\"class\":\"\",\"profile\":false,\"delivered\":false}}"), "catalogue with a Cerbo: one entry of the adapter and no name: the entry alone");
+	add_name("GX_BATT_SOC");
+	snprintf(wanted, sizeof(wanted), "{\"@BATT_V\":{\"unit\":\"V\",\"class\":\"\",\"profile\":false,\"delivered\":false},%s}", one_key);
+	check(listed_gives(wanted), "catalogue with a Cerbo: the names stand behind the entries of the adapter, with a comma between the two");
+	no_catalog();
+	listed("A", "u", "c", true, false);
+	listed("B", "", "", false, true);
+	no_names();
+	check(listed_gives("{\"A\":{\"unit\":\"u\",\"class\":\"c\",\"profile\":true,\"delivered\":false},\"B\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}}"),
+	      "catalogue with a Cerbo: unit, class, profile and delivered of each entry of the adapter as the entry has them");
+	no_catalog();
+	listed("a\"b\\c\x01\x1f\x7f", "\x02\"", "\\\x1e", true, true);
+	check(listed_gives("{\"a\\\"b\\\\c\\u0001\\u001f\x7f\":{\"unit\":\"\\u0002\\\"\",\"class\":\"\\\\\\u001e\",\"profile\":true,\"delivered\":true}}") && catalogue_written() &&
+	      strcmp(text, "{\"a\\\"b\\\\c\\u0001\\u001f\x7f\":{\"unit\":\"\\u0002\\\"\",\"class\":\"\\\\\\u001e\",\"profile\":true,\"delivered\":true}}") == 0,
+	      "catalogue with a Cerbo: the texts of an entry are written as catalog_to_json() writes them: a quote and a backslash behind a backslash, what lies below 0x20 "
+	      "as \\u00xx in small letters, and the byte 0x7F as it is");
+	no_catalog();
+	for(i = 0; i < 0x20; i++)
+	{
+		name[0] = (char)(i == 0 ? 0x20 : i);
+		name[1] = '\0';
+		listed(name, "", "", false, false);
+	}
+	model_listed(&catalog, &named_source);
+	check(listed_gives(expected) && strstr(expected, "\"\\u000a\":") != NULL && strstr(expected, "\"\\u001f\":") != NULL && strstr(expected, "\"\\u0010\":") != NULL &&
+	      strstr(expected, "\"\\u000f\":") != NULL && strncmp(expected, "{\" \":{", 6) == 0,
+	      "catalogue with a Cerbo: every byte from 0x01 to 0x1f as a name: \\u0001 to \\u001f, each with two digits in small letters; a blank as it is");
+	no_catalog();
+	for(i = 0; i < 6; i++)
+	{
+		static const unsigned char bytes[] = {0x20, 0x21, 0x7E, 0x7F, 0x80, 0xFF};
+
+		name[0] = (char)bytes[i];
+		name[1] = '\0';
+		listed(name, name, name, false, false);
+	}
+	model_listed(&catalog, &named_source);
+	check(listed_gives(expected) && strlen(expected) == 2 + 6 * 59 + 6 * 3 + 5 && count_of(expected, "\\") == 0,
+	      "catalogue with a Cerbo: the bytes 0x20, 0x21, 0x7e, 0x7f, 0x80 and 0xff are passed on as they are, in the name, the unit and the class");
+
+	// The prefix is the Cerbo's
+	no_catalog();
+	listed("@BATT_V", "V", "", false, true);
+	listed("GX_BATT_SOC", "%", "battery", true, true);
+	listed("RPM", "rpm", "", true, false);
+	no_names();
+	add_name("GX_BATT_SOC");
+	snprintf(wanted, sizeof(wanted), "{\"@BATT_V\":{\"unit\":\"V\",\"class\":\"\",\"profile\":false,\"delivered\":true},"
+	         "\"RPM\":{\"unit\":\"rpm\",\"class\":\"\",\"profile\":true,\"delivered\":false},%s}", one_key);
+	check(listed_gives(wanted) && count_of(wanted, "\"GX_BATT_SOC\"") == 1,
+	      "catalogue with a Cerbo: the adapter names a value GX_BATT_SOC and the Cerbo delivered that key: it stands once, as the entry of the Cerbo");
+	no_names();
+	add_name("GX_TANK_FRESH");
+	check(listed_gives("{\"@BATT_V\":{\"unit\":\"V\",\"class\":\"\",\"profile\":false,\"delivered\":true},\"RPM\":{\"unit\":\"rpm\",\"class\":\"\",\"profile\":true,\"delivered\":false},"
+	                   "\"GX_TANK_FRESH\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}}"),
+	      "catalogue with a Cerbo: an entry of the adapter with the prefix is left out also where the Cerbo delivered no key of that name");
+	no_names();
+	check(listed_gives("{\"@BATT_V\":{\"unit\":\"V\",\"class\":\"\",\"profile\":false,\"delivered\":true},\"RPM\":{\"unit\":\"rpm\",\"class\":\"\",\"profile\":true,\"delivered\":false}}"),
+	      "catalogue with a Cerbo: ... and where it delivered none at all");
+	no_catalog();
+	listed("GX_FIRST", "", "", true, true);
+	listed("A", "", "", false, false);
+	listed("GX_LAST", "", "", true, true);
+	check(listed_gives("{\"A\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":false}}"),
+	      "catalogue with a Cerbo: an entry with the prefix in the first place and in the last: the entry between them stands without a comma");
+	no_catalog();
+	listed("GX_ONLY", "", "", true, true);
+	add_name("GX_Z");
+	check(listed_gives("{\"GX_Z\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}}"),
+	      "catalogue with a Cerbo: every entry of the adapter left out: the first name of the Cerbo stands without a comma");
+	no_catalog();
+	listed("GX", "", "", false, false);
+	listed("gx_A", "", "", false, false);
+	listed("XGX_A", "", "", false, false);
+	listed("GX-A", "", "", false, false);
+	listed("GX_", "", "", false, false);
+	listed("GX_a", "", "", false, false);
+	no_names();
+	model_listed(&catalog, &named_source);
+	check(listed_gives(expected) && count_of(expected, "\":{\"unit\"") == 4 && strstr(expected, "\"GX_\"") == NULL && strstr(expected, "\"GX_a\"") == NULL,
+	      "catalogue with a Cerbo: the prefix is GX_ at the beginning and in capitals: four names that only look like it stay, GX_ alone and GX_a are the Cerbo's");
+}
+
+// The longest answers: what the header says of their room
+static void test_catalog_cerbo_size(void)
+{
+	static char plain[ROOM_SIZE];
+	char name[VALUE_NAME_SIZE];
+	int length, i;
+
+	// Every entry of the adapter with the longest texts that need no escape, and 64 keys of 32 bytes
+	no_catalog();
+	for(i = 0; i < CATALOG_MAX; i++)
+	{
+		catalog_entry_t *added = &catalog.entries[catalog.count++];
+
+		memset(added->name, 'N', VALUE_NAME_SIZE - 1);
+		memset(added->unit, 'u', CATALOG_UNIT_SIZE - 1);
+		memset(added->value_class, 'c', CATALOG_CLASS_SIZE - 1);
+		added->in_profile = false;
+		added->delivered = false;
+	}
+	no_names();
+	length = catalog_to_json(&catalog, plain, sizeof(plain));
+	check(length == 12097 && length == 2 + CATALOG_MAX * (59 + 32 + 11 + 23) + CATALOG_MAX - 1,
+	      "the catalogue of the adapter with 96 entries of the longest texts that need no escape has the 12097 bytes web_json.h names");
+	for(i = 0; i < CERBO_NAMES_MAX; i++)
+	{
+		snprintf(name, sizeof(name), "GX_KEY_OF_32_BYTES_%02d_ABCDEFGHIJ", i);
+		add_name(name);
+	}
+	model_listed(&catalog, &named_source);
+	listed_now.catalog = &catalog;
+	listed_now.cerbo = &named_source;
+	check(strlen(expected) == 17921 && strlen(expected) == 12097 + WEB_CATALOG_CERBO_SIZE && rooms_around(call_listed, expected),
+	      "with 64 keys of the Cerbo of 32 bytes behind it the text has 17921 bytes: WEB_CATALOG_CERBO_SIZE more, as web_json.h says");
+	check(room_is_right(call_listed, expected, 17922) && room_is_right(call_listed, expected, 17921),
+	      "that text fits a room of 17922 bytes and not one of 17921");
+	check(strncmp(expected + 12096, ",\"GX_KEY_OF_32_BYTES_00_ABCDEFGHIJ\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true},\"GX_KEY_OF_32_BYTES_01_", 114) == 0 &&
+	      strcmp(expected + 17921 - 91, "\"GX_KEY_OF_32_BYTES_63_ABCDEFGHIJ\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}}") == 0,
+	      "... and ends with the 64 keys in their order");
+}
+
+// Many catalogues and many lists of names against the format written a second time
+static void test_random_catalog_cerbo(void)
+{
+	static const char *const pieces[] = {"A", "RPM", "GX_", "GX", "_", "\"", "\\", "\x01", "\x1f", "\x7f", "\xC3\xA4", "gx_", "0", "TEMP", " ", "/", "{", "}", ":", ","};
+	uint32_t state = 20261012;
+	int different = 0, invalid = 0, prefixed = 0, both = 0, empty = 0, escaped = 0;
+	int round, i, k;
+
+	for(round = 0; round < 3000; round++)
+	{
+		int entries, names;
+
+		state = state * 1664525u + 1013904223u;
+		entries = (int)((state >> 8) % 12);
+		state = state * 1664525u + 1013904223u;
+		names = (int)((state >> 8) % 9);
+
+		no_catalog();
+		for(i = 0; i < entries; i++)
+		{
+			catalog_entry_t *added = &catalog.entries[catalog.count++];
+			char *fields[] = {added->name, added->unit, added->value_class};
+			size_t rooms[] = {VALUE_NAME_SIZE, CATALOG_UNIT_SIZE, CATALOG_CLASS_SIZE};
+
+			memset(added, 'q', sizeof(*added));
+			for(k = 0; k < 3; k++)
+			{
+				int count;
+
+				fields[k][0] = '\0';
+				state = state * 1664525u + 1013904223u;
+				count = (int)((state >> 8) % 5);
+				while(count-- > 0)
+				{
+					const char *piece;
+
+					state = state * 1664525u + 1013904223u;
+					piece = pieces[(state >> 8) % (sizeof(pieces) / sizeof(pieces[0]))];
+					if(strlen(fields[k]) + strlen(piece) < rooms[k]) strcat(fields[k], piece);
+				}
+			}
+			state = state * 1664525u + 1013904223u;
+			added->in_profile = ((state >> 8) & 1) != 0;
+			added->delivered = ((state >> 9) & 1) != 0;
+			if(bears_prefix(added->name)) prefixed++;
+			if(strpbrk(added->name, "\"\\\x01\x1f") != NULL) escaped++;
+		}
+		no_names();
+		for(i = 0; i < names; i++)
+		{
+			char name[VALUE_NAME_SIZE];
+
+			state = state * 1664525u + 1013904223u;
+			snprintf(name, sizeof(name), "GX_%c%u", (char)('A' + (state >> 8) % 26), (unsigned)((state >> 16) % 1000));
+			add_name(name);
+		}
+		if(entries > 0 && names > 0) both++;
+		if(entries == 0 || names == 0) empty++;
+
+		model_listed(&catalog, &named_source);
+		listed_now.catalog = &catalog;
+		listed_now.cerbo = &named_source;
+		if(!rooms_around(call_listed, expected)) different++;
+		// A name of control characters is a key the reader of the project takes as well
+		if(!is_json_object(expected)) invalid++;
+	}
+	printf("  catalogues with a Cerbo: %d entries with the prefix, %d with a text that needs an escape, %d rounds with entries and names, %d without one of them\n",
+	       prefixed, escaped, both, empty);
+	check(different == 0, "catalogue with a Cerbo: 3000 random catalogues and lists of names: each is written as catalog_to_json() writes the entries without the prefix, "
+	                      "with the names behind them");
+	check(invalid == 0, "catalogue with a Cerbo: every one of these 3000 answers is JSON for the reader of the project");
+	check(prefixed > 300 && escaped > 1000 && both > 1500 && empty > 300, "catalogue with a Cerbo: the random catalogues hold entries with the prefix, texts that need an escape, "
+	                                                                    "and rounds with and without entries and names in numbers");
+}
+
 // A room far larger than any answer is a room like every other
 static void test_large_room(void)
 {
@@ -4351,6 +4691,18 @@ static void test_ordinary(void)
 	dtc_now.read = "{}";
 	dtc_now.before_clear = "";
 	check(gives(call_dtc, "{\"read\":{},\"read_age_s\":5,\"before_clear\":null}"), "ordinary input: dtc last with a read");
+
+	no_catalog();
+	listed("@BATT_V", "V", "", false, true);
+	listed("ENGINE_RPM", "rpm", "frequency", true, false);
+	no_names();
+	add_name("GX_BATT_SOC");
+	add_name("GX_SW_B2B");
+	listed_now.catalog = &catalog;
+	listed_now.cerbo = &named_source;
+	check(gives(call_listed, "{\"@BATT_V\":{\"unit\":\"V\",\"class\":\"\",\"profile\":false,\"delivered\":true},\"ENGINE_RPM\":{\"unit\":\"rpm\",\"class\":\"frequency\",\"profile\":true,\"delivered\":false},"
+	            "\"GX_BATT_SOC\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true},\"GX_SW_B2B\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}}"),
+	      "ordinary input: the catalogue of a display with a Cerbo");
 }
 
 // Texts that are NULL, calls that give no buffer where no room is, and no lists where they are not read
@@ -4395,6 +4747,9 @@ static void test_null(void)
 	check(web_asked_json(17, NULL, 0) == -1, "asked: no room and no buffer: -1");
 	check(web_dtc_last_json("{}", 1, "{}", NULL, 0) == -1, "dtc last: no room and no buffer: -1");
 	check(web_dtc_last_json(NULL, 1, NULL, NULL, 0) == -1, "dtc last: no texts, no room and no buffer: -1");
+	no_names();
+	add_name("GX_A");
+	check(web_catalog_cerbo_json(&catalog, &named_source, NULL, 0) == -1, "catalogue with a Cerbo: no room and no buffer: -1");
 
 	// The readers without a room for tokens and without a text
 	check(!wifi_parse("{\"ssid\":\"Home\"}", 15, NULL, 0) && all_guard(&request_box, sizeof(request_box)) &&
@@ -4460,6 +4815,9 @@ int main(void)
 	in_child(test_random_info_cerbo, "info with a Cerbo: 3000 random infos: no crash, no hang");
 	in_child(test_random_values_cerbo, "values with a Cerbo: 3000 random pairs of stores: no crash, no hang");
 	in_child(test_random_report_cerbo, "report with keys of the Cerbo: 3000 random reports: no crash, no hang");
+	test_catalog_cerbo();
+	test_catalog_cerbo_size();
+	in_child(test_random_catalog_cerbo, "catalogue with a Cerbo: 3000 random catalogues: no crash, no hang");
 
 	check(work[WEB_WIFI_TOKENS].start == 0x5A5A5A5A && work[WEB_WIFI_TOKENS + 1].start == 0x5A5A5A5A,
 	      "no call wrote behind the WEB_WIFI_TOKENS tokens it was given");

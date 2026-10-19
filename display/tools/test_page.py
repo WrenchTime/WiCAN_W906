@@ -216,6 +216,71 @@ def editor_marks(page):
     return found
 
 
+def editor_offers(page):
+    """What keeps the editor of the page from offering the values of the Cerbo GX and its built-in pages
+    (API.md: GET /api/catalog and GET /api/layout/gx with a second source), as a list like the *_problems
+    above and below; its counter-check is OFFER_MUTATIONS, not PAGE_MUTATIONS. The keys of the Cerbo come
+    with the catalogue, and the editor lists what the catalogue names; what is looked at here is the rest:
+    the button "Cerbo-Seiten anhängen" on a display that names a Cerbo and on no other, the pages asked for
+    there alone, copies of them appended within the twelve pages a layout may have and with a word where they
+    do not fit, and a value of the Cerbo that starts with what those pages say of its key."""
+    found = []
+    script = script_of(page)
+    code = code_of(script)[0]
+
+    # The button: one, hidden from the start, and no change of the display - it needs no release
+    if page.count("<button id=\"gxadd\" hidden>Cerbo-Seiten anhängen</button>") != 1 or page.count("id=\"gxadd\"") != 1:
+        found.append("no button Cerbo-Seiten anhängen that is hidden from the start")
+    # ... shown on a display that names a Cerbo and has such pages, said where the editor follows every change
+    shown = re.findall(r"\$\(\"gxadd\"\)\.hidden = ([^;]*);", script)
+    head = re.search(r"\nfunction head\(\)\n\{\n(.*?)\n\}\n", script, re.S)
+    if shown != ["!isObject(part(S, \"info\").cerbo) || !S.gx || !S.gx.pages.length"]:
+        found.append("the button is not shown exactly on a display that names a Cerbo and has pages of it")
+    elif head is None or "$(\"gxadd\").hidden = " not in head.group(1):
+        found.append("the button does not follow the display where the editor looks at its views")
+
+    # The pages are asked for on a display that names a Cerbo, there alone, until it has answered
+    asked = sorted(line for line in code.split("\n") if "loadGx()" in line)
+    if asked != ["\tif(isObject(info.cerbo) && !S.gx) await loadGx();", "async function loadGx()"]:
+        found.append("the pages of the Cerbo are not asked for exactly on a display that names one and has not answered them yet")
+    # What came is read as the editor reads every layout; a display without such pages leaves none to
+    # append, and no answer at all asks again
+    if "\n\tif(r.status) S.gx = r.status === 200 && adopt(r.text) || {pages: []};\n" not in script or len(re.findall(r"\bS\.gx = ", code)) != 1:
+        found.append("the pages are not kept as a layout the editor read, or as none for a display that has none")
+
+    # Appended: copies, behind the pages of the editor, within the limit of layout.h and with a word
+    function = re.search(r"\nfunction gxAppend\(\)\n\{\n(.*?)\n\}\n", script, re.S)
+    if function is None:
+        found.append("no function gxAppend()")
+    else:
+        body = function.group(1)
+        refused = re.search(r"\n\tif\(over > 0\)\n\t\{\n\t\ttell\(\"vmsg\", [^\n]*, \"bad\"\);\n\t\treturn;\n\t\}\n", body)
+        appended = body.find("\tmore.forEach(page => pages.push(page));\n\tdraw();\n\tchanged();\n")
+        if "\tconst pages = S.layout.pages;\n\tconst more = JSON.parse(JSON.stringify(S.gx.pages));\n" not in body:
+            found.append("what is appended are not copies of the pages of the Cerbo")
+        if "\tconst over = pages.length + more.length - PAGES_MAX;\n" not in body or refused is None:
+            found.append("pages that do not fit are not refused with a word")
+        elif appended < refused.end():
+            found.append("the pages are not appended behind the ones of the editor once they are known to fit, with the editor following")
+    if "\nconst PAGES_MAX = %d;\n" % mock_display.PAGES_MAX not in script:
+        found.append("the limit of the pages is not the one of layout.h")
+    if "\n\tgxadd: () => S.layout && S.gx && gxAppend(),\n" not in script:
+        found.append("the button does not append the pages, or does it without views or without pages")
+
+    # A value of the Cerbo that is put on a page starts with a copy of what the built-in pages say of its key
+    item = re.search(r"\nfunction gxItem\(key\)\n\{\n(.*?)\n\}\n", script, re.S)
+    if "\t\t\tS.item = gxItem(name) || {key: name, map: []};\n" not in script:
+        found.append("a value that is put on a page does not start with what the pages of the Cerbo say of its key")
+    if item is None or "(S.gx ? S.gx.pages : [])" not in item.group(1) or ".find(item => item.key === key);" not in item.group(1) \
+            or "\n\treturn found ? JSON.parse(JSON.stringify(found)) : null;" not in item.group(1):
+        found.append("gxItem() is not a copy of the first value with that key on the pages of the Cerbo, and nothing without them")
+
+    # The keys of the Cerbo are in the catalogue: it is read anew when the Cerbo has more or fewer values to show
+    if " || part(info, \"cerbo\").values !== part(before, \"cerbo\").values) loadCatalog();\n" not in script:
+        found.append("the catalogue is not read anew when the number of values of the Cerbo changes")
+    return found
+
+
 def release_problems(page):
     """What keeps the page from following a release for good (API.md: "lasting" of /api/info). Such a
     release has no end, and its left_s is 0: a page that makes an end of that locks its own buttons. The bar
@@ -343,8 +408,9 @@ class Page(unittest.TestCase):
 
     def test_the_table_of_api_md_is_read(self):
         requests = documented_requests(self.api)
-        self.assertEqual(len(requests), 18)
+        self.assertEqual(len(requests), 19)
         self.assertIn(("PUT", "/api/layout?mode=apply"), requests)
+        self.assertIn(("GET", "/api/layout/gx"), requests)
         self.assertIn(("GET", "/api/ticket?id=N"), requests)
 
     def test_the_script_is_read(self):
@@ -364,6 +430,9 @@ class Page(unittest.TestCase):
 
     def test_the_editor_calls_no_value_of_the_cerbo_unknown(self):
         self.assertEqual(editor_marks(self.page), [])
+
+    def test_the_editor_offers_the_values_and_the_pages_of_the_cerbo(self):
+        self.assertEqual(editor_offers(self.page), [])
 
     def test_a_release_for_good_has_no_end_on_the_page(self):
         self.assertEqual(release_problems(self.page), [])
@@ -827,6 +896,115 @@ class Api(unittest.TestCase):
         display.restart()
         self.clock.advance(mock_display.RESTART_MS / 1000 + 1)
         self.assertEqual(self.call("GET", "/api/layout"), (200, whole))
+
+    def test_cerbo_catalog(self):
+        # The story of the firmware (test_app_web.c, test_cerbo_catalog()): the other vehicle and a Cerbo
+        display = self.display
+        other = [["@BATT_V", "V", "", False, True], ["SPEED", "km/h", "speed", True, True], ["RPM", "rpm", "frequency", True, True],
+                 ["COOLANT", "°C", "temperature", True, True], ["FUEL", "%", "none", True, True], ["INTAKE_TEMP", "°C", "temperature", True, True]]
+        six = (("GX_BATT_SOC", 87.5), ("GX_BATT_V", 26.41), ("GX_BATT_I", -6.2), ("GX_SW_B2B", "on"), ("GX_SW_VALVE", "off"), ("GX_TANK_FRESH", 77))
+
+        def entry(key):
+            return "\"%s\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}" % key
+
+        def with_keys(name, *keys):
+            return fixture(name)[:-1] + "".join("," + entry(key) for key in keys) + "}"
+
+        display.catalog = [list(row) for row in other]
+        display.cerbo_base = six
+        self.release()
+        # Without the address the Cerbo is nobody's business, whatever it sends
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, fixture("app_web_catalog.json")))
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, fixture("app_web_catalog_cerbo.json")))
+        # A key the Cerbo does not name any more stays, a new one comes behind - and not one whose value has no text
+        display.cerbo_base = (("GX_T_BOILER", 61.1), ("GX_BATT_SOC", 87.4), ("GX_T_WATER", float("inf")))
+        self.clock.advance(2)
+        self.assertEqual(self.call("GET", "/api/values")[1].count("\"GX_"), 2)
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, with_keys("app_web_catalog_cerbo.json", "GX_T_BOILER")))
+        # The Cerbo is gone and none of its values is left: its keys are
+        display.set_cerbo("unreachable")
+        self.clock.advance(70)
+        self.assertEqual(self.call("GET", "/api/values")[1].count("\"GX_"), 0)
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, with_keys("app_web_catalog_cerbo.json", "GX_T_BOILER")))
+        # Another address forgets them; the address again notes them anew, in the order of the bundle
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.9\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, fixture("app_web_catalog.json")))
+        display.set_cerbo("sends")
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, with_keys("app_web_catalog.json", "GX_T_BOILER", "GX_BATT_SOC")))
+        # A restart begins without any
+        display.set_cerbo("silent")
+        display.restart()
+        self.clock.advance(5)
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, fixture("app_web_catalog.json")))
+        self.release()
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, fixture("app_web_catalog.json")))
+
+        # The prefix is the Cerbo's: an entry of the adapter under it is written without the address, and left
+        # out with it - before the Cerbo delivered anything, and as the key of the Cerbo once it did
+        display.catalog = [list(row) for row in other] + [["GX_BATT_SOC", "", "", False, True]]
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, with_keys("app_web_catalog.json", "GX_BATT_SOC")))
+        display.cerbo_base = six
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, fixture("app_web_catalog.json")))
+        display.set_cerbo("sends")
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, fixture("app_web_catalog_cerbo.json")))
+
+        # The room: 64 keys. A 65th takes the place of the oldest one the bundle did not bring.
+        def names():
+            return re.findall(r"\"(GX_[A-Z0-9_]+)\":\{", self.call("GET", "/api/catalog")[1])
+
+        display.catalog = [list(row) for row in other]
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.9\"}")[0], 200)
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        row = ["GX_K%02d" % number for number in range(70)]
+        display.cerbo_base = tuple((key, 1) for key in row[:64])
+        self.assertEqual(names(), row[:64])
+        display.cerbo_base = tuple((key, 1) for key in row[:63] + ["GX_NEW"])
+        self.assertEqual(names(), row[:63] + ["GX_NEW"])
+        display.cerbo_base = (("GX_X1", 1),)
+        self.assertEqual(names(), row[1:63] + ["GX_NEW", "GX_X1"])
+        display.cerbo_base = (("GX_K01", float("inf")), ("GX_X2", "off"))
+        self.assertEqual(names(), ["GX_K01"] + row[3:63] + ["GX_NEW", "GX_X1", "GX_X2"])
+        # With 64 keys of 32 bytes the catalogue of the mock has room; one of the adapter that is far larger has none
+        display.cerbo_base = tuple(("GX_KEY_OF_32_BYTES_%02d_ABCDEFGHIJ" % number, 1) for number in range(64))
+        status, body = self.call("GET", "/api/catalog")
+        self.assertEqual((status, len(body.encode("utf-8")) - len(fixture("app_web_catalog.json").encode("utf-8"))), (200, 5824))
+        display.catalog = [["N%031d" % number, "u" * 11, "c" * 23, True, True] for number in range(96)]
+        self.assertEqual(self.call("GET", "/api/catalog"), (200, display.catalog_json()))
+        self.assertEqual(len(display.catalog_json()), 2 + 96 * (57 + 32 + 11 + 23) + 95 + 5824)
+        display.catalog = [["\\" * 32, "u" * 11, "c" * 23, True, True] for number in range(96)]
+        self.assertEqual(self.call("GET", "/api/catalog"), (500, "{\"error\":\"too_large\"}"))
+
+    def test_cerbo_pages(self):
+        display = self.display
+        with open(mock_display.BUILTIN_GX_LAYOUT, "rb") as file:
+            pages = file.read()
+        self.assertEqual(len(pages), 2473)
+        # The file as the firmware holds it: without the address and without the release ...
+        self.assertEqual(self.call("GET", "/api/layout/gx"), (200, pages.decode("utf-8")))
+        # ... a text the display takes, five pages
+        self.assertEqual(self.call("PUT", "/api/layout?mode=check", pages),
+                         (200, "{\"ok\":true,\"name\":\"Cerbo\",\"pages\":5,\"items\":30,\"warnings\":0,\"warning_path\":\"\",\"warning\":\"\",\"unknown\":[]}"))
+        self.assertEqual(re.findall(r"\"title\":\"([^\"]*)\"", pages.decode("utf-8")), ["Batterie", "Energie", "Alternator", "Wasser", "Klima"])
+        # ... with the address, where the views in use are another text, and under views of the user
+        self.release()
+        self.assertEqual(self.call("POST", "/api/settings", b"{\"cerbo\":\"192.168.88.2\"}")[0], 200)
+        self.assertEqual(self.call("GET", "/api/layout/gx"), (200, pages.decode("utf-8")))
+        self.assertEqual(self.call("GET", "/api/layout"), (200, fixture("app_web_layout_cerbo.json")))
+        stored = (fixture("app_layout_stored.json") + "\n").encode("utf-8")
+        self.assertEqual(self.call("PUT", "/api/layout?mode=save", stored)[0], 200)
+        self.assertEqual(self.call("GET", "/api/layout/gx"), (200, pages.decode("utf-8")))
+        self.assertEqual(self.call("GET", "/api/layout"), (200, stored.decode("utf-8")))
+        # Read only, and only at this path
+        self.assertEqual(self.call("POST", "/api/layout/gx", b"{}"), (405, "{\"error\":\"method\"}"))
+        self.assertEqual(self.call("PUT", "/api/layout/gx?mode=save", stored), (405, "{\"error\":\"method\"}"))
+        self.assertEqual(self.call("GET", "/api/layout/gx?mode=check"), (400, "{\"error\":\"query\"}"))
+        for target in ("/api/layout/gx/", "/api/layout/GX", "/api/layout/g", "/api/gx"):
+            self.assertEqual(self.call("GET", target), (404, "{\"error\":\"not_found\"}"), target)
+        self.assertEqual(self.call("GET", "/api/layout/gx", host="example.org"), (403, "{\"error\":\"host\"}"))
 
     def test_cerbo_owns_its_prefix(self):
         # The story of the firmware (test_app_web.c): the other vehicle with a value named GX_BATT_SOC, a key
@@ -1785,6 +1963,40 @@ EDITOR_MUTATIONS = {
 }
 
 
+# For editor_offers(): what is broken in a copy of the page, as above
+OFFER_MUTATIONS = {
+    "no button": ("<button id=\"gxadd\" hidden>", "<button id=\"gxmore\" hidden>"),
+    "a button that is there from the start": ("<button id=\"gxadd\" hidden>", "<button id=\"gxadd\">"),
+    "a button on every display": ("!isObject(part(S, \"info\").cerbo) || !S.gx || !S.gx.pages.length", "!S.gx || !S.gx.pages.length"),
+    "a button on a display that has no pages of the Cerbo": ("!isObject(part(S, \"info\").cerbo) || !S.gx || !S.gx.pages.length", "!isObject(part(S, \"info\").cerbo) || !S.gx"),
+    "a button that is shown once and never follows": ("\t$(\"gxadd\").hidden = !isObject(part(S, \"info\").cerbo) || !S.gx || !S.gx.pages.length;\n}",
+                                                      "}\n$(\"gxadd\").hidden = !isObject(part(S, \"info\").cerbo) || !S.gx || !S.gx.pages.length;"),
+    "the pages asked for on every display": ("if(isObject(info.cerbo) && !S.gx) await loadGx();", "if(!S.gx) await loadGx();"),
+    "the pages asked for with every look at the display": ("if(isObject(info.cerbo) && !S.gx) await loadGx();", "if(isObject(info.cerbo)) await loadGx();"),
+    "the pages asked for a second time, unasked": ("poll();\n</script>", "loadGx();\npoll();\n</script>"),
+    "a display without the pages is asked again and again": ("if(r.status) S.gx = r.status === 200 && adopt(r.text) || {pages: []};", "if(r.status === 200) S.gx = adopt(r.text);"),
+    "the pages as they came, not read as a layout": ("S.gx = r.status === 200 && adopt(r.text) || {pages: []};", "S.gx = r.status === 200 && r.body || {pages: []};"),
+    "the pages set from elsewhere": ("poll();\n</script>", "S.gx = S.layout;\npoll();\n</script>"),
+    "the pages themselves appended, not copies": ("const more = JSON.parse(JSON.stringify(S.gx.pages));", "const more = S.gx.pages;"),
+    "the views in use appended": ("const more = JSON.parse(JSON.stringify(S.gx.pages));", "const more = JSON.parse(JSON.stringify(S.layout.pages));"),
+    "a thirteenth page": ("\tif(over > 0)\n", "\tif(over > 1)\n"),
+    "pages beyond the limit appended without a word": ("const over = pages.length + more.length - PAGES_MAX;", "const over = 0;"),
+    "a word, and the pages appended all the same": (" löschen.\", \"bad\");\n\t\treturn;\n", " löschen.\", \"bad\");\n"),
+    "refused without a word": ("\t\ttell(\"vmsg\", \"Die \" + more.length + \" Cerbo-Seiten passen nicht mehr", "\t\tconsole.log(\"Die \" + more.length + \" Cerbo-Seiten passen nicht mehr"),
+    "a limit of thirteen pages": ("const PAGES_MAX = 12;", "const PAGES_MAX = 13;"),
+    "the pages in front of the ones of the editor": ("more.forEach(page => pages.push(page));", "more.reverse().forEach(page => pages.unshift(page));"),
+    "pages the display is never asked to check": ("more.forEach(page => pages.push(page));\n\tdraw();\n\tchanged();", "more.forEach(page => pages.push(page));\n\tdraw();"),
+    "pages the editor does not draw": ("more.forEach(page => pages.push(page));\n\tdraw();\n\tchanged();", "more.forEach(page => pages.push(page));\n\tchanged();"),
+    "the button without views": ("gxadd: () => S.layout && S.gx && gxAppend(),", "gxadd: () => S.gx && gxAppend(),"),
+    "the button does nothing": ("gxadd: () => S.layout && S.gx && gxAppend(),", "gxadd: () => S.layout && S.gx,"),
+    "a value of the Cerbo without what its pages say": ("S.item = gxItem(name) || {key: name, map: []};", "S.item = {key: name, map: []};"),
+    "the value of the pages itself, not a copy": ("return found ? JSON.parse(JSON.stringify(found)) : null;", "return found || null;"),
+    "the first value of the pages for every key": (".find(item => item.key === key);", ".find(item => item.key);"),
+    "the pages read where there are none": ("(S.gx ? S.gx.pages : [])", "S.gx.pages"),
+    "a catalogue that never learns of the keys of the Cerbo": (" || part(info, \"cerbo\").values !== part(before, \"cerbo\").values) loadCatalog();", ") loadCatalog();"),
+}
+
+
 def noise(count):
     """Letters and digits without any order in them, the same with every call"""
     text = ""
@@ -1897,6 +2109,80 @@ class ResetsToTheVehicleAlone(mock_display.Display):
         self.stored = None
         self._use(self.builtin, "builtin")
         return 200, self.report_json(dict(mock_display.check_layout(self.builtin), warnings=[]))
+
+
+class NamesOnlyWhatTheCerboSendsNow(mock_display.Display):
+    """The catalogue with the keys of the last bundle alone"""
+
+    def catalog_json(self):
+        self.cerbo_named = [name for name in self.cerbo_named if name in dict(self.cerbo_base)]
+        return super().catalog_json()
+
+
+class NamesTheKeysWithoutAnAddress(mock_display.Display):
+    """The keys of a Cerbo in the catalogue of a display nobody gave its address"""
+
+    def catalog_json(self):
+        text = super().catalog_json()
+        if self.settings["cerbo"] != "":
+            return text
+        return text[:-1] + "".join(",\"%s\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}" % name for name, value in self.cerbo_base) + "}"
+
+
+class KeepsTheKeysOfTheOldAddress(mock_display.Display):
+    def _settings(self, data, now=None):
+        named = list(self.cerbo_named)
+        answer = super()._settings(data, now)
+        if self.settings["cerbo"] != "":
+            self.cerbo_named = named
+        return answer
+
+
+class KeepsTheKeysOverARestart(mock_display.Display):
+    def restart(self, reason="sw"):
+        named = list(self.cerbo_named)
+        super().restart(reason)
+        self.cerbo_named = named
+
+
+class NamesTheKeysBeforeTheAdapter(mock_display.Display):
+    def catalog_json(self):
+        named, self.cerbo_named = self.cerbo_named, []
+        try:
+            text = super().catalog_json()
+        finally:
+            self.cerbo_named = named
+        if self.settings["cerbo"] == "" or not named or text == "{}":
+            return text
+        return "{" + "".join("\"%s\":{\"unit\":\"\",\"class\":\"\",\"profile\":false,\"delivered\":true}," % name for name in named) + text[1:]
+
+
+class KeysOfTheCerboNotDelivered(mock_display.Display):
+    def catalog_json(self):
+        head, mark, keys = super().catalog_json().partition(",\"GX_")
+        return head + mark + keys.replace("\"delivered\":true", "\"delivered\":false")
+
+
+class HandsOutTheViewsInUse(mock_display.Display):
+    """GET /api/layout/gx answers the views in use"""
+
+    def _get(self, route, ticket, now):
+        return super()._get("layout" if route == "layout_gx" else route, ticket, now)
+
+
+class PagesOfTheCerboOnlyWithItsAddress(mock_display.Display):
+    def _get(self, route, ticket, now):
+        if route == "layout_gx" and self.settings["cerbo"] == "":
+            return 404, mock_display.error_body("not_found")
+        return super()._get(route, ticket, now)
+
+
+class PagesOfTheCerboWithoutWhitespace(mock_display.Display):
+    """The pages written anew, not the file as it is"""
+
+    def _get(self, route, ticket, now):
+        status, body = super()._get(route, ticket, now)
+        return (status, re.sub(r"\n\s*", "", body)) if route == "layout_gx" else (status, body)
 
 
 class CerboBehindTheLayout(mock_display.Display):
@@ -2245,6 +2531,8 @@ API_MUTATIONS = {
     "test_cerbo_answers": WrongCerbo,
     "test_cerbo_comes_and_goes": ("CERBO_KEPT_MS", 59999),
     "test_cerbo_owns_its_prefix": ("CERBO_PREFIX", "NO_SUCH_PREFIX_"),
+    "test_cerbo_catalog": NamesOnlyWhatTheCerboSendsNow,
+    "test_cerbo_pages": HandsOutTheViewsInUse,
     "test_cerbo_views": ("appended_views", lambda first, second: first),
     "test_cerbo_counts_what_it_names": CountsTheWholeStore,
     "test_no_cerbo_without_an_address": NamesTheCerboAlways,
@@ -2272,6 +2560,10 @@ API_MUTATIONS_MORE = {
     "test_cerbo_comes_and_goes": [("CERBO_FRESH_MS", 5001), ("CERBO_LIVE_MS", 10001), ("CERBO_SILENT_MS", 20001), ("CERBO_GRACE_MS", 15001),
                                   ("CERBO_ADDRESS", "192.168.88.9"), KeepsTheValuesOfTheOldAddress, NamesTheCerboAlways],
     "test_cerbo_owns_its_prefix": [OwnsThePrefixOnlyWhereTheCerboHasTheKey, OwnsThePrefixWithoutAnAddress],
+    "test_cerbo_catalog": [NamesTheKeysWithoutAnAddress, KeepsTheKeysOfTheOldAddress, KeepsTheKeysOverARestart, NamesTheKeysBeforeTheAdapter, KeysOfTheCerboNotDelivered,
+                           ("CERBO_PREFIX", "NO_SUCH_PREFIX_"), ("CERBO_NAMES_MAX", 63), ("CERBO_NAMES_MAX", 65), ("has_text", lambda value: True), ("OUT_SIZE", 60000),
+                           ("note_names", lambda named, bundle: named.extend(name for name, value in bundle if mock_display.has_text(value) and name not in named))],
+    "test_cerbo_pages": [PagesOfTheCerboOnlyWithItsAddress, PagesOfTheCerboWithoutWhitespace, ("BUILTIN_GX_LAYOUT", mock_display.BUILTIN_LAYOUT)],
     "test_cerbo_views": [AppendsToViewsOfTheUser, KeepsThePagesOfTheCerbo, ResetsToTheVehicleAlone, ("CERBO_PREFIX", "NO_SUCH_PREFIX_"),
                          ("LAYOUT_ITEM_MEMBERS", ("key", "label", "unit", "scale", "widget", "dec", "min", "max", "warn_lo", "warn_hi", "crit_lo", "crit_hi", "map")),
                          ("appended_views", lambda first, second: first + b"\n" + second)],
@@ -2343,6 +2635,13 @@ class CounterCheck(unittest.TestCase):
         for what, mutation in EDITOR_MUTATIONS.items():
             with self.subTest(broken=what):
                 self.assertNotEqual(editor_marks(swapped(page, *mutation)), [])
+
+    def test_an_editor_that_does_not_offer_the_cerbo_is_found(self):
+        page = file_text(PAGE)
+        self.assertGreaterEqual(len(OFFER_MUTATIONS), 25)
+        for what, mutation in OFFER_MUTATIONS.items():
+            with self.subTest(broken=what):
+                self.assertNotEqual(editor_offers(swapped(page, *mutation)), [])
 
     def test_every_test_of_the_mock_is_broken_once(self):
         tests = {name for name in dir(Api) if name.startswith("test_")}

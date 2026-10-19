@@ -461,6 +461,12 @@ void app_init(app_t *app, const app_boot_t *boot, uint64_t now_ms)
 	{
 		app->has_builtin_gx = true;
 	}
+	// Their text is what the editor in the browser asks for (app_web.h): only a text that was read as pages
+	if(app->has_builtin_gx)
+	{
+		app->builtin_gx_text = boot->builtin_gx;
+		app->builtin_gx_length = boot->builtin_gx_length;
+	}
 	// In safe mode the stored layout is not even read: it may be what crashed the display
 	if(!app->safe_mode && boot->layout_text != NULL &&
 	   layout_parse(boot->layout_text, boot->layout_length, &app->layout, NULL, app->work, app->work_count))

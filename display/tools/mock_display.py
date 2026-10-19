@@ -64,6 +64,12 @@ Taken from the sources, read and written a second time here:
     as one text under the name "W906 OM651 Standard + Cerbo"; views that are stored or looked at stay
     as they are; and no key that begins with GX_ is ever "unknown". A mock nobody gave an address
     answers byte for byte what it answered before there was a second source
+  - the editor and the second source (cerbo.c, web_json.c, app_web.c): with an address /api/catalog
+    names, behind the entries of the adapter, the keys the Cerbo has delivered since the start or
+    since it was given that address - also those its last bundle did not bring, up to 64, the oldest
+    one the last bundle did not bring giving way to a 65th -, and leaves out an entry of the adapter
+    under the prefix GX_; /api/layout/gx hands out the built-in pages of the Cerbo, the file as it is,
+    with an address and without
 
 What the check of a layout does not check as the display does:
   - a text that is not UTF-8. The display reads bytes and passes them on; the mock answers
@@ -194,6 +200,7 @@ CERBO_KEPT_MS = 60000
 CERBO_LIVE_MS = 10000
 CERBO_SILENT_MS = 20000
 CERBO_GRACE_MS = 15000
+CERBO_NAMES_MAX = 64
 # catalog.h
 CATALOG_BATTERY = "@BATT_V"
 # ota_check.h
@@ -222,6 +229,7 @@ ROUTES = (
     ("GET", "/api/values", "values", False, False),
     ("GET", "/api/layout", "layout", False, False),
     ("PUT", "/api/layout", "layout_put", False, False),
+    ("GET", "/api/layout/gx", "layout_gx", False, False),
     ("POST", "/api/layout/reset", "layout_reset", False, False),
     ("GET", "/api/dtc/last", "dtc_last", False, False),
     ("GET", "/api/wifi", "wifi", False, False),
@@ -564,6 +572,20 @@ def has_text(value):
     return isinstance(value, str) or math.isfinite(value)
 
 
+def note_names(named, bundle):
+    """note_names() in cerbo.c: the keys of a bundle that was taken - (name, value) in its order - are noted
+    in the list `named`. A key with a value that has a text, and that is not in the list yet, comes behind
+    the others; where the list is full, the oldest name the bundle did not bring gives way first."""
+    brought = [name for name, value in bundle]
+    for name, value in bundle:
+        if not has_text(value) or name in named:
+            continue
+        if len(named) == CERBO_NAMES_MAX:
+            away = [old for old in named[:-1] if old not in brought]
+            del named[named.index(away[0]) if away else -1]
+        named.append(name)
+
+
 def boolean(value):
     return "true" if value else "false"
 
@@ -856,6 +878,7 @@ class Display:
         self.cerbo_counted_ms = 0       # ... and the last one that was counted
         self.cerbo_since_ms = 0
         self.cerbo_numbers = {"ok": 0, "connects": 0}
+        self.cerbo_named = []           # the keys it delivered, for the catalogue: note_names()
 
         self.version = "0.1.0"
         self.git = "display-v0.1.0-3-g1a2b3c4"
@@ -986,6 +1009,7 @@ class Display:
         self.cerbo_counted_ms = 0
         self.cerbo_since_ms = 0
         self.cerbo_numbers = {"ok": 0, "connects": 0}
+        self.cerbo_named = []
         if self.stored is not None:
             self._use(self.stored, "stored")
         else:
@@ -1029,6 +1053,7 @@ class Display:
             self.cerbo_numbers["ok"] += bundles
             self.cerbo_counted_ms += bundles * 1000
         self.cerbo_seen_ms = now
+        note_names(self.cerbo_named, tuple(dict(self.cerbo_base).items()))
 
     def cerbo_view(self, now):
         """cerbo_view() as a word, in the simple form the head of this file names"""
@@ -1158,10 +1183,17 @@ class Display:
         return "live" if self.adapter else "no_answer"
 
     def catalog_json(self):
+        """catalog_to_json(), and with an address of the Cerbo web_catalog_cerbo_json(): the keys the Cerbo
+        delivered behind the entries of the adapter, each without unit and class, not of the profile,
+        delivered - and no entry of the adapter under the prefix of the Cerbo, so that no key stands twice"""
+        entries = self.catalog
+        if self.settings["cerbo"] != "":
+            entries = [entry for entry in entries if not entry[0].startswith(CERBO_PREFIX)]
+            entries = entries + [[name, "", "", False, True] for name in self.cerbo_named]
         return "{%s}" % ",".join("%s:{\"unit\":%s,\"class\":%s,\"profile\":%s,\"delivered\":%s}"
                                  % (quote(name, False), quote(unit, False), quote(kind, False), boolean(profile),
                                     boolean(delivered))
-                                 for name, unit, kind, profile, delivered in self.catalog)
+                                 for name, unit, kind, profile, delivered in entries)
 
     def values(self, now):
         """The values the display holds: (name, a number or "on" or "off", when the adapter renewed it).
@@ -1347,6 +1379,8 @@ class Display:
         if route == "info":
             return 200, self.info_json(now)
         if route == "catalog":
+            # What the Cerbo delivered until now is noted first
+            self._cerbo_settle(now)
             return 200, self.catalog_json()
         if route == "values":
             return 200, self.values_json(now)
@@ -1355,6 +1389,9 @@ class Display:
             if not self.layout:
                 return 500, error_body("too_large")
             return 200, self.layout.decode("utf-8")
+        if route == "layout_gx":
+            # The file as the firmware holds it, whatever views are in use and with or without an address
+            return 200, self.builtin_gx.decode("utf-8")
         if route == "dtc_last":
             return 200, self.dtc_last_json(now)
         if route == "wifi":
@@ -1477,6 +1514,7 @@ class Display:
             # Another address, or none: what another broker sent says nothing about this one. The counters stay.
             self._cerbo_settle(now if now is not None else self.now())
             self.cerbo_seen_ms = None
+            self.cerbo_named = []
             self.cerbo_since_ms = now if now is not None else self.now()
         switched = (changed["cerbo"] == "") != (self.settings["cerbo"] == "")
         self.settings = changed

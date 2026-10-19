@@ -405,6 +405,7 @@ static const row_t rows[] = {
 	{"GET /api/catalog",           WEB_GET,  "/api/catalog",      "",           "x=1",        WEB_ROUTE_CATALOG,      false, false, false, 0,     0},
 	{"GET /api/values",            WEB_GET,  "/api/values",       "",           "x=1",        WEB_ROUTE_VALUES,       false, false, false, 0,     0},
 	{"GET /api/layout",            WEB_GET,  "/api/layout",       "",           "mode=check", WEB_ROUTE_LAYOUT,       false, false, false, 0,     0},
+	{"GET /api/layout/gx",         WEB_GET,  "/api/layout/gx",    "",           "mode=check", WEB_ROUTE_LAYOUT_GX,    false, false, false, 0,     0},
 	{"PUT /api/layout?mode=check", WEB_PUT,  "/api/layout",       "mode=check", "",           WEB_ROUTE_LAYOUT_CHECK, false, false, false, 16384, 0},
 	{"PUT /api/layout?mode=apply", WEB_PUT,  "/api/layout",       "mode=apply", "mode=appl",  WEB_ROUTE_LAYOUT_APPLY, true,  false, false, 16384, 0},
 	{"PUT /api/layout?mode=save",  WEB_PUT,  "/api/layout",       "mode=save",  "mode=saved", WEB_ROUTE_LAYOUT_SAVE,  true,  false, false, 16384, 0},
@@ -452,7 +453,7 @@ static void test_rows(void)
 	static const web_method_t methods[] = {WEB_GET, WEB_PUT, WEB_POST, WEB_OTHER, (web_method_t)4, (web_method_t)99, (web_method_t)-1};
 	size_t i, k;
 
-	check(COUNT(rows) == 18, "the list of the header has 18 lines");
+	check(COUNT(rows) == 19, "the list of the header has 19 lines");
 
 	for(i = 0; i < COUNT(rows); i++)
 	{
@@ -542,6 +543,8 @@ static void test_paths(void)
 		"/api/layout/check", "/api/dtc", "/api/dtc/", "/api/dtc/last/", "/api/dtc/read", "/api/dtc/clear", "/api/wifi/", "/api/wifi/forge", "/api/wifi/forget/",
 		"/api/setting", "/api/settings/", "/api/reboot/", "/api/reboo", "/api/reset/", "/api/resetx", "/api/ota/", "/api/OTA", "/api/ticket/", "/api/ticket/7",
 		"/api/tickets", "/API/TICKET", "/api/info\n", "/%61pi/info", "/api/info/..", "/./api/info", "/api/state", "/api/dtc/result",
+		"/api/layout/g", "/api/layout/gx/", "/api/layout/gxx", "/api/layout/GX", "/api/layout/Gx", "/api/layout/gx/1", "/api/layout/cerbo", "/api/gx", "/api/layout/gx ",
+		"/api/layoutgx", "/api/layout//gx",
 	};
 	static const web_method_t methods[] = {WEB_GET, WEB_PUT, WEB_POST, WEB_OTHER, (web_method_t)99};
 	size_t i, k;
@@ -1459,7 +1462,7 @@ static web_decision_t model_refused(int status, const char *word)
 // instead of a table, the checks one after the other in the order of the comment
 static web_decision_t model_route(const web_request_t *r)
 {
-	enum { NOWHERE, ROOT, INFO, CATALOG, VALUES, LAYOUT, LAYOUT_RESET, DTC_LAST, WIFI, WIFI_FORGET, SETTINGS, REBOOT, RESET, OTA, TICKET } place = NOWHERE;
+	enum { NOWHERE, ROOT, INFO, CATALOG, VALUES, LAYOUT, LAYOUT_GX, LAYOUT_RESET, DTC_LAST, WIFI, WIFI_FORGET, SETTINGS, REBOOT, RESET, OTA, TICKET } place = NOWHERE;
 	const char *query = r->query == NULL ? "" : r->query;
 	bool get = r->method == WEB_GET, put = r->method == WEB_PUT, post = r->method == WEB_POST;
 	bool query_wrong = query[0] != '\0';
@@ -1472,6 +1475,7 @@ static web_decision_t model_route(const web_request_t *r)
 	else if(strcmp(r->path, "/api/catalog") == 0) place = CATALOG;
 	else if(strcmp(r->path, "/api/values") == 0) place = VALUES;
 	else if(strcmp(r->path, "/api/layout") == 0) place = LAYOUT;
+	else if(strcmp(r->path, "/api/layout/gx") == 0) place = LAYOUT_GX;
 	else if(strcmp(r->path, "/api/layout/reset") == 0) place = LAYOUT_RESET;
 	else if(strcmp(r->path, "/api/dtc/last") == 0) place = DTC_LAST;
 	else if(strcmp(r->path, "/api/wifi") == 0) place = WIFI;
@@ -1490,6 +1494,7 @@ static web_decision_t model_route(const web_request_t *r)
 		case CATALOG:       if(get) decision.route = WEB_ROUTE_CATALOG; break;
 		case VALUES:        if(get) decision.route = WEB_ROUTE_VALUES; break;
 		case LAYOUT:        if(get) decision.route = WEB_ROUTE_LAYOUT; if(put) decision.route = WEB_ROUTE_LAYOUT_SAVE; break;
+		case LAYOUT_GX:     if(get) decision.route = WEB_ROUTE_LAYOUT_GX; break;
 		case LAYOUT_RESET:  if(post) decision.route = WEB_ROUTE_LAYOUT_RESET; break;
 		case DTC_LAST:      if(get) decision.route = WEB_ROUTE_DTC_LAST; break;
 		case WIFI:          if(get) decision.route = WEB_ROUTE_WIFI; if(post) decision.route = WEB_ROUTE_WIFI_STORE; break;
@@ -1572,7 +1577,7 @@ static int scene_grid(void)
 	static const char *const paths[] = {
 		NULL, "", "/", "/api/info", "/api/catalog", "/api/values", "/api/layout", "/api/layout/reset", "/api/dtc/last", "/api/wifi", "/api/wifi/forget",
 		"/api/settings", "/api/reboot", "/api/reset", "/api/ota", "/api/ticket", "/api", "/api/", "/api/info/", "/API/INFO", "/api/dtc", "/api/layout/",
-		"/index.html", "//", "/api/otax", "/api/wifi/forge", "api/info", "/api/ticket?id=1",
+		"/index.html", "//", "/api/otax", "/api/wifi/forge", "api/info", "/api/ticket?id=1", "/api/layout/gx", "/api/layout/g",
 	};
 	static const char *const queries[] = {NULL, "", "mode=check", "mode=apply", "mode=save", "mode=bogus", "id=1", "id=4294967295", "id=0", "x=1", "mode=check&id=1"};
 	static const char *const headers[] = {NULL, "1", "0", "1 "};
@@ -1653,7 +1658,7 @@ static int scene_grid(void)
 	}
 
 	printf("  grid: %ld requests, %ld differ\n", total, different);
-	if(total != 4967424) result |= GRID_COVERAGE;
+	if(total != 5322240) result |= GRID_COVERAGE;
 	for(i = WEB_ROUTE_PAGE; i <= WEB_ROUTE_TICKET; i++)
 	{
 		if(went_on[i] == 0) result |= GRID_COVERAGE;
@@ -1669,9 +1674,9 @@ static void test_grid_against_the_model(void)
 {
 	int result = in_child(scene_grid, SCENE_LONG);
 
-	check(result != -1, "every combination of 6 methods, 28 paths, 11 queries, 4 headers, 4 hosts, 3 slots, 14 cases of Content-Length, the release open or "
+	check(result != -1, "every combination of 6 methods, 30 paths, 11 queries, 4 headers, 4 hosts, 3 slots, 14 cases of Content-Length, the release open or "
 	                    "closed and the display busy or idle: no crash and no hang");
-	check(result != -1 && (result & GRID_COVERAGE) == 0, "the combinations are 4967424 requests, every route goes on in some and every refusal occurs");
+	check(result != -1 && (result & GRID_COVERAGE) == 0, "the combinations are 5322240 requests, every route goes on in some and every refusal occurs");
 	check(result != -1 && (result & GRID_DIFFERS) == 0, "in the combinations every decision is the one of the rules written a second time");
 	check(result != -1 && (result & GRID_FOREIGN) == 0, "in the combinations no request reaches a handler without a Host that is allowed");
 	check(result != -1 && (result & GRID_NO_HEADER) == 0, "in the combinations no request that is not a GET reaches a handler without the header \"1\"");

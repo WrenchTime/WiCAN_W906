@@ -292,6 +292,7 @@ static bool nothing_taken(void)
 	       was->has_boot == cerbo->has_boot && was->boot == cerbo->boot && was->has_clock == cerbo->has_clock && was->t_ms == cerbo->t_ms &&
 	       was->lag_ms == cerbo->lag_ms && was->yield_rest == cerbo->yield_rest && was->quiet_since_ms == cerbo->quiet_since_ms &&
 	       was->bundles == cerbo->bundles && was->boots == cerbo->boots && was->skipped == cerbo->skipped && was->distrusted == cerbo->distrusted &&
+	       was->name_count == cerbo->name_count && memcmp(was->names, cerbo->names, sizeof(cerbo->names)) == 0 &&
 	       was->phase == cerbo->phase && !cerbo->failed;
 }
 
@@ -347,7 +348,9 @@ static void test_constants(void)
 	check(2 * CERBO_PING_MS < 1500u * CERBO_KEEPALIVE_S, "the PINGREQ come often enough for the keep alive time the broker was told");
 	check(VALUE_NAME_SIZE == 33 && VALUES_MAX == 64, "the store holds 64 values with names of up to 32 bytes (values.h)");
 	printf("  sizeof(cerbo_t) is %lu: the reader %lu, the values %lu\n", (unsigned long)sizeof(cerbo_t), (unsigned long)sizeof(mqtt_sub_reader_t), (unsigned long)sizeof(values_t));
-	check(sizeof(void *) != 8 || sizeof(cerbo_t) == 5456, "cerbo_t has 5456 bytes (on a 64 bit host): about 5.5 KB of the external RAM");
+	check(sizeof(void *) != 8 || sizeof(cerbo_t) == 7568, "cerbo_t has 7568 bytes (on a 64 bit host): about 7.4 KB of the external RAM");
+	check(CERBO_NAMES_MAX == 64 && sizeof(((cerbo_t *)0)->names) == 2112 && sizeof(((cerbo_t *)0)->names[0]) == VALUE_NAME_SIZE,
+	      "the source keeps the names of 64 keys, of up to 32 bytes each: 2112 bytes of the 7568");
 }
 
 static void test_off(void)
@@ -1018,6 +1021,172 @@ static void test_values(void)
 	      "a key that is in the store needs no room: it is renewed behind the 65th as well");
 	check(takes(many(64, ",\"A\":1,\"GX_X\":null"), 64, 2), "members that are passed over need no room");
 	check(guards_intact(), "the values write nothing outside the source");
+}
+
+// The names the source keeps are these, in this order: the keys without their prefix, with a blank between two
+static bool names_are(const char *list)
+{
+	const char *rest = list;
+	int count = 0;
+	bool same = true;
+
+	while(*rest != '\0')
+	{
+		size_t length = strcspn(rest, " ");
+		char expected[VALUE_NAME_SIZE] = CERBO_PREFIX;
+
+		if(length + sizeof(CERBO_PREFIX) > sizeof(expected)) return false;
+		memcpy(expected + sizeof(CERBO_PREFIX) - 1, rest, length);
+		if(count >= cerbo->name_count || strcmp(cerbo->names[count], expected) != 0) same = false;
+		count++;
+		rest += length;
+		if(*rest == ' ') rest++;
+	}
+	if(count != cerbo->name_count) same = false;
+	if(!same)
+	{
+		printf("  wanted the names %s, got %d:", list, cerbo->name_count);
+		for(count = 0; count < cerbo->name_count && count < CERBO_NAMES_MAX; count++) printf(" %s", cerbo->names[count] + sizeof(CERBO_PREFIX) - 1);
+		printf("\n");
+	}
+	return same;
+}
+
+// The `count` names from place `from` on are GX_<letter><first>, GX_<letter><first + 1>, ... with two digits each
+static bool names_row(int from, char letter, int first, int count)
+{
+	char expected[VALUE_NAME_SIZE];
+	int i;
+
+	for(i = 0; i < count; i++)
+	{
+		int length = snprintf(expected, sizeof(expected), "GX_%c%02d", letter, first + i);
+
+		if(length < 0 || (size_t)length >= sizeof(expected)) written = false;
+		if(from + i >= cerbo->name_count || strcmp(cerbo->names[from + i], expected) != 0)
+		{
+			printf("  wanted the name %s at place %d of %d, got %s\n", expected, from + i, cerbo->name_count, from + i < cerbo->name_count ? cerbo->names[from + i] : "none");
+			return false;
+		}
+	}
+	return true;
+}
+
+// Every key of the store is among the names
+static bool store_is_named(void)
+{
+	int i, k;
+
+	for(i = 0; i < cerbo->values.count; i++)
+	{
+		k = 0;
+		while(k < cerbo->name_count && strcmp(cerbo->names[k], cerbo->values.items[i].name) != 0) k++;
+		if(k == cerbo->name_count) return false;
+	}
+	return true;
+}
+
+// A bundle with `count` values GX_<letter><first>, GX_<letter><first + 1>, ... and then the members of `more`
+static const char *row(char letter, int first, int count, const char *more)
+{
+	static char values[2048];
+	size_t length = 0;
+	int i;
+
+	for(i = 0; i < count; i++)
+	{
+		int added = snprintf(values + length, sizeof(values) - length, "%s\"GX_%c%02d\":%d", i > 0 ? "," : "", letter, first + i, i);
+
+		if(added < 0 || (size_t)added >= sizeof(values) - length)
+		{
+			written = false;
+			break;
+		}
+		length += (size_t)added;
+	}
+	if(length + strlen(more) + 1 > sizeof(values)) written = false;
+	else strcpy(values + length, more);
+	return values;
+}
+
+// The keys the source keeps the names of, for the editor of the web interface
+static void test_names(void)
+{
+	static const char first[] = "B A C D E F I H";
+	const char *refused_bundle;
+	int i;
+
+	// A source that starts over memory that held something
+	memset(&box, 0xA5, sizeof(box));
+	cerbo_init(cerbo, HOST, false, NAME, 1000);
+	check(cerbo->name_count == 0, "a source that starts keeps no name, whatever lay in its memory");
+
+	check(setup() && cerbo->name_count == 0, "a session for the names: none before the first bundle");
+	now = 6000;
+	check(takes("\"GX_B\":1,\"GX_A\":\"on\",\"GX_C\":-2.5", 3, 0) && names_are("B A C"), "the keys of the first bundle are noted, in the order of the bundle");
+	now = 7000;
+	check(takes("\"GX_C\":3,\"GX_D\":\"off\",\"GX_B\":4,\"GX_E\":0", 4, 0) && value("GX_A") == NULL && names_are("B A C D E"),
+	      "a bundle without one of the keys and with two new ones: the name of the missing key stays where it is, the new ones come behind the others in their order");
+	check(takes("", 0, 0) && cerbo->values.count == 0 && names_are("B A C D E"), "a bundle without values empties the store and leaves every name");
+	check(takes("\"GX_E\":1,\"GX_F\":1,\"GX_F\":\"on\",\"GX_E\":2", 2, 0) && names_are("B A C D E F"), "a key that stands twice in a bundle is noted once, and one that is noted is not noted again");
+
+	// What no answer names
+	check(takes("\"GX_G\":1e999,\"GX_H\":-1e999,\"GX_I\":5", 3, 0) && value("GX_G") != NULL && value("GX_H") != NULL && names_are("B A C D E F I"),
+	      "a key whose value is a number beyond a double is in the store and not among the names: GET /api/values does not name it either");
+	check(takes("\"GX_G\":1e999,\"GX_H\":7", 2, 0) && names_are(first), "with the first value that has a text its key is noted, behind the others");
+	check(takes("\"GX_B\":1e999,\"GX_A\":-1e999", 2, 0) && names_are(first), "a name stays when its key comes with a number without end");
+	check(takes("\"gx_J\":1,\"GX_K\":null,\"J\":2,\"GX_L\":true,\"GX_\":3,\"GX_M\":\"On\"", 0, 6) && names_are(first),
+	      "a member that is passed over - a key that is none, a value that is none - is not noted");
+
+	// What is refused
+	refused_bundle = bundle_text(7, (int64_t)now, "\"GX_R\":1");
+	check(refuses_on(CERBO_TOPIC, true, refused_bundle, &cerbo->refused_retained) && refuses_on("display/gx/other", false, refused_bundle, &cerbo->refused_topic) &&
+	      refuses("{\"v\":1,\"boot\":0,\"t\":1,\"values\":{\"GX_R\":1}}", &cerbo->refused_invalid) &&
+	      refuses("{\"v\":2,\"boot\":7,\"t\":1,\"values\":{\"GX_R\":1}}", &cerbo->refused_version) && names_are(first),
+	      "a bundle that is refused - retained, on another topic, with a boot that is none, of a newer contract - notes no key");
+
+	// What takes no name away, and what takes them all
+	check(takes("\"GX_B\":1", 1, 0) && cerbo_shown(cerbo, now + CERBO_KEPT_MS) == 0 && names_are(first), "the names stay when the values are gone");
+	now += 100;
+	cerbo_down(cerbo, now);
+	check(cerbo->phase == CERBO_IDLE && names_are(first), "... when the session ends");
+	cerbo_network(cerbo, false, now);
+	cerbo_network(cerbo, true, now);
+	check(names_are(first), "... when the network is lost and joined again");
+	cerbo_set_host(cerbo, HOST, now);
+	check(names_are(first), "... and when the address it has is set again");
+	check(connect_at(now) && takes("\"GX_N\":1", 1, 0) && names_are("B A C D E F I H N"), "a session later the names are there, and a new key comes behind them");
+	cerbo_set_host(cerbo, OTHER, now);
+	check(cerbo->name_count == 0, "another address forgets the names with the values: the keys of that broker are not the keys of this one");
+	check(next() == CERBO_DO_CLOSE && next() == CERBO_DO_OPEN && session_now() && takes("\"GX_Z\":1,\"GX_B\":2", 2, 0) && names_are("Z B"),
+	      "the keys of the new broker are noted from the first place on");
+	cerbo_set_host(cerbo, "", now);
+	check(cerbo->name_count == 0, "no address forgets them as well");
+
+	// The room
+	check(setup() && (now = 6000, takes(many(64, ""), 64, 0)) && cerbo->name_count == 64 && names_row(0, 'K', 0, 64), "64 keys in one bundle: 64 names, in their order");
+	check(takes(many(70, ",\"GX_K00\":5"), 64, 6) && cerbo->name_count == 64 && names_row(0, 'K', 0, 64), "the members that found no room in the store are not noted");
+	check(takes(row('K', 0, 63, ",\"GX_NEW\":1"), 64, 0) && cerbo->name_count == 64 && names_row(0, 'K', 0, 63) && strcmp(cerbo->names[63], "GX_NEW") == 0,
+	      "a new key while 64 names are kept: the oldest name the bundle did not bring gives way - here the last one, the only one - and the new one is the last");
+	check(takes("\"GX_X1\":1", 1, 0) && cerbo->name_count == 64 && names_row(0, 'K', 1, 62) && strcmp(cerbo->names[62], "GX_NEW") == 0 && strcmp(cerbo->names[63], "GX_X1") == 0,
+	      "a bundle of one new key: the first name gives way, the names behind it move up");
+	check(takes("\"GX_K01\":1,\"GX_X2\":2", 2, 0) && cerbo->name_count == 64 && strcmp(cerbo->names[0], "GX_K01") == 0 && names_row(1, 'K', 3, 60) &&
+	      strcmp(cerbo->names[61], "GX_NEW") == 0 && strcmp(cerbo->names[62], "GX_X1") == 0 && strcmp(cerbo->names[63], "GX_X2") == 0,
+	      "the first name is in the bundle: it stays, and the second gives way");
+	check(takes("\"GX_K01\":1e999,\"GX_X3\":3", 2, 0) && strcmp(cerbo->names[0], "GX_K01") == 0 && names_row(1, 'K', 4, 59) && strcmp(cerbo->names[60], "GX_NEW") == 0 &&
+	      strcmp(cerbo->names[63], "GX_X3") == 0,
+	      "the first name is in the bundle with a number without end: the bundle brought its key, it stays as well, and the next one gives way");
+	check(takes(row('N', 0, 64, ""), 64, 0) && cerbo->name_count == 64 && names_row(0, 'N', 0, 64) && store_is_named(),
+	      "64 new keys while 64 names are kept: every old name gives way, one after the other, and the names are those of the bundle in its order");
+	check(takes(row('N', 32, 32, ",\"GX_P00\":0,\"GX_P01\":1"), 34, 0) && names_row(0, 'N', 2, 62) && names_row(62, 'P', 0, 2) && store_is_named(),
+	      "two new keys behind 32 that are kept: the two oldest names the bundle did not bring give way");
+	for(i = 0; i < 200 && store_is_named(); i++) takes(row((char)('A' + i % 7), i % 60, 1 + i % 40, i % 3 == 0 ? ",\"GX_ODD\":\"off\"" : ""), 1 + i % 40 + (i % 3 == 0), 0);
+	check(i == 200 && cerbo->name_count == 64 && store_is_named(), "200 bundles of 1 to 41 keys out of 647: after each of them every key of the store is among the 64 names");
+
+	// A name of every length
+	check(setup() && (now = 6000, takes("\"GX_12345678901234567890123456789\":1,\"GX_1\":2", 2, 0)) && names_are("12345678901234567890123456789 1") &&
+	      strlen(cerbo->names[0]) == 32, "a key of 32 bytes is noted with every byte, one of four bytes behind it");
+	check(guards_intact(), "the names write nothing outside the source");
 }
 
 // A bundle of exactly `size` bytes: one value and a member the contract does not know, as long as it takes
@@ -1807,6 +1976,22 @@ typedef struct
 	model_value_t values[VALUES_MAX];
 	int count;
 	uint64_t seen;
+
+	// The names, in another shape than the source keeps them: each where it found a place, with the number of
+	// the noting that brought it. The order is in those numbers; a name that gives way is written over in place.
+	struct
+	{
+		char name[VALUE_NAME_SIZE];
+		uint64_t noted;
+		uint32_t sum;               // of the bytes of the name: two names with different sums are different names
+	} names[VALUES_MAX];
+	int name_count;
+	uint64_t notings;
+	// ... and as a caller reads them, made anew whenever one was noted (model_names())
+	char named[VALUES_MAX][VALUE_NAME_SIZE];
+	uint64_t names_told, names_looked;  // for the walk: the noting up to which it compared every name, and its turns since
+	uint32_t given_way;             // names that gave way to a new one
+
 	bool delivered;
 	uint64_t delivered_at;
 	bool newer;
@@ -1860,6 +2045,8 @@ static void model_set_host(model_t *m, const char *host, uint64_t at)
 
 	strcpy(m->host, taken);
 	m->count = 0;
+	m->name_count = 0;
+	m->notings++;
 	m->delivered = false;
 	m->newer = false;
 	m->boot_known = false;
@@ -1989,6 +2176,86 @@ static void model_pingresp(model_t *m)
 	if(m->time - m->hush_from >= CERBO_SILENT_MS) m->proven = true;
 }
 
+// The names of the model in the order a caller reads them: the one noted first comes first
+static void model_names(model_t *m)
+{
+	int i, k;
+
+	for(i = 0; i < m->name_count; i++)
+	{
+		int earlier = 0;
+
+		for(k = 0; k < m->name_count; k++)
+		{
+			if(m->names[k].noted < m->names[i].noted) earlier++;
+		}
+		strcpy(m->named[earlier], m->names[i].name);
+	}
+}
+
+// A number of a name that two different names seldom share: the walk compares millions of names, and most
+// pairs are told apart by it
+static uint32_t name_sum(const char *name)
+{
+	uint32_t sum = 2166136261u;
+
+	for(; *name != '\0'; name++) sum = (sum ^ (unsigned char)*name) * 16777619u;
+	return sum;
+}
+
+static bool message_names(const uint32_t *sums, const message_t *message, const char *name, uint32_t sum)
+{
+	int i;
+
+	for(i = 0; i < message->count; i++)
+	{
+		if(sums[i] == sum && strcmp(message->values[i].name, name) == 0) return true;
+	}
+	return false;
+}
+
+// The keys of a message that is taken, noted by the rules of cerbo.h: what has a text and is not noted yet; and
+// where there is no place left, in the place of the name noted longest ago among those the message does not name
+static void model_note(model_t *m, const message_t *message)
+{
+	uint32_t sums[VALUES_MAX];
+	uint64_t before = m->notings;
+	int i, k;
+
+	for(i = 0; i < message->count; i++) sums[i] = name_sum(message->values[i].name);
+	for(i = 0; i < message->count; i++)
+	{
+		const model_value_t *value = &message->values[i];
+		int place = m->name_count;
+
+		// The largest double is the largest number that has a text
+		if(value->kind == VALUE_NUMBER && !(fabs(value->number) <= DBL_MAX)) continue;
+		k = 0;
+		while(k < m->name_count && (m->names[k].sum != sums[i] || strcmp(m->names[k].name, value->name) != 0)) k++;
+		if(k < m->name_count) continue;
+
+		if(m->name_count == VALUES_MAX)
+		{
+			place = -1;
+			for(k = 0; k < m->name_count; k++)
+			{
+				if(message_names(sums, message, m->names[k].name, m->names[k].sum)) continue;
+				if(place < 0 || m->names[k].noted < m->names[place].noted) place = k;
+			}
+			// A message names at most as many keys as there are places, and this one of them has none
+			if(place < 0) continue;
+			m->given_way++;
+		}
+		else m->name_count++;
+		strcpy(m->names[place].name, value->name);
+		m->names[place].sum = sums[i];
+		m->names[place].noted = ++m->notings;
+	}
+	if(m->notings != before) model_names(m);
+	// Every bundle that is taken lets the walk look at all the names again, also one that should note nothing
+	m->notings++;
+}
+
 static void model_take(model_t *m, const message_t *message)
 {
 	int64_t d = (int64_t)m->time - message->t;
@@ -2025,6 +2292,7 @@ static void model_take(model_t *m, const message_t *message)
 
 	m->count = message->count;
 	memcpy(m->values, message->values, sizeof(m->values));
+	model_note(m, message);
 	m->skipped += message->skipped;
 	m->newer = false;
 	m->delivered = true;
@@ -2106,7 +2374,8 @@ static bool model_showing(const model_t *m, uint64_t at)
  *     one SUBSCRIBE to the one topic with QoS 0; PINGREQ only after the SUBACK
  *   - never more than two PINGREQ wait for their answer
  *   - every value in the store has a key of the Cerbo, no key is there twice, and no value was seen later than
- *     the latest time the source knows
+ *     the latest time the source knows; every key of the store whose value has a text is among the names, and
+ *     no name is there twice
  *   - in safe mode and without an address nothing is opened
  *   - after any walk a healthy broker, a healthy flow and two and a half minutes lead to a source that delivers
  */
@@ -2136,6 +2405,8 @@ typedef struct
 	long orders[CERBO_DO_CLOSE + 1];
 	long views[CERBO_VIEW_LIVE + 1];
 	long fates[FATES];                  // messages that were read, by what became of them
+	long named_full, given_way;         // bundles taken while 64 names were kept, and names that gave way to a new one
+	long forgotten;                     // addresses set that forgot names
 	long sessions, downs, pauses, naps, hosts, networks, stale;
 	long lagged, old, distrusted, boots, full, over, empty, cuts, bursts, before_suback, two_pings, out_of_place, broken_bytes, refusals, ignored;
 	long endless;                       // bundles taken that brought a number without end: a value in the store that is not counted
@@ -2773,6 +3044,7 @@ static void world_tell(uint64_t at, walk_result_t *result)
 					if(model.count == VALUES_MAX && note->message.skipped > 0) result->over++;
 					if(model.count == 0) result->empty++;
 					if(model_shown(&model, model.seen) < model.count) result->endless++;
+					if(model.name_count == VALUES_MAX) result->named_full++;
 				}
 			}
 		}
@@ -2849,6 +3121,21 @@ static const char *walk_differs(uint64_t at)
 		if(found->seen_ms != model.seen) return "the time a value was seen";
 		if(cerbo_age(found, at) != model_age(&model, at) || cerbo_age(found, other) != model_age(&model, other)) return "the age of a value";
 	}
+
+	// The names: all of them behind every call that may have noted or forgotten one, and one of them in turn
+	// behind every other call - nothing else may move a name
+	if(cerbo->name_count != model.name_count) return "the number of names";
+	if(model.name_count > 0 && model.names_told == model.notings)
+	{
+		i = (int)(model.names_looked++ % (uint64_t)model.name_count);
+		if(strcmp(cerbo->names[i], model.named[i]) != 0) return "a name that nothing moved";
+		return NULL;
+	}
+	model.names_told = model.notings;
+	for(i = 0; i < model.name_count; i++)
+	{
+		if(strcmp(cerbo->names[i], model.named[i]) != 0) return "a name, or its place";
+	}
 	return NULL;
 }
 
@@ -2878,6 +3165,26 @@ static void walk_promises(walk_result_t *result)
 		for(k = 0; k < i && looked_at != cerbo->bundles; k++)
 		{
 			if(strcmp(values->items[i].name, values->items[k].name) == 0) right = false;
+		}
+	}
+	// ... and then every key of the store that has a text against the names: it is one of them, and no name is
+	// there twice
+	for(i = 0; right && i < values->count && looked_at != cerbo->bundles; i++)
+	{
+		const value_t *item = &values->items[i];
+
+		if(item->kind == VALUE_NUMBER && !(fabs(item->number) <= DBL_MAX)) continue;
+		k = 0;
+		while(k < cerbo->name_count && strcmp(cerbo->names[k], item->name) != 0) k++;
+		if(k == cerbo->name_count) right = false;
+	}
+	if(cerbo->name_count < 0 || cerbo->name_count > CERBO_NAMES_MAX) right = false;
+	for(i = 0; right && i < cerbo->name_count && looked_at != cerbo->bundles; i++)
+	{
+		if(!key_of_the_contract(cerbo->names[i])) right = false;
+		for(k = 0; k < i; k++)
+		{
+			if(strcmp(cerbo->names[i], cerbo->names[k]) == 0) right = false;
 		}
 	}
 	looked_at = cerbo->bundles;
@@ -3122,10 +3429,13 @@ static bool walk(uint32_t seed, walk_result_t *result)
 		{
 			if(roll(2) == 0)
 			{
+				int named = model.name_count;
+
 				host = WALK_HOSTS[roll(COUNT(WALK_HOSTS))];
 				cerbo_set_host(cerbo, host, stamp);
 				model_set_host(&model, host, stamp);
 				result->hosts++;
+				if(model.name_count < named) result->forgotten++;
 			}
 		}
 		else
@@ -3172,6 +3482,7 @@ static bool walk(uint32_t seed, walk_result_t *result)
 		        PROMISE_HEALS, result);
 		result->healed++;
 	}
+	result->given_way += (long)model.given_way;
 	result->distrusted += (long)cerbo->distrusted;
 	result->boots += (long)cerbo->boots;
 	promise(guards_intact(), PROMISE_STORE, result);
@@ -3231,6 +3542,7 @@ static void test_walk(void)
 	       "%ld out of place, %ld times broken bytes, %ld refusals\n",
 	       result.fates[FATE_TAKEN], result.fates[FATE_GONE_BY], result.fates[FATE_TOPIC], result.fates[FATE_RETAINED], result.fates[FATE_LONG], result.fates[FATE_INVALID],
 	       result.fates[FATE_NEWER], result.ignored, result.out_of_place, result.broken_bytes, result.refusals);
+	printf("  walk: %ld bundles taken while 64 names were kept, %ld names gave way to a new one, %ld addresses set forgot names\n", result.named_full, result.given_way, result.forgotten);
 	printf("  walk: bundles %ld with a lag, %ld of them old, %ld lags not believed, %ld changes of boot, %ld with 64 values, %ld of them with more members, %ld without a value, "
 	       "%ld before the SUBACK; %ld deliveries of three bundles and more, %ld that ended inside a packet; %ld calls with two PINGREQ under way\n",
 	       result.lagged, result.old, result.distrusted, result.boots, result.full, result.over, result.empty, result.before_suback, result.bursts, result.cuts, result.two_pings);
@@ -3258,7 +3570,8 @@ static void test_walk(void)
 	check(complete && result.broken[PROMISE_SENT] == 0,
 	      "every packet that was sent begins with 0x10, 0x82 or 0xC0: one CONNECT, then at most one SUBSCRIBE after its CONNACK, PINGREQ only after the SUBACK");
 	check(complete && result.broken[PROMISE_PINGS] == 0, "never more than two PINGREQ wait for an answer");
-	check(complete && result.broken[PROMISE_STORE] == 0, "the store holds keys of the Cerbo only, none twice, no value seen in the future, and nothing is written outside the source");
+	check(complete && result.broken[PROMISE_STORE] == 0, "the store holds keys of the Cerbo only, none twice, no value seen in the future, and nothing is written outside the source; "
+	                                                       "every key of it that has a text is among the names, and no name is there twice");
 	check(complete && result.broken[PROMISE_OFF] == 0, "in safe mode and without an address nothing is opened");
 	check(complete && result.broken[PROMISE_HEALS] == 0 && kept && result.healed + result.healed_off == WALKS && result.healed > 90 && result.healed_off > 2,
 	      "after every walk a healthy broker and a healthy flow lead to a source that delivers fresh values within two and a half minutes");
@@ -3269,6 +3582,8 @@ static void test_walk(void)
 	check(complete && result.sessions > 2000 && result.downs > 500 && result.pauses > 500 && result.hosts > 500 && result.networks > 1000 && result.stale > 50000 &&
 	      result.out_of_place > 300 && result.broken_bytes > 100 && result.refusals > 100 && result.ignored > 100,
 	      "the walk reaches sessions, lost connections, pauses, new addresses, lost networks, older times, packets out of place, broken bytes, refusals and ignored packets in numbers");
+	check(complete && result.named_full > 1000 && result.given_way > 1000 && result.forgotten > 100,
+	      "the walk takes bundles while 64 names are kept, lets names give way to new ones and forgets names with an address in numbers");
 	check(complete && result.lagged > 2000 && result.old > 300 && result.distrusted > 100 && result.boots > 1000 && result.full > 200 && result.over > 100 && result.empty > 200 &&
 	      result.before_suback > 100 && result.bursts > 200 && result.cuts > 20000 && result.two_pings > 500,
 	      "the walk reaches bundles that are late and old, lags not believed, new boots, full and empty stores, bundles before the SUBACK, bursts, cut packets and two PINGREQ under way in numbers");
@@ -3291,6 +3606,7 @@ int main(void)
 	test_fixtures();
 	test_before_suback();
 	test_values();
+	test_names();
 	test_refused();
 	test_lag();
 	test_ages();

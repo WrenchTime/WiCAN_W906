@@ -112,8 +112,8 @@ typedef struct
 	size_t layout_length;
 	const char *builtin_layout;     // display/layouts/w906_default.json; has to stay
 	size_t builtin_length;
-	const char *builtin_gx;         // display/layouts/gx_default.json, the pages of the second source; read once
-	size_t builtin_gx_length;       // by app_init() and not kept. NULL: there are none
+	const char *builtin_gx;         // display/layouts/gx_default.json, the pages of the second source; has to stay,
+	size_t builtin_gx_length;       // as builtin_layout: GET /api/layout/gx hands it out. NULL: there are none
 	const char *catalog_json;
 	size_t catalog_length;
 	const char *old_text;           // the fault memory list before the last clear
@@ -167,6 +167,8 @@ typedef struct
 	size_t builtin_length;
 	layout_t builtin_gx;            // the pages of the second source, parsed once at the start
 	bool has_builtin_gx;
+	const char *builtin_gx_text;    // their text, the one of app_boot_t, for the editor in the browser (app_web.h);
+	size_t builtin_gx_length;       // NULL and 0 without has_builtin_gx
 	layout_t checked;               // room for a layout the browser sent, until it is taken (app_web.h): a
 	                                // layout_t is too large for a stack
 	char layout_text[LAYOUT_TEXT_MAX + 1];  // the text `layout` was read from; layout_to_json() for a
@@ -225,9 +227,9 @@ typedef struct
 } app_t;
 
 /*
- * The start. app_t is large (267896 bytes on a 64 bit host: the three layouts and the room for a fourth
+ * The start. app_t is large (270024 bytes on a 64 bit host: the three layouts and the room for a fourth
  * 140480, the lines of the three fault memory lists 62376, the poll 39520, the layout text 16385, the
- * second source 5456; 267784 bytes calculated for a 32 bit target that aligns 64 bit numbers to 8 bytes,
+ * second source 7568; 269904 bytes calculated for a 32 bit target that aligns 64 bit numbers to 8 bytes,
  * not measured on the device): static storage or the external RAM, never a stack.
  * - settings: settings_defaults(), then the stored text if settings_from_json() takes it. A text that is not
  *   taken, and no text at all, leave the defaults - with them the web interface is released for good
@@ -241,7 +243,8 @@ typedef struct
  * - the built-in layout is parsed (has_builtin false if that fails or there is none: then the views are
  *   made from the catalogue, layout_from_catalog(), whenever the built-in ones would be used)
  * - the built-in pages of the second source are parsed (has_builtin_gx false if that fails or there are
- *   none: then no page is appended, whatever the address says - see the choice below)
+ *   none: then no page is appended, whatever the address says - see the choice below - and there is no text
+ *   of them to hand out; a text that was read as pages is kept as builtin_gx_text)
  * - the layout in use: the stored text if there is one, safe_mode is false and layout_parse() takes it
  *   (source STORED); else the choice below. In safe mode the stored text is not even read: it may be what
  *   crashed the display. The app keeps no second copy of what is stored: a preview ends with a restart, a
@@ -307,7 +310,9 @@ void app_choose_layout(app_t *app);
  * - app_web.h, POST /api/settings: cerbo_set_host() when the address the settings hold became another one
  *   So cerbo_host(&app->cerbo) is settings.cerbo at every moment, and app->cerbo.network link_in_network()
  *   behind every app_net().
- * - the two info lines below, GET /api/info and GET /api/values (app_web.h) - while an address is set
+ * - the two info lines below, GET /api/info, GET /api/values and the keys of the Cerbo in GET /api/catalog
+ *   (app_web.h) - while an address is set; and GET /api/layout/gx, the built-in pages below as their text,
+ *   on every display
  * - the pages: while the source is on, the views the display chooses itself end with the built-in pages
  *   of the Cerbo (see the choice of the layout above). A value page shows a value whose key begins with
  *   CERBO_PREFIX from the store of the Cerbo, with the age and the words of that source, whatever views it

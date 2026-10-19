@@ -68,9 +68,10 @@ device only and has not run anywhere yet.
 |---|---|---|---|
 | `GET /` | the page | | |
 | `GET /api/info` | version, memory, network, adapter, release, settings; the Cerbo GX if the display has its address | | |
-| `GET /api/catalog` | the values the adapter can deliver | | |
+| `GET /api/catalog` | the values the adapter can deliver; the keys the Cerbo GX has delivered as well if the display has its address | | |
 | `GET /api/values` | the current values, from the memory of the display; those of the Cerbo GX as well if it has its address | | |
 | `GET /api/layout` | the views in use, as the layout text | | |
+| `GET /api/layout/gx` | the built-in pages of the Cerbo GX, as a layout text | | |
 | `PUT /api/layout?mode=check` | checks a layout, changes nothing | | |
 | `PUT /api/layout?mode=apply` | shows it on the display without storing it | yes | |
 | `PUT /api/layout?mode=save` | stores it | yes | |
@@ -268,6 +269,34 @@ of the adapter names (`profile`), in the order of the profile, then what has arr
 there (`delivered`). The last catalogue is kept on the display, so the views can be edited while the
 adapter sleeps.
 
+**With a second source** — `app_web_catalog_cerbo.json`. A display that has the address of a Cerbo GX names,
+behind the entries of the adapter and in the same object, the keys the Cerbo has delivered - so that the
+editor of the page offers the values of both sources in one list:
+
+```json
+{"@BATT_V":{"unit":"V","class":"","profile":false,"delivered":true},
+ "ENGINE_RPM":{"unit":"rpm","class":"frequency","profile":true,"delivered":true},
+ "GX_BATT_SOC":{"unit":"","class":"","profile":false,"delivered":true},
+ "GX_SW_B2B":{"unit":"","class":"","profile":false,"delivered":true}}
+```
+
+- A key of the Cerbo is in no vehicle profile: `unit` and `class` are empty, `profile` is false, `delivered`
+  true. What a value is called and in which unit it is shown is said by the page it stands on;
+  `GET /api/layout/gx` has both for the keys of the built-in pages.
+- Named is every key a bundle of the Cerbo brought with a number, `"on"` or `"off"` since the display
+  started or was given that address, in the order they first came - **also a key the Cerbo does not send
+  right now**. A bundle leaves out the value of a device that is off, and such a value can still be put on a
+  page. A key that only ever came with a number beyond the range of a double is not named, as in the values.
+- Up to 64 keys, as many as one bundle can bring. A 65th takes the place of the oldest one the last bundle
+  did not bring: every key `GET /api/values` names is in the catalogue at every moment.
+- The keys are not stored: a restart begins without any, and another address forgets them with the values.
+- As in `GET /api/values`, the prefix `GX_` belongs to the Cerbo from the moment an address is set, also in
+  safe mode: an entry of the adapter whose name begins with it is left out, so that no key stands twice.
+- Without the address the answer is the one above, byte for byte.
+- The keys make the answer up to 5824 bytes longer (64 keys of 32 bytes). That has room while the catalogue
+  of the adapter has at most 14655 bytes - the profile of the W906 makes one of 2942 bytes, 2906 with every
+  value delivered -, else `500 too_large`.
+
 ### `GET /api/values` — `web_values.json`
 
 ```json
@@ -346,6 +375,14 @@ A page shows a value whose key begins with `GX_` from what the Cerbo sent - unde
 dimmed, then a dash - with the label and the unit the layout gives it (no catalogue is asked for it). A page of
 such values alone shows them whatever the adapter does, also while the vehicle is parked and the adapter
 sleeps; a page that names values of both shows dashes for the source that is away.
+
+`GET /api/layout/gx` answers the five built-in pages of the Cerbo as a layout text of their own: the file
+`layouts/gx_default.json` as the firmware holds it, byte for byte (2473 bytes), on every display - with the
+address and without, whatever views are in use, in safe mode as well, and without the release. The page
+appends them to the views in its editor ("Cerbo-Seiten anhängen"): that is the way to these pages for
+somebody who stored views of his own, which the display never appends to. And the editor takes from them
+what it suggests for a key of the Cerbo that is put on a page: label, unit, decimals and how it is shown.
+A firmware without such pages answers `404 not_found`. The pages cannot be written through the web.
 
 ### `GET /api/dtc/last` — `web_dtc_last.json`
 

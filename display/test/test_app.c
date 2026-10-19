@@ -211,9 +211,9 @@ static void test_constants(void)
 	      "the events are twelve different bits");
 	printf("  sizeof(app_t) is %lu: poll %lu, four layouts %lu, three lists of lines %lu, layout text %lu\n", (unsigned long)sizeof(app_t),
 	       (unsigned long)sizeof(app->poll), (unsigned long)(4 * sizeof(layout_t)), (unsigned long)(3 * sizeof(app->list)), (unsigned long)sizeof(app->layout_text));
-	check(sizeof(void *) != 8 || sizeof(app_t) == 267896, "app_t has the 267896 bytes app.h names (on a 64 bit host)");
+	check(sizeof(void *) != 8 || sizeof(app_t) == 270024, "app_t has the 270024 bytes app.h names (on a 64 bit host)");
 	check(sizeof(app->poll) == 39520 && 4 * sizeof(layout_t) == 140480 && 3 * sizeof(app->list) == 62376 && sizeof(app->layout_text) == 16385 &&
-	      sizeof(app->cerbo) == 5456,
+	      sizeof(app->cerbo) == 7568,
 	      "the large parts of app_t have the sizes app.h names: the poll, the three layouts and the room for a fourth, the lines of three lists, the layout text, the second source");
 }
 
@@ -4216,6 +4216,26 @@ static void test_boot(void)
 	app_init(app, &boot, 0);
 	check(app->source == APP_LAYOUT_BUILTIN && strcmp(app->layout.name, "W906 OM651 Standard") == 0 && app->layout.page_count == 7 && strcmp(app->layout_text, builtin_text) == 0,
 	      "a stored text that is no layout: the built-in views and their text");
+	check(!app->has_builtin_gx && app->builtin_gx_text == NULL && app->builtin_gx_length == 0, "a firmware without pages of the Cerbo: the app holds none, and no text of them");
+	// The pages of the second source: their text is kept where it was read as pages, and only there
+	boot.layout_text = NULL;
+	boot.builtin_gx = builtin_gx_text;
+	boot.builtin_gx_length = strlen(builtin_gx_text);
+	app_init(app, &boot, 0);
+	check(app->has_builtin_gx && app->builtin_gx_text == builtin_gx_text && app->builtin_gx_length == strlen(builtin_gx_text) && app->builtin_gx_length == 2472,
+	      "the built-in pages of the Cerbo with their length are taken, and the app keeps their text as it was given: the same memory, its 2472 bytes");
+	boot.builtin_gx_length = strlen(builtin_gx_text) - 1;
+	app_init(app, &boot, 0);
+	check(!app->has_builtin_gx && app->builtin_gx_text == NULL && app->builtin_gx_length == 0,
+	      "the length of those pages counts: one byte less is no layout - no pages, and no text of them is kept for the browser");
+	boot.builtin_gx = "[]";
+	boot.builtin_gx_length = 2;
+	app_init(app, &boot, 0);
+	check(!app->has_builtin_gx && app->builtin_gx_text == NULL && app->builtin_gx_length == 0, "a text that is no layout in their place: neither pages nor text");
+	boot.builtin_gx = NULL;
+	boot.builtin_gx_length = strlen(builtin_gx_text);
+	app_init(app, &boot, 0);
+	check(!app->has_builtin_gx && app->builtin_gx_text == NULL && app->builtin_gx_length == 0, "no text in their place and a length all the same: neither pages nor text");
 
 	// The time of the start
 	garage();

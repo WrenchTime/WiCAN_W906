@@ -627,6 +627,14 @@ static void test_reading(void)
 	CHECK(wire.answer_length == strlen(wire.answer));
 	// Every request waits for what the one before it raised, before it looks at the app (app_web.h)
 	CHECK(stored_calls == 2 && stored_early);
+
+	// A reading route that answers a file of the build: the built-in pages of the second source, the embedded
+	// text byte for byte and with the line end of its file (2473 bytes on 2026-10-12), on a display nobody gave
+	// the address of a Cerbo
+	begin_get("/api/layout/gx");
+	CHECK(run() == ESP_OK && status_is("200") && strcmp(wire.type, "application/json") == 0);
+	CHECK(wire.answer_length == (size_t)(layout_gx_end - layout_gx_start) && wire.answer_length > 2000 &&
+	      memcmp(wire.answer, layout_gx_start, wire.answer_length) == 0 && wire.answer[wire.answer_length - 1] == '\n');
 }
 
 // What web_route() refuses is answered with its status and its word, and no function is called for it
