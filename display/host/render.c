@@ -15,6 +15,7 @@
 #include <stdarg.h>
 #include <limits.h>
 #include <math.h>
+#include <ctype.h>
 #include "lvgl.h"
 #include "ui.h"
 
@@ -42,7 +43,8 @@
  *   - ui_row_at() names the right row at the middle of every row and of both options, and none elsewhere
  *   - the row and the option in focus have the white bar and no other has; an action that is not offered
  *     is grey, every other row white; all actions of all screens have one font
- *   - as many dots as there are pages, and the one of the page shown is filled
+ *   - as many dots as there are pages, and the one of the page shown is filled; it is white, and a dot of a
+ *     page with a colour of its own has that colour, filled or not
  *   - gauge, arc of a request, ring of the hold, arc of an upload and the bars are filled as far as the
  *     scene says, from where they begin; a bar has the colour of the tone of its value
  *   - the value of every item is white, grey, amber or red as its tone says; the ring has its colour
@@ -485,6 +487,21 @@ static void values_one_longest(scene_t *scene)
 	item(scene, "", "999999999999,999", "", SCENE_TONE_NORMAL, LAYOUT_WIDGET_ARC, 1000);
 	LONGEST(scene->items[0].label);
 	LONGEST(scene->items[0].unit);
+}
+
+// Twelve dots, each but the last of a page with a colour of its own, the sixth filled
+static void values_dot_colors(scene_t *scene)
+{
+	static const uint32_t colors[] = {0xEF4444, 0xF97316, 0xF59E0B, 0xEAB308, 0x84CC16, 0x22C55E, 0x14B8A6, 0x06B6D4, 0x3B82F6,
+	                                  0x8B5CF6, 0xEC4899};
+
+	values_four(scene);
+	dots(scene, 5, 12);
+	for(size_t i = 0; i < sizeof(colors) / sizeof(colors[0]); i++)
+	{
+		scene->dot_colors[i].set = true;
+		scene->dot_colors[i].rgb = colors[i];
+	}
 }
 
 static void notice_no_wifi(scene_t *scene)
@@ -961,6 +978,7 @@ static const screen_t screens[] =
 	{"values_four_hot", values_four_hot, false},
 	{"values_five", values_five, false},
 	{"values_six", values_six, false},
+	{"values_dot_colors", values_dot_colors, false},
 	{"values_six_fast", values_six_fast, false},
 	{"values_six_alarm", values_six_alarm, false},
 	{"values_six_old", values_six_old, false},
@@ -1205,6 +1223,29 @@ static void read_scene(const char *path, scene_t *scene)
 			*slash = '\0';
 			scene->dot = number_of(rest) - 1;
 			scene->dots = number_of(slash + 1);
+		}
+		else if((rest = behind(text, "dot_colors:")) != NULL)
+		{
+			// "- #22c55e -": a word for each dot, written behind the dots
+			int count = 0;
+
+			for(char *word = strtok(rest, " "); word != NULL; word = strtok(NULL, " "))
+			{
+				char *end;
+				unsigned long value;
+
+				if(count == LAYOUT_PAGES_MAX) refuse("more colours than a scene holds");
+				if(strcmp(word, "-") != 0)
+				{
+					if(word[0] != '#' || strlen(word) != 7) refuse("a colour that is neither - nor #rrggbb");
+					value = strtoul(word + 1, &end, 16);
+					if(*end != '\0' || !isxdigit((unsigned char)word[1])) refuse("a colour that is neither - nor #rrggbb");
+					scene->dot_colors[count].set = true;
+					scene->dot_colors[count].rgb = (uint32_t)value;
+				}
+				count++;
+			}
+			if(count != (scene->dots < LAYOUT_PAGES_MAX ? scene->dots : LAYOUT_PAGES_MAX)) refuse("not a colour for each of the dots");
 		}
 		else if((rest = behind(text, "row: >")) != NULL || (rest = behind(text, "row: -")) != NULL)
 		{
@@ -2161,6 +2202,28 @@ static void check_rows(const scene_t *scene, bool may_cut)
 	}
 }
 
+// Whether a pixel shows `color` (0xRRGGBB): each of its channels the same share of that of the colour - within
+// what RGB565 and the edge of a shape make of it - and that share at least `least` of 255
+static bool shows(uint16_t pixel, uint32_t color, int least)
+{
+	int wanted[3] = {(int)(color >> 16 & 0xFF), (int)(color >> 8 & 0xFF), (int)(color & 0xFF)};
+	uint8_t got[3];
+	int top = 0;
+
+	rgb(pixel, got);
+	for(int c = 1; c < 3; c++)
+	{
+		if(wanted[c] > wanted[top]) top = c;
+	}
+	if(wanted[top] == 0) return pixel == 0;
+	if(got[top] * 255 < least * wanted[top]) return false;
+	for(int c = 0; c < 3; c++)
+	{
+		if(abs(got[c] - wanted[c] * got[top] / wanted[top]) > 16) return false;
+	}
+	return true;
+}
+
 // A dot of the pages: a small box at the lower edge
 static bool is_dot(const thing_t *thing)
 {
@@ -2179,6 +2242,7 @@ static void check_dots(const scene_t *scene)
 	for(int i = 0; i < thing_count; i++)
 	{
 		const thing_t *thing = &things[i];
+		const scene_color_t *own = count < LAYOUT_PAGES_MAX ? &scene->dot_colors[count] : NULL;
 		bool filled;
 
 		if(!is_dot(thing)) continue;
@@ -2188,7 +2252,19 @@ static void check_dots(const scene_t *scene)
 			fail("dot %d of %d is %s, the page shown is number %d", count + 1, expected, filled ? "filled" : "an outline",
 			     scene->dot + 1);
 		}
-		if(filled && thing->ink != 0xFFFF) fail("dot %d is filled and not white", count + 1);
+		// The brightest pixel of a filled dot is one the dot covers whole; an outline of 2 px around a circle
+		// of 8 may cover none of its pixels whole, and is only asked to show the colour at half its strength
+		if(own != NULL && own->set)
+		{
+			if(!shows(thing->ink, own->rgb, filled ? 240 : 128))
+			{
+				uint8_t got[3];
+
+				rgb(thing->ink, got);
+				fail("dot %d is #%02X%02X%02X and not #%06X, the colour of its page", count + 1, got[0], got[1], got[2], (unsigned)own->rgb);
+			}
+		}
+		else if(filled && thing->ink != 0xFFFF) fail("dot %d is filled and not white", count + 1);
 		if(thing->x0 <= last_x) fail("dot %d is not to the right of the one before it", count + 1);
 		last_x = thing->x1;
 		count++;

@@ -101,6 +101,14 @@ typedef enum
 	SCENE_OVER_UPDATE,
 } scene_over_t;
 
+// The colour of a dot of the pages
+typedef struct
+{
+	bool set;                           // the page has a colour of its own ("color" of the layout); false: the dot
+	                                    // is white while its page is shown and grey otherwise
+	uint32_t rgb;                       // 0xRRGGBB, 0 without set
+} scene_color_t;
+
 typedef struct
 {
 	scene_kind_t kind;
@@ -114,6 +122,7 @@ typedef struct
 	int item_count;
 	int dots;                           // pages in the rotation of the knob
 	int dot;                            // the one shown, 0 to dots - 1; -1 if the page is not in the rotation
+	scene_color_t dot_colors[LAYOUT_PAGES_MAX];     // of each dot in its order; zero behind the last
 
 	scene_row_t rows[SCENE_ROWS_MAX];   // SCENE_LIST: the rows that are visible
 	int row_count;
@@ -244,7 +253,9 @@ typedef struct
  *   For every scene of NAV_PAGES, the notices as well:
  *   dots = pages for which layout_page_shown() holds, dot = position of nav->page among them, -1 if it is
  *   not one of them (a page that is hidden or has no value in the catalogue is still shown, until
- *   nav_tick() leaves it).
+ *   nav_tick() leaves it). dot_colors: for each of those pages in their order, set = has_color of the page
+ *   and rgb its color, the lower 24 bits; set false and rgb 0 for a page without has_color, whatever its
+ *   color holds. So the dot of a page keeps its colour, whichever page is shown and wherever the dot stands.
  *   note, the first that applies: "Sicherer Modus – eingebaute Ansichten" in safe mode; "Zu heiß – Anzeige
  *   gedimmt" if heat is not GUARD_HEAT_NORMAL; text_view(view) for SCAN and NO_API; else empty.
  *   A PAGE THAT NAMES A VALUE OF THE SECOND SOURCE (an item whose key begins with CERBO_PREFIX, cerbo.h;
@@ -416,6 +427,10 @@ bool scene_page_shows(const layout_t *layout, int page, conn_view_t view, const 
 //                                 item_count times: label | text | unit | tone (normal, dim, warn, alarm) |
 //                                 widget (number, arc, bar, state) | permille
 //   dots: 2/7                     dot + 1 "/" dots: the second of seven. Not for dots 0 with dot -1.
+//   dot_colors: - #22c55e - - - - -
+//                                 one word for each of the dots: "-" for a dot without set, its rgb in lower
+//                                 case, "?" for an rgb beyond 24 bits. Only if one of them is set: a scene
+//                                 without colours is written as before there were any.
 //   row: > action | Lesen |  | enabled
 //                                 row_count times: ">" marks the focus, "-" a row without it; kind (action,
 //                                 head, line, sub) | text | detail | enabled or disabled
@@ -432,7 +447,7 @@ bool scene_page_shows(const layout_t *layout, int page, conn_view_t view, const 
 // A member of an enum that is none is written as "?". A count beyond its array counts as the size of the
 // array, one below 0 as 0; a text without its zero ends with its field; a focus or an enabled that holds
 // another byte than 0 and 1 counts as true: every scene_t can be written, also one that scene_build() did
-// not fill. SCENE_DUMP_SIZE is enough for each (the largest dump has 2734 bytes).
+// not fill. SCENE_DUMP_SIZE is enough for each (the largest dump has 2841 bytes).
 // Returns the length, -1 if it does not fit (out is then an empty string; with size 0 nothing is written and
 // out may be NULL).
 #define SCENE_DUMP_SIZE     4096

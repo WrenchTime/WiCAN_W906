@@ -304,7 +304,9 @@ stores full the answer has at most 19511 bytes.
 ### Layout — `GET /api/layout`, `PUT /api/layout?mode=...`
 
 The format is described in `components/core/layout.h`; `layouts/w906_default.json` is the built-in one.
-At most 12 pages with 1 to 6 values each, 16384 bytes. The answer to a `PUT`:
+At most 12 pages with 1 to 6 values each, 16384 bytes. A page may give its dot at the lower edge of the screen
+a colour of its own, `"color":"#22c55e"` ("#" and six hexadecimal digits; `GET /api/layout` of views the
+display wrote itself has them in lower case). The answer to a `PUT`:
 
 ```json
 {"ok":true,"name":"W906 OM651 Standard","pages":2,"items":5,"warnings":0,"warning_path":"","warning":"","unknown":[]}

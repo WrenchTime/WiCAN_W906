@@ -632,7 +632,8 @@ static void put_grid(const scene_item_t *items, int count, int top, int bottom)
 	}
 }
 
-// The pages the knob turns through, as dots along the lower edge, the one shown filled
+// The pages the knob turns through, as dots along the lower edge, the one shown filled. A page with a colour of
+// its own has its dot in it, filled or not; the others are white when shown and grey otherwise.
 static void put_dots(const scene_t *scene)
 {
 	// Where a dot lies, by its distance from the lowest point in steps of 2.25 degrees
@@ -646,9 +647,10 @@ static void put_dots(const scene_t *scene)
 		int x = step < 0 ? CX - across[-step] : CX + across[step];
 		int y = CY + down[step < 0 ? -step : step];
 		bool shown = i == scene->dot;
+		const scene_color_t *own = &scene->dot_colors[i];
+		uint32_t color = own->set ? own->rgb : shown ? COLOR_WHITE : COLOR_LABEL;
 
-		ui_put_box(UI_LAYER_SCREEN, x - DOT_SIZE / 2, y - DOT_SIZE / 2, DOT_SIZE, DOT_SIZE, DOT_SIZE / 2,
-		           shown ? COLOR_WHITE : COLOR_LABEL, shown ? 0 : 2);
+		ui_put_box(UI_LAYER_SCREEN, x - DOT_SIZE / 2, y - DOT_SIZE / 2, DOT_SIZE, DOT_SIZE, DOT_SIZE / 2, color, shown ? 0 : 2);
 	}
 }
 

@@ -37,6 +37,7 @@ button,.btn{display:inline-block;min-height:44px;padding:9px 12px;border:1px sol
 button:disabled{opacity:.45;cursor:default}
 input,select{max-width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--card)}
 input[type=checkbox]{width:22px;height:22px;vertical-align:middle}
+input[type=color]{width:44px;height:44px;padding:2px;vertical-align:middle}
 input[type=range]{padding:0}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.4 ui-monospace,Menlo,Consolas,monospace}
 label.f,label.c{display:block;margin:8px 0}
@@ -711,6 +712,9 @@ const edits = (node, type, change) => node.addEventListener(type, () =>
 	changed();
 });
 
+// "#rrggbb", the one form of a colour the display takes and the picker shows
+const isColor = value => /^#[0-9a-f]{6}$/i.test(value);
+
 // A member of the layout that is left out when it says nothing
 function setMember(object, name, value)
 {
@@ -735,15 +739,16 @@ function drawPages()
 		const path = "pages[" + p + "]";
 		const title = el("input", {value: text(page.title), maxLength: 24, placeholder: "Titel", className: "grow"});
 		const hide = el("input", {type: "checkbox", checked: page.hidden === true});
+		const number = button(String(p + 1), "Seite bearbeiten", () =>
+		{
+			S.page = p;
+			S.item = null;
+			draw();
+		}, "sq");
 		const up = button("▲", "Seite nach oben", () => moved(p, -1), "sq");
 		const down = button("▼", "Seite nach unten", () => moved(p, 1), "sq");
 		const row = el("div", {className: "box row" + (p === S.page ? " cur" : "")}, [
-			button(String(p + 1), "Seite bearbeiten", () =>
-			{
-				S.page = p;
-				S.item = null;
-				draw();
-			}, "sq"),
+			number,
 			title,
 			el("span", "dim", [page.items.length + (page.items.length === 1 ? " Wert" : " Werte")]),
 			el("label", {}, [hide, " verborgen"]),
@@ -763,6 +768,8 @@ function drawPages()
 		row.dataset.path = path;
 		title.dataset.path = path + ".title";
 		hide.dataset.path = path + ".hidden";
+		// The colour of its dot on the display, as a bar under the number
+		if(isColor(page.color)) number.style.boxShadow = "inset 0 -6px " + page.color;
 		up.disabled = p === 0;
 		down.disabled = p === pages.length - 1;
 		edits(title, "input", () =>
@@ -926,6 +933,24 @@ function drawItems()
 	itemsHead();
 	$("ihead").dataset.path = "pages[" + S.page + "].items";
 	if(!page) return;
+
+	// The colour of the dot of the page on the display; without one it is white while the page is shown, else grey
+	const own = el("input", {type: "checkbox", checked: "color" in page});
+	const color = el("input", {type: "color", value: isColor(page.color) ? page.color : "#ffffff"});
+	const paint = value =>
+	{
+		setMember(page, "color", value);
+		drawPages();
+	};
+
+	color.dataset.path = "pages[" + S.page + "].color";
+	edits(own, "change", () => paint(own.checked && color.value));
+	edits(color, "input", () =>
+	{
+		own.checked = true;
+		paint(color.value);
+	});
+	box.appendChild(el("div", "row", [el("label", {}, [own, " eigene Farbe für den Punkt der Seite "]), color]));
 
 	page.items.forEach((item, i) =>
 	{

@@ -358,6 +358,11 @@ static void build_pages(const scene_input_t *input, conn_view_t view, const wica
 		if(!layout_page_shown(layout, i, world->catalog)) continue;
 
 		if(i == shown) scene->dot = scene->dots;
+		if(layout->pages[i].has_color)
+		{
+			scene->dot_colors[scene->dots].set = true;
+			scene->dot_colors[scene->dots].rgb = layout->pages[i].color & 0xFFFFFFu;
+		}
 		scene->dots++;
 	}
 
@@ -930,6 +935,31 @@ static int within(int count, int max)
 	return count > max ? max : count;
 }
 
+// One of the dots has a colour of its own
+static bool any_color(const scene_t *scene)
+{
+	for(int i = 0; i < within(scene->dots, LAYOUT_PAGES_MAX); i++)
+	{
+		if(flag(&scene->dot_colors[i].set)) return true;
+	}
+	return false;
+}
+
+// " #22c55e", " -" without a colour of its own, " ?" for one beyond 24 bits
+static void put_color(writer_t *writer, const scene_color_t *color)
+{
+	static const char digits[] = "0123456789abcdef";
+
+	put_char(writer, ' ');
+	if(!flag(&color->set)) put_char(writer, '-');
+	else if(color->rgb > 0xFFFFFFu) put_char(writer, '?');
+	else
+	{
+		put_char(writer, '#');
+		for(int shift = 20; shift >= 0; shift -= 4) put_char(writer, digits[(color->rgb >> shift) & 0x0F]);
+	}
+}
+
 int scene_dump(const scene_t *scene, char *out, size_t size)
 {
 	static const char *const kinds[] = {"values", "notice", "list", "progress", "choice", "level"};
@@ -977,6 +1007,12 @@ int scene_dump(const scene_t *scene, char *out, size_t size)
 		put_number(&writer, (int64_t)scene->dot + 1);
 		put_char(&writer, '/');
 		put_number(&writer, scene->dots);
+		put_char(&writer, '\n');
+	}
+	if(any_color(scene))
+	{
+		put(&writer, "dot_colors:");
+		for(int i = 0; i < within(scene->dots, LAYOUT_PAGES_MAX); i++) put_color(&writer, &scene->dot_colors[i]);
 		put_char(&writer, '\n');
 	}
 

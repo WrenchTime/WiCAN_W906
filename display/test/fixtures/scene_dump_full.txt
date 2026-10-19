@@ -5,6 +5,7 @@ note: Notiz
 item: Drehzahl | 812 | 1/min | normal | arc | 162
 item: Tank |  |  | alarm | bar | -1
 dots: 2/7
+dot_colors: - #22c55e - - - - -
 row: > action | Lesen |  | enabled
 row: - sub | P242F-FA | gespeichert | disabled
 first: 3

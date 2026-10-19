@@ -238,6 +238,29 @@ def release_problems(page):
     return found
 
 
+def color_problems(page):
+    """What keeps the editor from giving a page the colour of its dot on the display (layout.h: "color",
+    "#rrggbb") or from taking it away again. The picker of a browser holds "#rrggbb" in lower case and nothing
+    else, no colour is not one of its values: whether the page has one is a box of its own. A colour the
+    display would not take - from an import, say - is not given to the picker, which would turn it into black
+    without a word; it stays in the views, and the display names it."""
+    found = []
+    script = script_of(page)
+    if "\nconst isColor = value => /^#[0-9a-f]{6}$/i.test(value);\n" not in script:
+        found.append("no test of the one form of a colour the display takes")
+    if "el(\"input\", {type: \"color\", value: isColor(page.color) ? page.color : \"#ffffff\"})" not in script:
+        found.append("the picker is given a colour it cannot hold")
+    if "el(\"input\", {type: \"checkbox\", checked: \"color\" in page})" not in script:
+        found.append("the box does not say whether the page has a colour")
+    if "\n\tcolor.dataset.path = \"pages[\" + S.page + \"].color\";\n" not in script:
+        found.append("the picker is not the field the display names when it refuses a colour")
+    if "edits(own, \"change\", () => paint(own.checked && color.value));" not in script:
+        found.append("the box does not take the colour away")
+    if "\n\t\town.checked = true;\n\t\tpaint(color.value);\n" not in script:
+        found.append("a colour that is picked leaves the box as it was")
+    return found
+
+
 def cerbo_words(api_text):
     """The words `cerbo.view` of GET /api/info can be, as API.md lists them"""
     return re.findall(r"`(\w+)`", api_text.split("- `cerbo.view`:")[1].split("- `cerbo.values`:")[0])
@@ -349,6 +372,9 @@ class Page(unittest.TestCase):
         self.assertEqual(cerbo_words(self.api), ["off", "no_wifi", "connecting", "unreachable", "quiet", "silent", "newer", "live"])
         self.assertEqual(cerbo_members(self.api), ["host", "view", "values", "ok", "refused", "connects", "boots", "lag_ms"])
         self.assertEqual(cerbo_problems(self.page, self.api), [])
+
+    def test_a_page_is_given_a_colour_and_loses_it(self):
+        self.assertEqual(color_problems(self.page), [])
 
     def test_size(self):
         # Of the page as it is: that is what lies in the flash, next to the compressed one, and what a
@@ -522,6 +548,9 @@ class Api(unittest.TestCase):
             layout("7"): ("pages[0]", "not an object"),
             layout("{\"title\":\"%s\",\"items\":[{\"key\":\"K\"}]}" % ("ä" * 12 + "x")): ("pages[0].title", "too long"),
             layout("{\"hidden\":1,\"items\":[{\"key\":\"K\"}]}"): ("pages[0].hidden", "not a boolean"),
+            layout("{\"color\":1,\"items\":[{\"key\":\"K\"}]}"): ("pages[0].color", "not a text"),
+            layout("{\"color\":\"#12345\",\"items\":[{\"key\":\"K\"}]}"): ("pages[0].color", "not #rrggbb"),
+            layout("{\"hidden\":true,\"color\":\"red\"}"): ("pages[0].color", "not #rrggbb"),
             layout("{}"): ("pages[0].items", "missing"),
             layout("{\"items\":[]}"): ("pages[0].items", "empty"),
             layout("{\"items\":[%s]}" % ",".join(["{\"key\":\"K\"}"] * 7)): ("pages[0].items", "too many items"),
@@ -1728,6 +1757,14 @@ PAGE_MUTATIONS = {
         "the word as it came": ("word(CERBO, cerbo.view)", "cerbo.view"),
         "a line without the address": ("\"Cerbo \" + text(cerbo.host) + \": \" + ", "\"Cerbo: \" + "),
     },
+    "color_problems": {
+        "no test of the form": ("const isColor = value => /^#[0-9a-f]{6}$/i.test(value);", "const isColor = value => /^#[0-9a-f]{3,6}$/i.test(value);"),
+        "a picker given any colour": ("value: isColor(page.color) ? page.color : \"#ffffff\"", "value: page.color"),
+        "a box that is never ticked": ("checked: \"color\" in page}", "checked: false}"),
+        "a field the display does not name": ("color.dataset.path = \"pages[\" + S.page + \"].color\";", "color.dataset.path = \"pages[\" + S.page + \"].items\";"),
+        "a colour that cannot be taken away": ("paint(own.checked && color.value)", "paint(color.value)"),
+        "a picked colour that leaves the box empty": ("\t\town.checked = true;\n\t\tpaint(color.value);", "\t\tpaint(color.value);"),
+    },
     "size_problems": {
         "one byte too many": lambda page: page + " " * (SIZE_MAX - len(page.encode("utf-8"))),
     },
@@ -2271,8 +2308,8 @@ def failures(name, mutation):
 
 class CounterCheck(unittest.TestCase):
     def test_every_check_of_the_page_is_broken_once(self):
-        checks = {"request_problems", "construct_problems", "external_problems", "release_problems", "cerbo_problems", "size_problems",
-                  "compressed_problems"}
+        checks = {"request_problems", "construct_problems", "external_problems", "release_problems", "cerbo_problems", "color_problems",
+                  "size_problems", "compressed_problems"}
         self.assertEqual(set(PAGE_MUTATIONS), checks)
         self.assertEqual({name for name in globals() if name.endswith("_problems")}, checks)
 
@@ -2288,6 +2325,7 @@ class CounterCheck(unittest.TestCase):
                              "external_problems": lambda: external_problems(broken),
                              "release_problems": lambda: release_problems(broken),
                              "cerbo_problems": lambda: cerbo_problems(broken, api_text),
+                             "color_problems": lambda: color_problems(broken),
                              "size_problems": lambda: size_problems(broken.encode("utf-8")),
                              "compressed_problems": lambda: compressed_problems(broken.encode("utf-8"))}[check]()
                     self.assertNotEqual(found, [])

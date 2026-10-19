@@ -1,0 +1,7 @@
+kind: notice
+ring: red
+title:
+note:
+dots: 4/6
+dot_colors: - #22c55e - #f59e0b - -
+line: WiCAN nicht gefunden – schläft, stromlos oder außer Reichweite

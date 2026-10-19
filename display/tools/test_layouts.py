@@ -17,6 +17,7 @@ import glob
 import json
 import math
 import os
+import re
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +42,7 @@ NUMBER_CHARACTERS = 47
 TOKENS = 4096
 DEPTH = 8
 WIDGETS = ("number", "arc", "bar", "state")
+COLOR = "#[0-9A-Fa-f]{6}"
 LIMITS = ("min", "max", "warn_lo", "warn_hi", "crit_lo", "crit_hi")
 
 
@@ -189,6 +191,10 @@ def page_problems(page, where):
         found.append("%s.title: %s" % (where, text_problem(page.get("title"), TITLE_BYTES)))
     if page.has("hidden") and not isinstance(page.get("hidden"), bool):
         found.append("%s.hidden: not a boolean" % where)
+    if page.has("color") and not isinstance(page.get("color"), str):
+        found.append("%s.color: not a text" % where)
+    elif page.has("color") and re.fullmatch(COLOR, page.get("color")) is None:
+        found.append("%s.color: not #rrggbb" % where)
 
     items = page.get("items")
     if not page.has("items"):
@@ -432,6 +438,14 @@ class CounterCheck(unittest.TestCase):
             "title of 13 characters of two bytes": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, title="ä" * 13)]}),
             "hidden as text": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, hidden="true")]}),
             "hidden 0": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, hidden=0)]}),
+            "color as a number": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color=2278750)]}),
+            "color null": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color=None)]}),
+            "color as a name": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color="red")]}),
+            "color of three digits": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color="#fff")]}),
+            "color of seven digits": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color="#22c55e0")]}),
+            "color without its hash": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color="22c55e")]}),
+            "color with a g": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color="#22c55g")]}),
+            "color with a line end behind it": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color="#22c55e\n")]}),
             "items missing": encoded({"format": FORMAT, "v": 1, "pages": [{"title": "T"}]}),
             "items is an object": encoded({"format": FORMAT, "v": 1, "pages": [{"items": {}}]}),
             "no item": encoded({"format": FORMAT, "v": 1, "pages": [{"items": []}]}),
@@ -499,6 +513,8 @@ class CounterCheck(unittest.TestCase):
             "12 pages": encoded({"format": FORMAT, "v": 1, "pages": [page] * 12}),
             "6 items": encoded({"format": FORMAT, "v": 1, "pages": [{"items": [{"key": "K"}] * 6}]}),
             "title of 24 bytes, hidden": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, title="ä" * 12, hidden=True)]}),
+            "a colour in both cases": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color="#22C55e")]}),
+            "black": encoded({"format": FORMAT, "v": 1, "pages": [dict(page, color="#000000")]}),
             "an unknown member": encoded({"format": FORMAT, "v": 1, "author": {"name": 5}, "pages": [dict(page, colour="red")]}),
             "key of 32 bytes": with_item(key="k" * 32),
             "label of 24 bytes": with_item(label="l" * 24),
@@ -527,6 +543,8 @@ class CounterCheck(unittest.TestCase):
                          ["pages[0].items[0].map[1]: too long: 24 bytes, at most 23"])
         self.assertEqual(problems(encoded({"format": FORMAT, "v": 1, "pages": [{"items": [{"key": "K"}]}, {"hidden": 1, "items": [{"key": "K"}]}]})),
                          ["pages[1].hidden: not a boolean"])
+        self.assertEqual(problems(encoded({"format": FORMAT, "v": 1, "pages": [{"items": [{"key": "K"}]}, {"color": "#12345", "items": [{"key": "K"}]}]})),
+                         ["pages[1].color: not #rrggbb"])
 
 
 if __name__ == "__main__":

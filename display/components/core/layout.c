@@ -257,6 +257,41 @@ static bool read_item(reader_t *r, int object, layout_item_t *item)
 	return true;
 }
 
+// The value of a hexadecimal digit, -1 for every other character
+static int hex_digit(char c)
+{
+	if(c >= '0' && c <= '9') return c - '0';
+	if(c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if(c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+// The optional colour of a page, "#rrggbb". Without the member *rgb stays as it is, which is 0.
+static bool read_color(const reader_t *r, int object, bool *has_color, uint32_t *rgb)
+{
+	int index = member(r, object, "color");
+	// One byte more than "#rrggbb" and its zero: a longer text does not fit and is refused with the others
+	char text[9];
+	uint32_t value = 0;
+
+	if(index < 0) return true;
+	if(r->tokens[index].type != JSON_STRING) return refuse(r, "color", "not a text");
+	if(!json_text(r->json, &r->tokens[index], text, sizeof(text)) || strlen(text) != 7 || text[0] != '#')
+	{
+		return refuse(r, "color", "not #rrggbb");
+	}
+	for(int i = 1; i < 7; i++)
+	{
+		int digit = hex_digit(text[i]);
+
+		if(digit < 0) return refuse(r, "color", "not #rrggbb");
+		value = value << 4 | (uint32_t)digit;
+	}
+	*has_color = true;
+	*rgb = value;
+	return true;
+}
+
 // page may be NULL
 static bool read_page(reader_t *r, int object, layout_page_t *page)
 {
@@ -264,6 +299,8 @@ static bool read_page(reader_t *r, int object, layout_page_t *page)
 	int hidden = member(r, object, "hidden");
 	int items = member(r, object, "items");
 	int index = items + 1;
+	bool has_color = false;
+	uint32_t color = 0;
 
 	if(tokens[object].type != JSON_OBJECT) return refuse(r, "", "not an object");
 	if(!read_text(r, object, "title", page != NULL ? page->title : NULL, LAYOUT_TITLE_SIZE)) return false;
@@ -271,6 +308,7 @@ static bool read_page(reader_t *r, int object, layout_page_t *page)
 	{
 		return refuse(r, "hidden", "not a boolean");
 	}
+	if(!read_color(r, object, &has_color, &color)) return false;
 	if(items < 0) return refuse(r, "items", "missing");
 	if(tokens[items].type != JSON_ARRAY) return refuse(r, "items", "not an array");
 	if(tokens[items].size == 0) return refuse(r, "items", "empty");
@@ -286,6 +324,8 @@ static bool read_page(reader_t *r, int object, layout_page_t *page)
 	if(page != NULL)
 	{
 		page->hidden = hidden >= 0 && tokens[hidden].type == JSON_TRUE;
+		page->has_color = has_color;
+		page->color = color;
 		page->item_count = (uint8_t)tokens[items].size;
 	}
 	return true;
@@ -787,6 +827,14 @@ static void put_page(writer_t *writer, const layout_page_t *page)
 		put_char(writer, ',');
 	}
 	if(page->hidden) put(writer, "\"hidden\":true,");
+	if(page->has_color)
+	{
+		static const char digits[] = "0123456789abcdef";
+
+		put(writer, "\"color\":\"#");
+		for(int shift = 20; shift >= 0; shift -= 4) put_char(writer, digits[(page->color >> shift) & 0x0F]);
+		put(writer, "\",");
+	}
 
 	put(writer, "\"items\":[");
 	for(int i = 0; i < page->item_count; i++)

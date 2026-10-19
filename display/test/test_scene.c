@@ -162,6 +162,13 @@ static bool sound(const scene_t *s)
 		NEED(item->text[0] != '\0' || item->widget == LAYOUT_WIDGET_STATE, "an item without a text");
 	}
 	NEED(s->dots >= 0 && s->dot >= -1 && (s->dot < s->dots || s->dot == -1), "dots and dot");
+	for(int i = 0; i < LAYOUT_PAGES_MAX; i++)
+	{
+		const scene_color_t *color = &s->dot_colors[i];
+
+		if(i >= s->dots) NEED(all_bytes(color, sizeof(*color), 0), "the colour of a dot that is not there is not zero");
+		else NEED(color->rgb <= 0xFFFFFF && (color->set || color->rgb == 0), "the colour of a dot");
+	}
 
 	NEED(s->row_count >= 0 && s->row_count <= SCENE_ROWS_MAX, "row_count");
 	for(int i = 0; i < SCENE_ROWS_MAX; i++)
@@ -321,6 +328,18 @@ static void screen(const char *name, const char *rule)
 	build();
 	snprintf(what, sizeof(what), "scene_%s.txt: %s", name, rule);
 	check(dump_is_file(scene, name), what);
+}
+
+static bool dot_color_is(int index, bool set, uint32_t rgb)
+{
+	return scene->dot_colors[index].set == set && scene->dot_colors[index].rgb == rgb;
+}
+
+// The colours of the dots of the fixture with the colours of test_dot_colors(), dot 1 and dot 3 coloured
+static bool two_colors(void)
+{
+	return dot_color_is(0, false, 0) && dot_color_is(1, true, 0x22C55E) && dot_color_is(2, false, 0) && dot_color_is(3, true, 0xF59E0B) &&
+	       dot_color_is(4, false, 0) && dot_color_is(5, false, 0);
 }
 
 static bool row_is(int index, bool focus, scene_row_kind_t kind, const char *text, const char *detail, bool enabled)
@@ -1895,6 +1914,46 @@ static void test_notices(void)
 	build();
 	check(scene->dots == 5 && scene->dot == 1, "with page 2 hidden, page 1 is the second of five");
 	layout.pages[2].hidden = false;
+
+	// The colours of the dots: the one of its page, wherever the dot stands and whichever page is shown
+	stage();
+	build();
+	check(scene->dots == 6 && !scene->dot_colors[0].set && !scene->dot_colors[5].set, "the pages of the fixture have no colour, nor have their dots");
+	layout.pages[1].has_color = true;
+	layout.pages[1].color = 0x22C55E;
+	layout.pages[3].has_color = true;
+	layout.pages[3].color = 0xFFF59E0B;
+	layout.pages[4].color = 0x777777;
+	layout.pages[6].has_color = true;
+	layout.pages[6].color = 0x123456;
+	nav.page = 0;
+	screen("values_dot_colors", "two pages with a colour of their own: their dots have it, the dot of the page shown is white");
+	check(scene->dots == 6 && scene->dot == 0 && two_colors(),
+	      "dot colours: the second and the fourth dot have the colours of their pages, of a colour beyond 24 bits the lower 24; a page without has_color has none, whatever its color holds");
+	nav.page = 3;
+	screen("values_dot_color_shown", "the page shown has a colour of its own: its dot is filled with it");
+	check(scene->dot == 3 && two_colors(), "dot colours: the colours stay where they are when another page is shown");
+	view_no_wifi();
+	screen("notice_dot_colors", "a notice in place of the values: the dots with their colours");
+	check(scene->kind == SCENE_NOTICE && scene->dots == 6 && two_colors(), "dot colours: a notice in place of the values has them as well");
+	stage();
+	layout.pages[2].hidden = true;
+	nav.page = 3;
+	build();
+	check(scene->dots == 5 && scene->dot == 2 && dot_color_is(1, true, 0x22C55E) && dot_color_is(2, true, 0xF59E0B) && dot_color_is(3, false, 0),
+	      "dot colours: with page 2 hidden the colour of page 3 moves with its dot to the third place");
+	layout.pages[2].hidden = false;
+	world.catalog = &unloaded;
+	layout.pages[7].has_color = true;
+	layout.pages[7].color = 0x000000;
+	build();
+	check(scene->dots == 7 && two_colors() && dot_color_is(6, true, 0) && !scene->dot_colors[7].set,
+	      "dot colours: before the profile arrived the seventh dot is the last page, black is a colour, and the hidden page gives none");
+	for(int page = 0; page < layout.page_count; page++)
+	{
+		layout.pages[page].has_color = false;
+		layout.pages[page].color = 0;
+	}
 
 	// The largest layout: twelve pages
 	stage();
@@ -4100,6 +4159,8 @@ static void make_scene(void)
 	made.items[1].permille = -1;
 	made.dots = 7;
 	made.dot = 1;
+	made.dot_colors[1].set = true;
+	made.dot_colors[1].rgb = 0x22C55E;
 	made.row_count = 2;
 	made.rows[0].kind = SCENE_ROW_ACTION;
 	strcpy(made.rows[0].text, "Lesen");
@@ -4201,7 +4262,7 @@ static void test_dump(void)
 		make_scene();
 		made.kind = (scene_kind_t)kind_numbers[i];
 		snprintf(text, sizeof(text), "kind: %s\nring: progress 277\ntitle: Titel\nnote: Notiz\nitem: Drehzahl | 812 | 1/min | normal | arc | 162\nitem: Tank |  |  | alarm | bar | -1\ndots: 2/7\n"
-		         "row: > action | Lesen |  | enabled\nrow: - sub | P242F-FA | gespeichert | disabled\nfirst: 3\ntotal: 12\nline: Erste Zeile\nline:\nbig: 5/18\npermille: 277\n"
+		         "dot_colors: - #22c55e - - - - -\nrow: > action | Lesen |  | enabled\nrow: - sub | P242F-FA | gespeichert | disabled\nfirst: 3\ntotal: 12\nline: Erste Zeile\nline:\nbig: 5/18\npermille: 277\n"
 		         "option: - Abbrechen\noption: > Löschen\nover: ask\nover_line: WLAN speichern?\nover_line: Werkstatt\nover_permille: 420\n", kinds[i]);
 		snprintf(what, sizeof(what), "dump: a scene of the kind %d with every field in use is written with every field, whatever its kind uses", kind_numbers[i]);
 		check(dump_is("", text), what);
@@ -4209,9 +4270,9 @@ static void test_dump(void)
 
 	// Every size from none to more than enough
 	make_scene();
-	// Counted by hand in the fixture: 21 lines, each with its line break
-	length = 416;
-	check(dump_into(&made, SCENE_DUMP_SIZE) == (int)length && strlen(dumped) == length, "the dump of the scene with every field in use has 416 bytes, and that is what is returned");
+	// Counted by hand in the fixture: 22 lines, each with its line break
+	length = 448;
+	check(dump_into(&made, SCENE_DUMP_SIZE) == (int)length && strlen(dumped) == length, "the dump of the scene with every field in use has 448 bytes, and that is what is returned");
 	memcpy(full, dumped, sizeof(full));
 	full[sizeof(full) - 1] = '\0';
 	same = empty = true;
@@ -4230,10 +4291,10 @@ static void test_dump(void)
 			if(size > 0 && dumped[0] != '\0') empty = false;
 		}
 	}
-	check(same, "the dump in rooms of 0 to 456 bytes: -1 while the text and its zero do not fit, from 417 bytes on the text and its length, and never a byte outside the room");
-	check(empty, "a dump that does not fit leaves an empty text in every room of 1 to 416 bytes");
-	check(dump_into(&made, length) == -1 && dumped[0] == '\0', "a dump of 416 bytes does not fit into a room of 416 bytes");
-	check(dump_into(&made, length + 1) == (int)length && dumped[length - 1] == '\n' && dumped[length] == '\0', "a dump of 416 bytes fits into a room of 417 bytes and ends with a line break and its zero");
+	check(same, "the dump in rooms of 0 to 488 bytes: -1 while the text and its zero do not fit, from 449 bytes on the text and its length, and never a byte outside the room");
+	check(empty, "a dump that does not fit leaves an empty text in every room of 1 to 448 bytes");
+	check(dump_into(&made, length) == -1 && dumped[0] == '\0', "a dump of 448 bytes does not fit into a room of 448 bytes");
+	check(dump_into(&made, length + 1) == (int)length && dumped[length - 1] == '\n' && dumped[length] == '\0', "a dump of 448 bytes fits into a room of 449 bytes and ends with a line break and its zero");
 	check(dump_into(&made, 0) == -1 && scene_dump(&made, NULL, 0) == -1, "a dump without a room (0 bytes, also NULL): -1, and nothing is written");
 	make_empty();
 	check(dump_into(&made, 37) == -1 && dump_into(&made, 38) == 37, "the dump of a scene with nothing in it has 37 bytes and needs a room of 38");
@@ -4335,6 +4396,47 @@ static void test_dump(void)
 	check(dump_is(EMPTY_HEAD, "dots: 2147483648/0\n"), "dump: the largest dot is written as 2147483648, one more than it");
 	made.dot = INT_MIN;
 	check(dump_is(EMPTY_HEAD, "dots: -2147483647/0\n"), "dump: the smallest dot is written as -2147483647");
+
+	// The colours of the dots
+	make_empty();
+	made.dots = 3;
+	made.dot_colors[2].set = true;
+	made.dot_colors[2].rgb = 0xABCDEF;
+	check(dump_is(EMPTY_HEAD, "dots: 0/3\ndot_colors: - - #abcdef\n"), "dump: one word for each of three dots, a colour in lower case");
+	made.dot_colors[0].set = true;
+	made.dot_colors[0].rgb = 0x0A0B0C;
+	made.dot_colors[2].rgb = 0;
+	check(dump_is(EMPTY_HEAD, "dots: 0/3\ndot_colors: #0a0b0c - #000000\n"), "dump: a colour of six digits with its zeros, black is a colour");
+	made.dot_colors[0].rgb = 0x1000000;
+	made.dot_colors[2].rgb = 0xFFFFFF;
+	check(dump_is(EMPTY_HEAD, "dots: 0/3\ndot_colors: ? - #ffffff\n"), "dump: a colour beyond 24 bits is written as ?, 0xFFFFFF as #ffffff");
+	make_empty();
+	made.dots = 2;
+	made.dot_colors[0].rgb = 0x123456;
+	made.dot_colors[2].set = true;
+	check(dump_is(EMPTY_HEAD, "dots: 0/2\n"), "dump: without a colour that is set the line is left out: an rgb without set does not count, nor does a colour behind the last dot");
+	memset(&made.dot_colors[1].set, 2, 1);
+	made.dot_colors[1].rgb = 0x445566;
+	check(dump_is(EMPTY_HEAD, "dots: 0/2\ndot_colors: - #445566\n"), "dump: a set that holds 2 counts as set, and an rgb without set is written as -");
+	made.dots = 0;
+	made.dot = 0;
+	check(dump_is(EMPTY_HEAD, "dots: 1/0\n"), "dump: no dots, no colours");
+	made.dots = -1;
+	check(dump_is(EMPTY_HEAD, "dots: 1/-1\n"), "dump: a count of -1 dots writes no colour");
+	make_empty();
+	made.dots = 13;
+	for(int i = 0; i < LAYOUT_PAGES_MAX; i++)
+	{
+		made.dot_colors[i].set = true;
+		made.dot_colors[i].rgb = (uint32_t)i;
+	}
+	check(dump_is(EMPTY_HEAD, "dots: 0/13\ndot_colors: #000000 #000001 #000002 #000003 #000004 #000005 #000006 #000007 #000008 #000009 #00000a #00000b\n"),
+	      "dump: a count of 13 dots writes the twelve colours there is room for, in their order");
+	made.dots = INT_MAX;
+	check(dump_is(EMPTY_HEAD, "dots: 0/2147483647\ndot_colors: #000000 #000001 #000002 #000003 #000004 #000005 #000006 #000007 #000008 #000009 #00000a #00000b\n"),
+	      "dump: the largest count of dots writes the twelve colours");
+	made.dots = 1;
+	check(dump_is(EMPTY_HEAD, "dots: 0/1\ndot_colors: #000000\n"), "dump: one dot, one colour");
 	make_empty();
 	made.first = 2;
 	check(dump_is(EMPTY_HEAD, "first: 2\ntotal: 0\n"), "dump: first and total are written when only first is not 0");
@@ -4439,8 +4541,9 @@ static void test_dump(void)
 		heap->items[i].widget = LAYOUT_WIDGET_NUMBER;
 		heap->items[i].permille = INT_MIN;
 	}
-	heap->dots = INT_MIN;
+	heap->dots = INT_MAX;
 	heap->dot = INT_MIN;
+	for(int i = 0; i < LAYOUT_PAGES_MAX; i++) heap->dot_colors[i].rgb = 0xFFFFFF;
 	heap->row_count = INT_MAX;
 	for(int i = 0; i < SCENE_ROWS_MAX; i++)
 	{
@@ -4456,10 +4559,11 @@ static void test_dump(void)
 	heap->over = SCENE_OVER_UPLOAD;
 	heap->over_line_count = INT_MAX;
 	heap->over_permille = INT_MIN;
-	// Counted by hand: 15 + 27 + 104 + 103, six items of 106, 30, five rows of 167, 19 + 19, four lines of 103, 46 + 22,
-	// two options of 51, 13, three overlay lines of 108, 27
-	check(SCENE_DUMP_SIZE == 4096 && dump_into(heap, SCENE_DUMP_SIZE) == 2734 && strlen(dumped) == 2734,
-	      "the largest dump there is - every text fills its field without a zero, every count is beyond its array, the longest words and numbers - has 2734 bytes, and SCENE_DUMP_SIZE is 4096");
+	// Counted by hand: 15 + 27 + 104 + 103, six items of 106, 29 + 108, five rows of 167, 19 + 19, four lines of 103, 46 + 22,
+	// two options of 51, 13, three overlay lines of 108, 27. The dots are as many as there can be, not as long a
+	// number as there can be: 12 colours of 8 bytes are more than one digit.
+	check(SCENE_DUMP_SIZE == 4096 && dump_into(heap, SCENE_DUMP_SIZE) == 2841 && strlen(dumped) == 2841,
+	      "the largest dump there is - every text fills its field without a zero, every count is beyond its array, the longest words and numbers - has 2841 bytes, and SCENE_DUMP_SIZE is 4096");
 	filled[0] = '\0';
 	add("kind: progress\nring: progress -2147483648\ntitle: ", 'x', 96);
 	add("\nnote: ", 'x', 96);
@@ -4470,7 +4574,8 @@ static void test_dump(void)
 		add(" | ", 'x', 12);
 		add(" | normal | number | -2147483648", 'x', 0);
 	}
-	add("\ndots: -2147483647/-2147483648", 'x', 0);
+	add("\ndots: -2147483647/2147483647\ndot_colors:", 'x', 0);
+	for(int i = 0; i < LAYOUT_PAGES_MAX; i++) add(" #ffffff", 'x', 0);
 	for(int i = 0; i < SCENE_ROWS_MAX; i++)
 	{
 		add("\nrow: > action | ", 'x', 96);
@@ -4486,7 +4591,7 @@ static void test_dump(void)
 	for(int i = 0; i < 3; i++) add("\nover_line: ", 'x', 96);
 	add("\nover_permille: -2147483648\n", 'x', 0);
 	check(strcmp(dumped, filled) == 0, "in the largest dump every text without its zero ends with its field - title, note, lines and row texts 96 bytes, labels 25, values 24, units 12, details, big and options 40 - and nothing of the field behind it is written");
-	check(dump_into(heap, 2734) == -1 && dump_into(heap, 2735) == 2734, "the largest dump needs a room of 2735 bytes");
+	check(dump_into(heap, 2841) == -1 && dump_into(heap, 2842) == 2841, "the largest dump needs a room of 2842 bytes");
 	free(heap);
 
 	// Texts without their zero in front of fields whose first byte is not 0: the largest scene has a 0 there

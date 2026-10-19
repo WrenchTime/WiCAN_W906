@@ -71,7 +71,7 @@ der Web-Schirm mit seinen drei Zeilen und der dauerhaft freie Web-Zugriff.
 | Teil | Stand |
 |---|---|
 | Logik (`components/core`, 29 Module) | auf dem PC getestet: 29 Testprogramme mit gut 14.000 Prüfungen, dazu über 9.500 Mutationen, von denen jede einen Test rot machen muss. Läuft in der CI unter gcc, lokal unter clang, jeweils auch mit `unsigned char` wie auf dem ESP32. |
-| Zeichencode (`components/ui`, LVGL 9.5.0) | in der CI gebaut; ein Renderer ohne Display zeichnet 79 von Hand gebaute Bildschirme und gut 200 Szenen aus den Tests der Logik und prüft, dass nichts über den Kreis ragt, sich überlappt oder abgeschnitten wird. Die Bilder hängen als Artefakt `wican-display-screens` am CI-Lauf. |
+| Zeichencode (`components/ui`, LVGL 9.5.0) | in der CI gebaut; ein Renderer ohne Display zeichnet 80 von Hand gebaute Bildschirme und gut 200 Szenen aus den Tests der Logik und prüft, dass nichts über den Kreis ragt, sich überlappt oder abgeschnitten wird. Die Bilder hängen als Artefakt `wican-display-screens` am CI-Lauf. |
 | Plattform (`main`: Start, Bildschirm-Task, WLAN, HTTP, Flash) | übersetzt und linkt für den ESP32-S3. Gegen ESP-IDF v5.5.2 und LVGL 9.5.0 gegengelesen. Dazu laufen `main.c`, `screen.c`, `net.c` und `web.c` unverändert auf dem PC gegen die echte Logik, mit Platzhaltern für ESP-IDF, FreeRTOS und LVGL (`host/platform`, in der CI). Die Platzhalter sind ein nach den Quellen geschriebenes Modell: Sie zeigen, dass die Plattform ihre eigenen Regeln hält, nicht, dass Treiber, Scheduler und Flash sich so verhalten wie gelesen. |
 | Board-Schicht (`components/board`) | Pins, Zeiten und die Panel-Initialisierung sind aus dem Schaltplan und den Beispielen des Herstellers gelesen. Am Board bestätigt (2026-10-09): Bild, Farben, Hintergrundlicht, Expander, Touch, Taster, Encoder. Gemessen ist nur die Zahl der Zählschritte je Raste. |
 | Webseite (`main/web/index.html`) | in Chromium gegen einen Display-Mock auf dem PC ausprobiert. Nicht auf einem Telefon, nicht in Safari oder Firefox. Die Firmware bettet sie zweimal ein, wie sie ist und vom Build mit gzip gepackt (`tools/page_gz.py`), und schickt die gepackte an jeden Browser, der gzip annimmt: aus 60189 Bytes werden 20464 (gemessen am 2026-10-10 an der Seite des Commits 863a2c9, mit der zlib 1.2.12 des Mac). Das läuft in der Simulation von `web.c` und im Mock; gebaut und am Board gesehen ist es noch nicht. |
@@ -204,6 +204,10 @@ Slot noch ein zurückgenommenes Update, steht es danach wieder unter „Vorherig
 ## Bedienung in Kürze
 
 - Drehen: Seite vor und zurück, harte Enden. Kurz drücken: Menü. Lang drücken: eine Ebene zurück.
+- Die Punkte am unteren Rand sind die Seiten, der gefüllte ist die gezeigte. Ohne eigene Farbe ist er weiß
+  und die übrigen grau. Eine Farbe je Seite gibt die Webseite: Ansichten → Seite wählen → „eigene Farbe für
+  den Punkt der Seite"; in der Seitenliste steht sie als Balken unter der Nummer. Im Layout ist es
+  `"color":"#rrggbb"` an der Seite.
 - Helligkeit: im Uhrzeigersinn heller, dagegen dunkler – unabhängig von der Einstellung „Drehrichtung", die
   nur für Seiten und Zeilen gilt.
 - Fehlerspeicher nur über das Menü. Löschen: auf „Löschen" drehen und den Knopf drei Sekunden halten.

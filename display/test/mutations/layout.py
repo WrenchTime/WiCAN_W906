@@ -29,6 +29,7 @@ PAGE_OBJECT = "\tif(tokens[object].type != JSON_OBJECT) return refuse(r, \"\", \
 TITLE = "\tif(!read_text(r, object, \"title\", page != NULL ? page->title : NULL, LAYOUT_TITLE_SIZE)) return false;"
 HIDDEN = "\tif(hidden >= 0 && tokens[hidden].type != JSON_TRUE && tokens[hidden].type != JSON_FALSE)"
 HIDDEN_BLOCK = HIDDEN + "\n\t{\n\t\treturn refuse(r, \"hidden\", \"not a boolean\");\n\t}\n"
+COLOR = "\tif(!read_color(r, object, &has_color, &color)) return false;"
 ITEMS_MISSING = "\tif(items < 0) return refuse(r, \"items\", \"missing\");"
 ITEMS_ARRAY = "\tif(tokens[items].type != JSON_ARRAY) return refuse(r, \"items\", \"not an array\");"
 ITEMS_EMPTY = "\tif(tokens[items].size == 0) return refuse(r, \"items\", \"empty\");"
@@ -204,6 +205,10 @@ W_MAP_LOOP = "\t\tfor(int i = 0; i < item->map_count; i++)\n\t\t{\n\t\t\tif(i > 
 W_MAP_TEXT = "\t\t\tput_char(writer, ':');\n\t\t\tput_string(writer, item->map[i].text);"
 W_TITLE = "\tif(page->title[0] != '\\0')\n\t{\n\t\tput_text(writer, \"\\\"title\\\":\", page->title);\n\t\tput_char(writer, ',');\n\t}\n"
 W_HIDDEN = "\tif(page->hidden) put(writer, \"\\\"hidden\\\":true,\");"
+W_COLOR_IF = "\tif(page->has_color)\n\t{\n\t\tstatic const char digits[] = \"0123456789abcdef\";"
+W_COLOR_DIGITS = "\t\tfor(int shift = 20; shift >= 0; shift -= 4) put_char(writer, digits[(page->color >> shift) & 0x0F]);"
+W_COLOR_END = "\t\tput(writer, \"\\\",\");"
+W_COLOR_BLOCK = W_COLOR_IF + "\n\n\t\tput(writer, \"\\\"color\\\":\\\"#\");\n" + W_COLOR_DIGITS + "\n" + W_COLOR_END + "\n\t}\n"
 W_ITEMS = "\tfor(int i = 0; i < page->item_count; i++)\n\t{\n\t\tif(i > 0) put_char(writer, ',');\n\t\tput_item(writer, &page->items[i]);"
 W_HEAD = "\tput(&writer, \"{\\\"format\\\":\\\"\" LAYOUT_FORMAT \"\\\",\\\"v\\\":\");\n\tput_small(&writer, LAYOUT_VERSION);"
 W_NAME = "\tif(layout->name[0] != '\\0') put_text(&writer, \",\\\"name\\\":\", layout->name);"
@@ -211,6 +216,21 @@ W_HINT = "\tif(layout->profile_hint[0] != '\\0') put_text(&writer, \",\\\"profil
 W_PAGES = "\tfor(int p = 0; p < layout->page_count; p++)\n\t{\n\t\tif(p > 0) put_char(&writer, ',');\n\t\tput_page(&writer, &layout->pages[p]);"
 W_NO_ROOM = "\tif(size == 0) return -1;\n\tif(writer.failed || writer.length >= size)\n\t{\n\t\tout[0] = '\\0';\n\t\treturn -1;\n\t}\n"
 W_END = "\tout[writer.length] = '\\0';\n\treturn (int)writer.length;"
+
+# The colour of a page
+C_TEXT = "\tif(r->tokens[index].type != JSON_STRING) return refuse(r, \"color\", \"not a text\");"
+C_FORM = "\tif(!json_text(r->json, &r->tokens[index], text, sizeof(text)) || strlen(text) != 7 || text[0] != '#')"
+C_ROOM = "\tchar text[9];"
+C_LOOP = "\tfor(int i = 1; i < 7; i++)"
+C_DIGIT = "\t\tif(digit < 0) return refuse(r, \"color\", \"not #rrggbb\");"
+C_VALUE = "\t\tvalue = value << 4 | (uint32_t)digit;"
+C_HAS = "\t*has_color = true;"
+C_RGB = "\t*rgb = value;"
+C_NUMERALS = "\tif(c >= '0' && c <= '9') return c - '0';"
+C_SMALL = "\tif(c >= 'a' && c <= 'f') return c - 'a' + 10;"
+C_CAPITALS = "\tif(c >= 'A' && c <= 'F') return c - 'A' + 10;"
+C_PAGE_HAS = "\t\tpage->has_color = has_color;"
+C_PAGE_RGB = "\t\tpage->color = color;"
 
 # The second source: pages of values of the Cerbo, and the built-in pages of it
 GX_FILE = "layouts/gx_default.json"
@@ -311,9 +331,12 @@ MUTATIONS = [
     ("layout_order_pages_before_name", T, F, NAME + "\n" + HINT + "\n\n" + PAGES_MISSING + "\n" + PAGES_ARRAY + "\n",
      PAGES_MISSING + "\n" + PAGES_ARRAY + "\n" + NAME + "\n" + HINT + "\n\n"),
     ("layout_order_missing_pages_before_name", T, F, NAME + "\n" + HINT + "\n\n" + PAGES_MISSING + "\n", PAGES_MISSING + "\n" + NAME + "\n" + HINT + "\n\n"),
-    ("layout_order_missing_items_before_title", T, F, TITLE + "\n" + HIDDEN_BLOCK + ITEMS_MISSING + "\n", ITEMS_MISSING + "\n" + TITLE + "\n" + HIDDEN_BLOCK),
+    ("layout_order_missing_items_before_title", T, F, TITLE + "\n" + HIDDEN_BLOCK + COLOR + "\n" + ITEMS_MISSING + "\n", ITEMS_MISSING + "\n" + TITLE + "\n" + HIDDEN_BLOCK + COLOR + "\n"),
     ("layout_order_hidden_before_title", T, F, TITLE + "\n" + HIDDEN_BLOCK, HIDDEN_BLOCK + TITLE + "\n"),
-    ("layout_order_items_before_hidden", T, F, HIDDEN_BLOCK + ITEMS_MISSING + "\n" + ITEMS_ARRAY + "\n", ITEMS_MISSING + "\n" + ITEMS_ARRAY + "\n" + HIDDEN_BLOCK),
+    ("layout_order_items_before_hidden", T, F, HIDDEN_BLOCK + COLOR + "\n" + ITEMS_MISSING + "\n" + ITEMS_ARRAY + "\n", ITEMS_MISSING + "\n" + ITEMS_ARRAY + "\n" + HIDDEN_BLOCK + COLOR + "\n"),
+    ("layout_order_color_before_hidden", T, F, HIDDEN_BLOCK + COLOR + "\n", COLOR + "\n" + HIDDEN_BLOCK),
+    ("layout_order_color_before_title", T, F, TITLE + "\n" + HIDDEN_BLOCK + COLOR + "\n", COLOR + "\n" + TITLE + "\n" + HIDDEN_BLOCK),
+    ("layout_order_items_before_color", T, F, COLOR + "\n" + ITEMS_MISSING + "\n" + ITEMS_ARRAY + "\n", ITEMS_MISSING + "\n" + ITEMS_ARRAY + "\n" + COLOR + "\n"),
     ("layout_order_label_before_key", T, F, KEY + "\n" + LABEL, LABEL + "\n" + KEY),
     ("layout_order_unit_before_label", T, F, LABEL + "\n" + UNIT, UNIT + "\n" + LABEL),
     ("layout_order_scale_before_key", T, F, KEY + "\n", SCALE + "\n" + KEY + "\n"),
@@ -1013,6 +1036,45 @@ MUTATIONS = [
     ("layout_append_name_replaced", T, F, APPEND_NAME, "\tmemset(to->name, 0, sizeof(to->name));\n\tmemcpy(to->name, from->name, added);\n"),
     ("layout_append_name_without_blanks", T, F, "\tstatic const char plus[] = \" + \";\n", "\tstatic const char plus[] = \"+\";\n"),
     ("layout_append_takes_the_profile_hint", T, F, APPEND_NAME, "\tmemcpy(to->profile_hint, from->profile_hint, sizeof(to->profile_hint));\n" + APPEND_NAME),
+
+    # The colour of a page
+    ("layout_color_not_read", T, F, COLOR, COLOR.replace("if(!read_color", "if(false && !read_color")),
+    ("layout_color_refusal_ignored", T, F, COLOR, "\tread_color(r, object, &has_color, &color);"),
+    ("layout_color_of_any_type", T, F, C_TEXT + "\n", ""),
+    ("layout_color_number_is_not_a_text_named_otherwise", T, F, C_TEXT, C_TEXT.replace("\"not a text\"", "\"not #rrggbb\"")),
+    ("layout_color_of_eight_characters", T, F, C_FORM, C_FORM.replace("strlen(text) != 7", "strlen(text) < 7")),
+    ("layout_color_without_its_hash", T, F, C_FORM, C_FORM.replace(" || text[0] != '#'", "")),
+    ("layout_color_room_for_six_characters", T, F, C_ROOM, "\tchar text[7];"),
+    ("layout_color_digits_from_the_hash", T, F, C_LOOP, "\tfor(int i = 0; i < 6; i++)"),
+    ("layout_color_last_digit_not_read", T, F, C_LOOP, "\tfor(int i = 1; i < 6; i++)"),
+    ("layout_color_other_characters_taken", T, F, C_DIGIT + "\n", ""),
+    ("layout_color_digits_of_three_bits", T, F, C_VALUE, C_VALUE.replace("<< 4", "<< 3")),
+    ("layout_color_digits_added", T, F, C_VALUE, C_VALUE.replace("value << 4 | (uint32_t)digit", "value + (uint32_t)digit")),
+    ("layout_color_value_from_one", T, F, "\tuint32_t value = 0;\n\n\tif(index < 0) return true;", "\tuint32_t value = 1;\n\n\tif(index < 0) return true;"),
+    ("layout_color_has_none", T, F, C_HAS, "\t*has_color = false;"),
+    ("layout_color_value_not_given", T, F, C_RGB, "\t*rgb = 0;"),
+    ("layout_color_without_nine", T, F, C_NUMERALS, C_NUMERALS.replace("c <= '9'", "c < '9'")),
+    ("layout_color_without_zero", T, F, C_NUMERALS, C_NUMERALS.replace("c >= '0'", "c > '0'")),
+    ("layout_color_with_colon", T, F, C_NUMERALS, C_NUMERALS.replace("c <= '9'", "c <= ':'")),
+    ("layout_color_without_small_a", T, F, C_SMALL, C_SMALL.replace("c >= 'a'", "c > 'a'")),
+    ("layout_color_without_small_f", T, F, C_SMALL, C_SMALL.replace("c <= 'f'", "c < 'f'")),
+    ("layout_color_with_small_g", T, F, C_SMALL, C_SMALL.replace("c <= 'f'", "c <= 'g'")),
+    ("layout_color_small_letters_one_off", T, F, C_SMALL, C_SMALL.replace("c - 'a' + 10", "c - 'a' + 9")),
+    ("layout_color_without_capitals", T, F, C_CAPITALS + "\n", ""),
+    ("layout_color_without_capital_f", T, F, C_CAPITALS, C_CAPITALS.replace("c <= 'F'", "c < 'F'")),
+    ("layout_color_with_capital_g", T, F, C_CAPITALS, C_CAPITALS.replace("c <= 'F'", "c <= 'G'")),
+    ("layout_color_capitals_one_off", T, F, C_CAPITALS, C_CAPITALS.replace("c - 'A' + 10", "c - 'A' + 11")),
+    ("layout_color_has_not_kept", T, F, C_PAGE_HAS + "\n", ""),
+    ("layout_color_every_page_has_one", T, F, C_PAGE_HAS, "\t\tpage->has_color = true;"),
+    ("layout_color_value_not_kept", T, F, C_PAGE_RGB + "\n", ""),
+    ("layout_written_color_by_its_value", T, F, W_COLOR_IF, W_COLOR_IF.replace("if(page->has_color)", "if(page->color != 0)")),
+    ("layout_written_color_always", T, F, W_COLOR_IF, W_COLOR_IF.replace("if(page->has_color)", "if(true)")),
+    ("layout_written_color_in_capitals", T, F, W_COLOR_IF, W_COLOR_IF.replace("0123456789abcdef", "0123456789ABCDEF")),
+    ("layout_written_color_of_five_digits", T, F, W_COLOR_DIGITS, W_COLOR_DIGITS.replace("shift >= 0", "shift > 0")),
+    ("layout_written_color_from_bit_24", T, F, W_COLOR_DIGITS, W_COLOR_DIGITS.replace("int shift = 20", "int shift = 24")),
+    ("layout_written_color_of_three_bit_digits", T, F, W_COLOR_DIGITS, W_COLOR_DIGITS.replace("& 0x0F", "& 0x07")),
+    ("layout_written_color_without_comma", T, F, W_COLOR_END, "\t\tput(writer, \"\\\"\");"),
+    ("layout_written_color_before_hidden", T, F, W_HIDDEN + "\n" + W_COLOR_BLOCK, W_COLOR_BLOCK + W_HIDDEN + "\n"),
 
     # The built-in pages of the Cerbo (display/layouts/gx_default.json): the file itself
     ("gx_pages_a_key_the_contract_does_not_name", T, GX_FILE, "{\"key\":\"GX_LTE_RSRP\"", "{\"key\":\"GX_LTE_RSRX\""),

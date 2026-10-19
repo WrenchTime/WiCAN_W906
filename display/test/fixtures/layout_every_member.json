@@ -8,6 +8,7 @@
     {
       "title": "Größen",
       "hidden": false,
+      "color": "#3B82f6",
       "colour": "#ff0000",
       "items": [
         {"key": "A", "label": "Ladedruck", "unit": "bar", "dec": 2, "widget": "bar", "scale": 0.001,

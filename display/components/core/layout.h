@@ -29,7 +29,12 @@
  *       {"key":"COOLANT_TMP","label":"Kühlwasser","unit":"°C"},
  *       {"key":"RAIL_PRESSURE","label":"Raildruck","unit":"bar","scale":0.001,"dec":0,"warn_hi":1900},
  *       {"key":"DPF_REGEN_STATUS","label":"Regeneration","widget":"state","map":{"1":"inaktiv","*":"aktiv"}}]},
- *     {"title":"DPF","hidden":true,"items":[...]}]}
+ *     {"title":"DPF","hidden":true,"items":[...]},
+ *     {"title":"Batterie","color":"#22c55e","items":[...]}]}
+ *
+ * "color" is the colour of the dot of the page at the lower edge of the screen (scene.h), as in HTML: "#" and
+ * six hexadecimal digits for red, green and blue. A page without it has the dots of every page: white when it
+ * is shown, grey otherwise. A dark colour is hard to see on the black screen; the display takes it all the same.
  *
  * Examples: display/layouts/w906_default.json and display/test/fixtures/layout_*.json.
  */
@@ -86,6 +91,8 @@ typedef struct
 {
 	char title[LAYOUT_TITLE_SIZE];
 	bool hidden;
+	bool has_color;                     // false: the dot of the page has the colours of every dot
+	uint32_t color;                     // 0xRRGGBB of the dot, 0 without has_color
 	layout_item_t items[LAYOUT_ITEMS_MAX];
 	uint8_t item_count;
 } layout_page_t;
@@ -126,11 +133,13 @@ typedef struct
 // (title, label 24 bytes; unit 8; name, profile_hint 32; map value 11, map text 23) or contains a control
 // character (a byte below 0x20, or 0x7F) or half a surrogate pair; "dec" not an integer 0 to 3; "scale" zero
 // or not finite; "min" not below "max" when both are given; a limit or number that is not a number or not
-// finite; "hidden" not a boolean; "map" not an object of texts or with more than LAYOUT_MAP_MAX entries; a
-// member of the wrong type in general.
+// finite; "hidden" not a boolean; "color" not a text ("not a text") or a text that is not "#" and six
+// hexadecimal digits of either case ("not #rrggbb"; what counts is the text the escapes stand for, as with
+// every text); "map" not an object of texts or with more than LAYOUT_MAP_MAX entries;
+// a member of the wrong type in general.
 //
 // Of several problems one is reported: the first in the order format, v, name, profile_hint, pages; of a
-// page title, hidden, items; of an item key, label, unit, dec, widget, scale, min, max (then their order),
+// page title, hidden, color, items; of an item key, label, unit, dec, widget, scale, min, max (then their order),
 // warn_lo, warn_hi, crit_lo, crit_hi, map. Pages and items are gone through in the order of the text.
 //
 // Accepted with a warning: an unknown "widget" text (becomes number); "arc" or "bar" without both "min"
@@ -203,11 +212,12 @@ void layout_append(layout_t *to, const layout_t *from);
 // in the browser gets the views in use as a text, whatever they were made from.
 // Without whitespace, the members in this order, each only if it says something:
 //   {"format":"wican-display-layout","v":1,"name":"..","profile_hint":"..","pages":[
-//     {"title":"..","hidden":true,"items":[
+//     {"title":"..","hidden":true,"color":"#rrggbb","items":[
 //       {"key":"..","label":"..","unit":"..","scale":N,"dec":N,"widget":"..","min":N,"max":N,
 //        "warn_lo":N,"warn_hi":N,"crit_lo":N,"crit_hi":N,"map":{"1":"..","*":".."}}]}]}
 // Left out: "name", "profile_hint", "title" and "label" that are empty; "hidden" of a page that is not
-// hidden; "unit" unless has_unit (then an empty one is written too); "scale" 1; "dec" 0; "widget" of a
+// hidden; "color" unless has_color (then the lower 24 bits of color, in lower case: "#22c55e");
+// "unit" unless has_unit (then an empty one is written too); "scale" 1; "dec" 0; "widget" of a
 // number widget (and of a value that is none of the enum); a limit that is not set; a map without entries.
 // Texts: " and \ get a backslash, a byte below 0x20 becomes \u00xx (lower case), every other byte is
 // passed on.

@@ -479,6 +479,8 @@ static void test_every_member(void)
 	      "every member: escapes in name and profile_hint are resolved");
 	check(layout->page_count == 2 && TEXT_IS(page->title, "Gr\303\266\303\237en") && !page->hidden && page->item_count == 3,
 	      "every member: \"hidden\":false is not hidden, members the format does not know are ignored");
+	check(page->has_color && page->color == 0x3B82F6 && !layout->pages[1].has_color && layout->pages[1].color == 0,
+	      "every member: the colour of digits in both cases is taken, \"colour\" is a member the format does not know, a page without a colour has none");
 	check(item_is(&page->items[0], "A", "Ladedruck", "bar", 2, LAYOUT_WIDGET_BAR, 0.001), "every member: key, label, unit, dec, widget bar, scale");
 	check(limits_are(&page->items[0], -1, 2.5, -0.5, 1.8, -0.75, 2.2), "every member: min, max, warn_lo, warn_hi, crit_lo, crit_hi, each in its own place");
 	check(page->items[0].map_count == 1 && map_is(&page->items[0], 0, "0", "null"), "every member: a map is kept with a widget that is no state");
@@ -544,6 +546,52 @@ static void test_widgets(void)
 	check(accepted(with_members("'map':{'':'leer','*':'','a':'a','a':'b'}")) && item->map_count == 4 && map_is(item, 0, "", "leer") &&
 	      map_is(item, 1, "*", "") && map_is(item, 2, "a", "a") && map_is(item, 3, "a", "b"),
 	      "a map may have an empty value, an empty text and the same value twice");
+}
+
+static void test_colors(void)
+{
+	const layout_page_t *page = &box.layout.pages[0];
+	char json[64];
+	int wrong = 0, tried = 0;
+
+	check(accepted(with_page("'color':'#22c55e','items':[" ITEM "]")) && page->has_color && page->color == 0x22C55E, "color: #22c55e");
+	check(accepted(with_page("'color':'#ABCDEF','items':[" ITEM "]")) && page->has_color && page->color == 0xABCDEF, "color: upper case");
+	check(accepted(with_page("'color':'#aBcDeF','items':[" ITEM "]")) && page->has_color && page->color == 0xABCDEF, "color: both cases in one text");
+	check(accepted(with_page("'color':'#123456','items':[" ITEM "]")) && page->color == 0x123456, "color: the digits in their order, red first");
+	check(accepted(with_page("'color':'#000000','items':[" ITEM "]")) && page->has_color && page->color == 0, "color: black is a colour of its own");
+	check(accepted(with_page("'color':'#ffffff','items':[" ITEM "]")) && page->has_color && page->color == 0xFFFFFF, "color: white");
+	check(accepted(with_page("'color':'\\u0023ff8000','items':[" ITEM "]")) && page->has_color && page->color == 0xFF8000 &&
+	      accepted(with_page("'color':'#\\u0041a0b0c','items':[" ITEM "]")) && page->color == 0xAA0B0C, "color: escapes count as what they stand for");
+	check(accepted(with_page("'items':[" ITEM "],'color':'#0a0b0c'")) && page->color == 0x0A0B0C, "color: behind the items");
+	check(accepted(with_page("'items':[" ITEM "]")) && !page->has_color && page->color == 0, "color: a page without the member has no colour, and 0 over stale bytes");
+	check(accepted(with_pages(PAGE ",{'color':'#010203','items':[" ITEM "]}," PAGE)) && !box.layout.pages[0].has_color && box.layout.pages[1].has_color &&
+	      box.layout.pages[1].color == 0x010203 && !box.layout.pages[2].has_color, "color: each page has its own");
+	check(accepted(with_page("'color':'#111111','color':5,'items':[" ITEM "]")) && page->color == 0x111111, "color: of two the first counts");
+
+	// Every byte in every place: a digit of either case is taken with its value, every other byte refused
+	for(int place = 1; place < 7; place++)
+	{
+		for(int c = 1; c < 256; c++)
+		{
+			int value = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+			char color[8] = "#000000";
+			bool right;
+
+			// What JSON does not take in a text is no question of the colour, and the test writes ' for "
+			if(c < 0x20 || c == '"' || c == '\\' || c == '\'' || c >= 0x80) continue;
+			color[place] = (char)c;
+			snprintf(json, sizeof(json), "{\"color\":\"%s\",\"items\":[{\"key\":\"K\"}]}", color);
+			if(value >= 0) right = accepted(with_pages(json)) && page->has_color && page->color == (uint32_t)value << (4 * (6 - place));
+			else right = refused(with_pages(json), "pages[0].color", "not #rrggbb");
+			if(!right)
+			{
+				printf("  %s\n", color);
+				wrong++;
+			}
+			tried++;
+		}
+	}
+	check(wrong == 0 && tried == 6 * 93, "color: in each of the six places the 22 digits are taken with their value, the other 71 characters from 0x20 to 0x7F are refused");
 }
 
 /*
@@ -649,6 +697,30 @@ static void test_refused_text(void)
 		{HEAD "'pages':[{'hidden':'true','items':[" ITEM "]}]}", "pages[0].hidden", "not a boolean", "hidden is a text"},
 		{HEAD "'pages':[{'hidden':null,'items':[" ITEM "]}]}", "pages[0].hidden", "not a boolean", "hidden is null"},
 		{HEAD "'pages':[" PAGE ",{'hidden':[],'items':[" ITEM "]}]}", "pages[1].hidden", "not a boolean", "hidden of the second page is an array"},
+		{HEAD "'pages':[{'color':5,'items':[" ITEM "]}]}", "pages[0].color", "not a text", "color is a number"},
+		{HEAD "'pages':[{'color':2236766,'items':[" ITEM "]}]}", "pages[0].color", "not a text", "color is the number of #22c55e"},
+		{HEAD "'pages':[{'color':null,'items':[" ITEM "]}]}", "pages[0].color", "not a text", "color is null"},
+		{HEAD "'pages':[{'color':true,'items':[" ITEM "]}]}", "pages[0].color", "not a text", "color is true"},
+		{HEAD "'pages':[{'color':['#22c55e'],'items':[" ITEM "]}]}", "pages[0].color", "not a text", "color is an array"},
+		{HEAD "'pages':[{'color':{},'items':[" ITEM "]}]}", "pages[0].color", "not a text", "color is an object"},
+		{HEAD "'pages':[{'color':'','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color is empty"},
+		{HEAD "'pages':[{'color':'#','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color is a hash"},
+		{HEAD "'pages':[{'color':'#12345','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color of five digits"},
+		{HEAD "'pages':[{'color':'#1234567','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color of seven digits"},
+		{HEAD "'pages':[{'color':'#12345678','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color of eight digits"},
+		{HEAD "'pages':[{'color':'#123456789abcdef','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color of fifteen digits"},
+		{HEAD "'pages':[{'color':'#fff','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color of three digits, which HTML would take"},
+		{HEAD "'pages':[{'color':'123456','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color without the hash"},
+		{HEAD "'pages':[{'color':'1234567','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color of seven digits without the hash"},
+		{HEAD "'pages':[{'color':'##12345','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color with two hashes"},
+		{HEAD "'pages':[{'color':'red','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color is a name"},
+		{HEAD "'pages':[{'color':' #123456','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color with a blank before it"},
+		{HEAD "'pages':[{'color':'#123456 ','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color with a blank behind it"},
+		{HEAD "'pages':[{'color':'#12345\303\244','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color with a letter of two bytes"},
+		{HEAD "'pages':[{'color':'#12345\\u0000','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color with an escaped zero"},
+		{HEAD "'pages':[{'color':'#12345\\u0067','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color with an escaped g"},
+		{HEAD "'pages':[{'color':'#12345\\ud83d','items':[" ITEM "]}]}", "pages[0].color", "not #rrggbb", "color with half a surrogate pair"},
+		{HEAD "'pages':[" PAGE ",{'color':'#1234','items':[" ITEM "]}]}", "pages[1].color", "not #rrggbb", "color of the second page"},
 
 		{HEAD "'pages':[{}]}", "pages[0].items", "missing", "a page without items"},
 		{HEAD "'pages':[{'title':'T','Items':[" ITEM "]}]}", "pages[0].items", "missing", "items under another name"},
@@ -1377,6 +1449,13 @@ static void test_problem_order(void)
 		{"{'pages':[{'hidden':5,'title':5}],'v':1," FORMAT "}", "pages[0].title", "not a text"},
 		{"{'pages':[{'hidden':5,'title':'T'}],'v':1," FORMAT "}", "pages[0].hidden", "not a boolean"},
 		{"{'pages':[{'hidden':false,'title':'T'}],'v':1," FORMAT "}", "pages[0].items", "missing"},
+		{"{'pages':[{'color':5,'hidden':5,'title':5}],'v':1," FORMAT "}", "pages[0].title", "not a text"},
+		{"{'pages':[{'color':5,'hidden':5,'title':'T'}],'v':1," FORMAT "}", "pages[0].hidden", "not a boolean"},
+		{"{'pages':[{'color':5,'hidden':true,'title':'T'}],'v':1," FORMAT "}", "pages[0].color", "not a text"},
+		{"{'pages':[{'color':'x','hidden':true,'title':'T'}],'v':1," FORMAT "}", "pages[0].color", "not #rrggbb"},
+		{"{'pages':[{'color':'#123456','hidden':true,'title':'T'}],'v':1," FORMAT "}", "pages[0].items", "missing"},
+		{"{'pages':[{'items':5,'color':'x'}],'v':1," FORMAT "}", "pages[0].color", "not #rrggbb"},
+		{"{'pages':[{'items':[{'key':5}],'color':5}],'v':1," FORMAT "}", "pages[0].color", "not a text"},
 		{"{'pages':[{'items':[],'hidden':5}],'v':1," FORMAT "}", "pages[0].hidden", "not a boolean"},
 		{"{'pages':[{'items':[{'map':5,'crit_hi':'x','scale':0,'widget':5,'dec':9,'unit':5,'label':5}]}],'v':1," FORMAT "}", "pages[0].items[0].key", "missing"},
 		{"{'pages':[{'items':5,'hidden':5,'title':5}],'v':1," FORMAT "}", "pages[0].title", "not a text"},
@@ -1394,7 +1473,7 @@ static void test_problem_order(void)
 	{
 		if(!refused(doc("%s", layouts[i].json), layouts[i].path, layouts[i].problem)) wrong++;
 	}
-	check(wrong == 0, "order: of several problems the first is reported in the order format, v, name, profile_hint, pages, and of a page title, hidden, items");
+	check(wrong == 0, "order: of several problems the first is reported in the order format, v, name, profile_hint, pages, and of a page title, hidden, color, items");
 
 	// An item whose members stand in the text from the map to the key. Those before `first` are right.
 	wrong = 0;
@@ -1933,6 +2012,7 @@ static void model_layout(void)
 					bool first_of_page = true;
 					int title = random_below(3);
 					int hidden = random_below(3);
+					int color = random_below(3);
 
 					if(p > 0) emit(",");
 					emit_space();
@@ -1950,6 +2030,23 @@ static void model_layout(void)
 						page->hidden = hidden == 2;
 						emit_member(&first_of_page, "hidden");
 						emit("%s", page->hidden ? "true" : "false");
+					}
+					// A colour before the items, or none: each digit in lower or upper case
+					if(color == 1)
+					{
+						static const char lower[] = "0123456789abcdef", upper[] = "0123456789ABCDEF";
+
+						page->has_color = true;
+						page->color = (uint32_t)random_below(1 << 24);
+						emit_member(&first_of_page, "color");
+						emit("\"#");
+						for(int shift = 20; shift >= 0; shift -= 4)
+						{
+							int digit = (int)(page->color >> shift) & 0x0F;
+
+							emit("%c", random_below(2) ? upper[digit] : lower[digit]);
+						}
+						emit("\"");
 					}
 					page->item_count = (uint8_t)(random_below(5) == 0 ? 6 : 1 + random_below(6));
 					emit_member(&first_of_page, "items");
@@ -1970,10 +2067,19 @@ static void model_layout(void)
 						emit("\"%s\"", sample->json);
 						strcpy(page->title, sample->value);
 					}
+					// Or behind the items, written with an escape for its hash
+					if(color == 2)
+					{
+						page->has_color = true;
+						page->color = (uint32_t)random_below(1 << 24);
+						emit_member(&first_of_page, "color");
+						emit("\"\\u0023%06X\"", (unsigned)page->color);
+					}
 					emit_space();
 					emit("}");
 
-					// The title first, wherever it stood, and only one that says something
+					// The title first, wherever it stood, and only one that says something; the colour
+					// behind hidden, in lower case
 					build(&canon_pages, "%s", p > 0 ? ",{" : "{");
 					if(page->title[0] != '\0')
 					{
@@ -1981,7 +2087,9 @@ static void model_layout(void)
 						build_text(&canon_pages, page->title);
 						build(&canon_pages, ",");
 					}
-					build(&canon_pages, "%s\"items\":[%s]}", page->hidden ? "\"hidden\":true," : "", canon_items_text);
+					if(page->hidden) build(&canon_pages, "\"hidden\":true,");
+					if(page->has_color) build(&canon_pages, "\"color\":\"#%06x\",", (unsigned)page->color);
+					build(&canon_pages, "\"items\":[%s]}", canon_items_text);
 				}
 				emit_space();
 				emit("]");
@@ -4141,6 +4249,21 @@ static void test_to_json_layout_and_page(void)
 	check(writes(&made, q(W_HEAD "'pages':[{'hidden':true,'items':[{'key':'K'}]}]}")), "to_json: a hidden page says so before its items, a title that is empty is not written");
 	strcpy(made.pages[0].title, "Motor");
 	check(writes(&made, q(W_HEAD "'pages':[{'title':'Motor','hidden':true,'items':[{'key':'K'}]}]}")), "to_json: the title stands before hidden");
+	made.pages[0].has_color = true;
+	made.pages[0].color = 0x0A0B0C;
+	check(writes(&made, q(W_HEAD "'pages':[{'title':'Motor','hidden':true,'color':'#0a0b0c','items':[{'key':'K'}]}]}")) && comes_back(&made),
+	      "to_json: a colour stands behind hidden, with six digits in lower case, and is read back");
+	one_item();
+	made.pages[0].has_color = true;
+	made.pages[0].color = 0xFEDCBA;
+	check(writes(&made, q(W_HEAD "'pages':[{'color':'#fedcba','items':[{'key':'K'}]}]}")), "to_json: a colour alone, red first");
+	made.pages[0].color = 0;
+	check(writes(&made, q(W_HEAD "'pages':[{'color':'#000000','items':[{'key':'K'}]}]}")) && comes_back(&made), "to_json: black is written, and read back");
+	made.pages[0].color = 0xFF123456;
+	check(writes(&made, q(W_HEAD "'pages':[{'color':'#123456','items':[{'key':'K'}]}]}")), "to_json: of a colour beyond 24 bits the lower 24 are written");
+	made.pages[0].has_color = false;
+	made.pages[0].color = 0x123456;
+	check(writes(&made, q(W_HEAD "'pages':[{'items':[{'key':'K'}]}]}")), "to_json: without has_color no colour is written, whatever color holds");
 
 	// Several items and pages
 	make_layout(1);
@@ -4999,6 +5122,8 @@ static size_t mark_fields(void)
 
 		MARK(page->title);
 		MARK(page->hidden);
+		MARK(page->has_color);
+		MARK(page->color);
 		MARK(page->item_count);
 		for(i = 0; i < LAYOUT_ITEMS_MAX; i++)
 		{
@@ -5711,6 +5836,7 @@ int main(void)
 	test_every_member();
 	test_ignored_members();
 	test_widgets();
+	test_colors();
 	test_refused_text();
 	test_missing_members();
 	test_control_characters();

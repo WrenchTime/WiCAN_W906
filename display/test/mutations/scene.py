@@ -49,6 +49,9 @@ PERMILLE = "\tif(out->widget == LAYOUT_WIDGET_ARC || out->widget == LAYOUT_WIDGE
 # The value pages
 DOT_SHOWN = "\t\tif(!layout_page_shown(layout, i, world->catalog)) continue;\n"
 DOT = "\t\tif(i == shown) scene->dot = scene->dots;\n"
+DOT_COLOR_IF = "\t\tif(layout->pages[i].has_color)\n"
+DOT_COLOR_SET = "\t\t\tscene->dot_colors[scene->dots].set = true;\n"
+DOT_COLOR_RGB = "\t\t\tscene->dot_colors[scene->dots].rgb = layout->pages[i].color & 0xFFFFFFu;\n"
 NOTE_SAFE = "\tif(input->safe_mode) set_note(scene, \"Sicherer Modus – eingebaute Ansichten\");\n"
 NOTE_HEAT = "\telse if(input->heat != GUARD_HEAT_NORMAL) set_note(scene, \"Zu heiß – Anzeige gedimmt\");\n"
 NOTE_VIEW = "\telse if(view == CONN_VIEW_SCAN || view == CONN_VIEW_NO_API) set_note(scene, text_view(view));\n"
@@ -198,6 +201,15 @@ WORD_OF = "\treturn member < (unsigned)count ? words[member] : \"?\";"
 WITHIN = "\treturn count > max ? max : count;"
 RING_PERMILLE = "\tif(scene->ring.kind == RING_PROGRESS)\n"
 DOTS = "\tif(scene->dots != 0 || scene->dot != -1)\n"
+ANY_COLOR = "\tif(any_color(scene))\n"
+ANY_COLOR_LOOP = "\tfor(int i = 0; i < within(scene->dots, LAYOUT_PAGES_MAX); i++)\n\t{\n\t\tif(flag(&scene->dot_colors[i].set)) return true;"
+ANY_COLOR_SET = "\t\tif(flag(&scene->dot_colors[i].set)) return true;\n"
+COLOR_WORDS = "\t\tfor(int i = 0; i < within(scene->dots, LAYOUT_PAGES_MAX); i++) put_color(&writer, &scene->dot_colors[i]);\n"
+COLOR_BLANK = "\tput_char(writer, ' ');\n\tif(!flag(&color->set))"
+COLOR_UNSET = "\tif(!flag(&color->set)) put_char(writer, '-');\n"
+COLOR_BEYOND = "\telse if(color->rgb > 0xFFFFFFu) put_char(writer, '?');\n"
+COLOR_DIGITS = "\tstatic const char digits[] = \"0123456789abcdef\";\n\n\tput_char(writer, ' ');"
+COLOR_SHIFTS = "\t\tfor(int shift = 20; shift >= 0; shift -= 4) put_char(writer, digits[(color->rgb >> shift) & 0x0F]);"
 DOT_NUMBER = "\t\tput_number(&writer, (int64_t)scene->dot + 1);\n"
 ROW_MARK = "\t\tput(&writer, flag(&row->focus) ? \"row: > \" : \"row: - \");"
 ROW_ENABLED = "\t\tput(&writer, flag(&row->enabled) ? \" | enabled\\n\" : \" | disabled\\n\");"
@@ -466,6 +478,36 @@ MUTATIONS = [
     ("scene_dots_of_eight_pages_only", T, F,
      "\tfor(int i = 0; i < layout->page_count; i++)\n\t{\n\t\tif(!layout_page_shown", "\tfor(int i = 0; i < layout->page_count && i < 8; i++)\n\t{\n\t\tif(!layout_page_shown"),
     ("scene_dots_not_counted", T, F, "\t\tscene->dots++;\n", ""),
+    # the colours of the dots
+    ("scene_dot_colors_of_every_page", T, F, DOT_COLOR_IF, "\t\tif(true)\n"),
+    ("scene_dot_colors_never", T, F, DOT_COLOR_IF, "\t\tif(false)\n"),
+    ("scene_dot_colors_not_set", T, F, DOT_COLOR_SET, "\t\t\tscene->dot_colors[scene->dots].set = false;\n"),
+    ("scene_dot_colors_by_number_of_page", T, F, DOT_COLOR_SET + DOT_COLOR_RGB,
+     DOT_COLOR_SET.replace("[scene->dots]", "[i]") + DOT_COLOR_RGB.replace("[scene->dots]", "[i]")),
+    ("scene_dot_colors_of_the_next_dot", T, F, DOT_COLOR_SET + DOT_COLOR_RGB,
+     DOT_COLOR_SET.replace("[scene->dots]", "[scene->dots + 1]") + DOT_COLOR_RGB.replace("[scene->dots]", "[scene->dots + 1]")),
+    ("scene_dot_colors_beyond_24_bits", T, F, DOT_COLOR_RGB, DOT_COLOR_RGB.replace(" & 0xFFFFFFu", "")),
+    ("scene_dot_colors_rgb_without_has_color", T, F, DOT_COLOR_IF + "\t\t{\n" + DOT_COLOR_SET + DOT_COLOR_RGB,
+     DOT_COLOR_RGB.replace("\t\t\t", "\t\t") + DOT_COLOR_IF + "\t\t{\n" + DOT_COLOR_SET),
+    ("scene_dump_colors_always", T, F, ANY_COLOR, "\tif(true || any_color(scene))\n"),
+    ("scene_dump_colors_never", T, F, ANY_COLOR, "\tif(false && any_color(scene))\n"),
+    ("scene_dump_colors_of_every_dot_asked", T, F, ANY_COLOR_LOOP, ANY_COLOR_LOOP.replace("within(scene->dots, LAYOUT_PAGES_MAX)", "LAYOUT_PAGES_MAX")),
+    ("scene_dump_colors_one_dot_less_asked", T, F, ANY_COLOR_LOOP, ANY_COLOR_LOOP.replace("within(scene->dots, LAYOUT_PAGES_MAX)", "within(scene->dots, LAYOUT_PAGES_MAX) - 1")),
+    ("scene_dump_colors_set_by_rgb", T, F, ANY_COLOR_SET, "\t\tif(scene->dot_colors[i].rgb != 0) return true;\n"),
+    ("scene_dump_colors_of_every_dot_written", T, F, COLOR_WORDS, COLOR_WORDS.replace("within(scene->dots, LAYOUT_PAGES_MAX)", "LAYOUT_PAGES_MAX")),
+    ("scene_dump_colors_one_less_written", T, F, COLOR_WORDS, COLOR_WORDS.replace("i = 0;", "i = 1;")),
+    ("scene_dump_colors_without_line_end", T, F, COLOR_WORDS + "\t\tput_char(&writer, '\\n');\n", COLOR_WORDS),
+    ("scene_dump_colors_named_otherwise", T, F, "\t\tput(&writer, \"dot_colors:\");\n", "\t\tput(&writer, \"colors:\");\n"),
+    ("scene_dump_color_without_blank", T, F, COLOR_BLANK, "\tif(!flag(&color->set))"),
+    ("scene_dump_color_unset_as_question_mark", T, F, COLOR_UNSET, "\tif(!flag(&color->set)) put_char(writer, '?');\n"),
+    ("scene_dump_color_unset_by_its_rgb", T, F, COLOR_UNSET, "\tif(color->rgb == 0) put_char(writer, '-');\n"),
+    ("scene_dump_color_24_bits_as_question_mark", T, F, COLOR_BEYOND, COLOR_BEYOND.replace("> 0xFFFFFFu", ">= 0xFFFFFFu")),
+    ("scene_dump_color_beyond_24_bits_written", T, F, COLOR_BEYOND, "\telse if(false) put_char(writer, '?');\n"),
+    ("scene_dump_color_in_capitals", T, F, COLOR_DIGITS, COLOR_DIGITS.replace("abcdef", "ABCDEF")),
+    ("scene_dump_color_of_five_digits", T, F, COLOR_SHIFTS, COLOR_SHIFTS.replace("shift >= 0", "shift > 0")),
+    ("scene_dump_color_from_bit_24", T, F, COLOR_SHIFTS, COLOR_SHIFTS.replace("int shift = 20", "int shift = 24")),
+    ("scene_dump_color_of_three_bit_digits", T, F, COLOR_SHIFTS, COLOR_SHIFTS.replace("& 0x0F", "& 0x07")),
+    ("scene_dump_color_without_hash", T, F, "\t\tput_char(writer, '#');\n", ""),
     ("scene_note_safe_mode_missing", T, F, NOTE_SAFE + "\telse if(input->heat", "\tif(input->heat"),
     ("scene_note_heat_missing", T, F, NOTE_HEAT + "\telse if(view", "\telse if(view"),
     ("scene_note_view_missing", T, F, NOTE_VIEW, ""),

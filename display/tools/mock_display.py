@@ -439,6 +439,11 @@ def check_layout(data):
         optional_text(page, "title", TITLE_BYTES, where)
         if member(page, "hidden") is not MISSING and not isinstance(member(page, "hidden"), bool):
             raise Refused(where + "hidden", "not a boolean")
+        color = member(page, "color")
+        if color is not MISSING and not isinstance(color, str):
+            raise Refused(where + "color", "not a text")
+        if color is not MISSING and re.fullmatch(LAYOUT_COLOR, color) is None:
+            raise Refused(where + "color", "not #rrggbb")
         items = member(page, "items")
         if items is MISSING:
             raise Refused(where + "items", "missing")
@@ -484,6 +489,9 @@ def check_layout(data):
     return {"name": name, "pages": keys, "warnings": warnings}
 
 
+# layout.h: the colour of the dot of a page, "#" and six hexadecimal digits of either case
+LAYOUT_COLOR = "#[0-9A-Fa-f]{6}"
+
 # layout.h, layout_to_json(): the members of an item in the order they are written
 LAYOUT_ITEM_MEMBERS = ("key", "label", "unit", "scale", "dec", "widget", "min", "max", "warn_lo", "warn_hi", "crit_lo", "crit_hi", "map")
 
@@ -491,8 +499,8 @@ LAYOUT_ITEM_MEMBERS = ("key", "label", "unit", "scale", "dec", "widget", "min", 
 def appended_views(first, second):
     """The views of the vehicle with the pages of the Cerbo behind them, as the text the display holds for
     them (app_choose_layout(): layout_append(), then layout_to_json()): `first` and `second` are the texts of
-    the two built-in files. No whitespace; of an item the members in the order of layout.h, each only if it
-    says something - "dec" 0, "scale" 1 and the widget "number" are left out; where the two have more than
+    the two built-in files. No whitespace; of a page title, hidden and color (in lower case), of an item the
+    members in the order of layout.h, each only if it says something - "dec" 0, "scale" 1 and the widget "number" are left out; where the two have more than
     twelve pages the last pages of the first give way; the name of the first with " + " and the name of the
     second, where both have one and the whole fits into 32 bytes. Written for the built-in files: texts
     without control characters, numbers that printf writes with 15 digits as they are."""
@@ -516,7 +524,8 @@ def appended_views(first, second):
         return "{%s}" % ",".join(parts)
 
     def page(members):
-        head = ("\"title\":%s," % text(members["title"]) if members.get("title") else "") + ("\"hidden\":true," if members.get("hidden") else "")
+        head = (("\"title\":%s," % text(members["title"]) if members.get("title") else "") + ("\"hidden\":true," if members.get("hidden") else "")
+                + ("\"color\":%s," % text(members["color"].lower()) if "color" in members else ""))
         return "{%s\"items\":[%s]}" % (head, ",".join(item(entry) for entry in members["items"]))
 
     vehicle = json.loads(first.decode("utf-8"))
