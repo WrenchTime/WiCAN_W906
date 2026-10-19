@@ -266,13 +266,17 @@ static int hex_digit(char c)
 	return -1;
 }
 
-// The optional colour of a page, "#rrggbb". Without the member *rgb stays as it is, which is 0.
-static bool read_color(const reader_t *r, int object, bool *has_color, uint32_t *rgb)
+// The optional colour of a page, "#rrggbb"; page may be NULL. Read behind the page, by read_layout(): the
+// page itself and its items are read as before pages had a colour, on the same stack. That keeps the tests
+// of test_layout.c that see what a limit would carry over from the stack between its fields if it were taken
+// as a whole (layout_*_taken_as_struct in mutations/layout.py), and with a call in front of the items they
+// went blind for one limit or another. So a problem of the colour is reported after those of the items.
+static bool read_color(const reader_t *r, int object, layout_page_t *page)
 {
 	int index = member(r, object, "color");
 	// One byte more than "#rrggbb" and its zero: a longer text does not fit and is refused with the others
 	char text[9];
-	uint32_t value = 0;
+	uint32_t value;
 
 	if(index < 0) return true;
 	if(r->tokens[index].type != JSON_STRING) return refuse(r, "color", "not a text");
@@ -280,6 +284,7 @@ static bool read_color(const reader_t *r, int object, bool *has_color, uint32_t 
 	{
 		return refuse(r, "color", "not #rrggbb");
 	}
+	value = 0;
 	for(int i = 1; i < 7; i++)
 	{
 		int digit = hex_digit(text[i]);
@@ -287,8 +292,11 @@ static bool read_color(const reader_t *r, int object, bool *has_color, uint32_t 
 		if(digit < 0) return refuse(r, "color", "not #rrggbb");
 		value = value << 4 | (uint32_t)digit;
 	}
-	*has_color = true;
-	*rgb = value;
+	if(page != NULL)
+	{
+		page->has_color = true;
+		page->color = value;
+	}
 	return true;
 }
 
@@ -299,8 +307,6 @@ static bool read_page(reader_t *r, int object, layout_page_t *page)
 	int hidden = member(r, object, "hidden");
 	int items = member(r, object, "items");
 	int index = items + 1;
-	bool has_color = false;
-	uint32_t color = 0;
 
 	if(tokens[object].type != JSON_OBJECT) return refuse(r, "", "not an object");
 	if(!read_text(r, object, "title", page != NULL ? page->title : NULL, LAYOUT_TITLE_SIZE)) return false;
@@ -308,7 +314,6 @@ static bool read_page(reader_t *r, int object, layout_page_t *page)
 	{
 		return refuse(r, "hidden", "not a boolean");
 	}
-	if(!read_color(r, object, &has_color, &color)) return false;
 	if(items < 0) return refuse(r, "items", "missing");
 	if(tokens[items].type != JSON_ARRAY) return refuse(r, "items", "not an array");
 	if(tokens[items].size == 0) return refuse(r, "items", "empty");
@@ -324,8 +329,6 @@ static bool read_page(reader_t *r, int object, layout_page_t *page)
 	if(page != NULL)
 	{
 		page->hidden = hidden >= 0 && tokens[hidden].type == JSON_TRUE;
-		page->has_color = has_color;
-		page->color = color;
 		page->item_count = (uint8_t)tokens[items].size;
 	}
 	return true;
@@ -356,6 +359,7 @@ static bool read_layout(reader_t *r, layout_t *layout)
 	for(r->page = 0; r->page < tokens[pages].size; r->page++)
 	{
 		if(!read_page(r, index, layout != NULL ? &layout->pages[r->page] : NULL)) return false;
+		if(!read_color(r, index, layout != NULL ? &layout->pages[r->page] : NULL)) return false;
 		index += tokens[index].skip;
 	}
 

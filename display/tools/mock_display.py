@@ -439,11 +439,6 @@ def check_layout(data):
         optional_text(page, "title", TITLE_BYTES, where)
         if member(page, "hidden") is not MISSING and not isinstance(member(page, "hidden"), bool):
             raise Refused(where + "hidden", "not a boolean")
-        color = member(page, "color")
-        if color is not MISSING and not isinstance(color, str):
-            raise Refused(where + "color", "not a text")
-        if color is not MISSING and re.fullmatch(LAYOUT_COLOR, color) is None:
-            raise Refused(where + "color", "not #rrggbb")
         items = member(page, "items")
         if items is MISSING:
             raise Refused(where + "items", "missing")
@@ -453,7 +448,14 @@ def check_layout(data):
             raise Refused(where + "items", "empty")
         if len(items) > ITEMS_MAX:
             raise Refused(where + "items", "too many items")
-        return [read_item(item, "%sitems[%d]" % (where, position)) for position, item in enumerate(items)]
+        keys = [read_item(item, "%sitems[%d]" % (where, position)) for position, item in enumerate(items)]
+        # The colour behind the items (layout.c, read_color())
+        color = member(page, "color")
+        if color is not MISSING and not isinstance(color, str):
+            raise Refused(where + "color", "not a text")
+        if color is not MISSING and re.fullmatch(LAYOUT_COLOR, color) is None:
+            raise Refused(where + "color", "not #rrggbb")
+        return keys
 
     if len(data) > BODY_LAYOUT_MAX:
         raise Refused("", "text too long")

@@ -1451,11 +1451,14 @@ static void test_problem_order(void)
 		{"{'pages':[{'hidden':false,'title':'T'}],'v':1," FORMAT "}", "pages[0].items", "missing"},
 		{"{'pages':[{'color':5,'hidden':5,'title':5}],'v':1," FORMAT "}", "pages[0].title", "not a text"},
 		{"{'pages':[{'color':5,'hidden':5,'title':'T'}],'v':1," FORMAT "}", "pages[0].hidden", "not a boolean"},
-		{"{'pages':[{'color':5,'hidden':true,'title':'T'}],'v':1," FORMAT "}", "pages[0].color", "not a text"},
-		{"{'pages':[{'color':'x','hidden':true,'title':'T'}],'v':1," FORMAT "}", "pages[0].color", "not #rrggbb"},
-		{"{'pages':[{'color':'#123456','hidden':true,'title':'T'}],'v':1," FORMAT "}", "pages[0].items", "missing"},
-		{"{'pages':[{'items':5,'color':'x'}],'v':1," FORMAT "}", "pages[0].color", "not #rrggbb"},
-		{"{'pages':[{'items':[{'key':5}],'color':5}],'v':1," FORMAT "}", "pages[0].color", "not a text"},
+		{"{'pages':[{'color':5,'hidden':true,'title':'T'}],'v':1," FORMAT "}", "pages[0].items", "missing"},
+		{"{'pages':[{'color':'x','items':5}],'v':1," FORMAT "}", "pages[0].items", "not an array"},
+		{"{'pages':[{'color':5,'items':[{'key':5}]}],'v':1," FORMAT "}", "pages[0].items[0].key", "not a text"},
+		{"{'pages':[{'color':5,'items':[{'key':'K','dec':9}]}],'v':1," FORMAT "}", "pages[0].items[0].dec", "not an integer 0 to 3"},
+		{"{'pages':[{'color':5,'items':[{'key':'K'}],'hidden':true,'title':'T'}],'v':1," FORMAT "}", "pages[0].color", "not a text"},
+		{"{'pages':[{'items':[{'key':'K'}],'color':'x'}],'v':1," FORMAT "}", "pages[0].color", "not #rrggbb"},
+		{"{'pages':[{'color':'x','items':[{'key':'K'}]},{'items':[]}],'v':1," FORMAT "}", "pages[0].color", "not #rrggbb"},
+		{"{'pages':[{'items':[{'key':'K'}]},{'color':'x','items':[]}],'v':1," FORMAT "}", "pages[1].items", "empty"},
 		{"{'pages':[{'items':[],'hidden':5}],'v':1," FORMAT "}", "pages[0].hidden", "not a boolean"},
 		{"{'pages':[{'items':[{'map':5,'crit_hi':'x','scale':0,'widget':5,'dec':9,'unit':5,'label':5}]}],'v':1," FORMAT "}", "pages[0].items[0].key", "missing"},
 		{"{'pages':[{'items':5,'hidden':5,'title':5}],'v':1," FORMAT "}", "pages[0].title", "not a text"},
@@ -1473,7 +1476,7 @@ static void test_problem_order(void)
 	{
 		if(!refused(doc("%s", layouts[i].json), layouts[i].path, layouts[i].problem)) wrong++;
 	}
-	check(wrong == 0, "order: of several problems the first is reported in the order format, v, name, profile_hint, pages, and of a page title, hidden, color, items");
+	check(wrong == 0, "order: of several problems the first is reported in the order format, v, name, profile_hint, pages, and of a page title, hidden, items, color: the colour of a page before the next page");
 
 	// An item whose members stand in the text from the map to the key. Those before `first` are right.
 	wrong = 0;

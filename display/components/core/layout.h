@@ -139,8 +139,9 @@ typedef struct
 // a member of the wrong type in general.
 //
 // Of several problems one is reported: the first in the order format, v, name, profile_hint, pages; of a
-// page title, hidden, color, items; of an item key, label, unit, dec, widget, scale, min, max (then their order),
-// warn_lo, warn_hi, crit_lo, crit_hi, map. Pages and items are gone through in the order of the text.
+// page title, hidden, items (and the items themselves), color; of an item key, label, unit, dec, widget, scale,
+// min, max (then their order), warn_lo, warn_hi, crit_lo, crit_hi, map. Pages and items are gone through in the
+// order of the text.
 //
 // Accepted with a warning: an unknown "widget" text (becomes number); "arc" or "bar" without both "min"
 // and "max" (becomes number); "state" without "map" or with an empty one (becomes number).
